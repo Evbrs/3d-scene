@@ -20,7 +20,11 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Éditeur de plan de rénovation 2D → 3D"
-    environment: str = "development"
+    # Défaut volontairement « production » : un déploiement qui oublie ENVIRONMENT doit échouer
+    # au démarrage plutôt que signer jetons et cookies avec la clé de développement, qui est
+    # publique puisqu'elle est dans le dépôt. Le développement l'affirme explicitement
+    # (docker-compose.yml, env.example).
+    environment: str = "production"
     debug: bool = False
 
     # Postgres (spec §6)

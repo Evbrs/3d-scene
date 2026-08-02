@@ -20,6 +20,9 @@ TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_D
 # Doit être positionné AVANT tout import applicatif : la configuration est mise en cache, et
 # SQLAdmin construit son moteur au moment où l'application est créée.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# La configuration refuse volontairement de démarrer hors développement avec la clé par défaut
+# (garde-fou anti-« oubli de SECRET_KEY en production »). Les tests s'annoncent donc comme tels.
+os.environ.setdefault("ENVIRONMENT", "development")
 
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -100,7 +103,7 @@ async def _authenticated_client(client: AsyncClient, email: str) -> AsyncClient:
     registered = await client.post(
         "/api/auth/register", json={"email": email, "password": USER_PASSWORD}
     )
-    assert registered.status_code == 201, registered.text
+    assert registered.status_code == 202, registered.text
     tokens = await client.post(
         "/api/auth/token", data={"username": email, "password": USER_PASSWORD}
     )
@@ -113,6 +116,31 @@ async def _authenticated_client(client: AsyncClient, email: str) -> AsyncClient:
 async def auth_client(client: AsyncClient) -> AsyncClient:
     """Client authentifié — l'utilisateur « principal » des tests d'API."""
     return await _authenticated_client(client, "titulaire@exemple.fr")
+
+
+@pytest.fixture
+async def superuser_client(client: AsyncClient, session: AsyncSession) -> AsyncClient:
+    """Client authentifié avec un compte superutilisateur (écriture du catalogue partagé)."""
+    from sqlmodel import select as sqlmodel_select
+
+    from app.core.security import hash_password
+
+    session.add(
+        User(
+            email="catalogue@exemple.fr",
+            hashed_password=hash_password(USER_PASSWORD),
+            is_superuser=True,
+        )
+    )
+    await session.commit()
+
+    tokens = await client.post(
+        "/api/auth/token", data={"username": "catalogue@exemple.fr", "password": USER_PASSWORD}
+    )
+    assert tokens.status_code == 200, tokens.text
+    client.headers["Authorization"] = f"Bearer {tokens.json()['access_token']}"
+    assert sqlmodel_select is not None
+    return client
 
 
 @pytest.fixture
@@ -130,6 +158,18 @@ async def other_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield await _authenticated_client(ac, "tiers@exemple.fr")
+
+
+@pytest.fixture(autouse=True)
+def reset_login_rate_limiter() -> None:
+    """Le limiteur de débit est un état de processus, partagé par tous les tests.
+
+    Sans cette remise à zéro, un test qui crée quelques comptes épuise le quota par IP et fait
+    échouer les suivants — un couplage invisible et pénible à diagnostiquer.
+    """
+    from app.api.auth import login_rate_limiter
+
+    login_rate_limiter.clear()
 
 
 @pytest.fixture

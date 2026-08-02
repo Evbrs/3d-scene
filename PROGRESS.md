@@ -18,7 +18,7 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P2 | Auth JWT, permissions objet | P1 | **fait** |
 | P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | **fait** |
 | P4 | Éditeur 2D (Vue + Konva) | P3 | à faire |
-| P5 | Catalogue `FurnitureType` paramétrique | P1 | à faire |
+| P5 | Catalogue `FurnitureType` paramétrique | P1 | **fait** |
 | P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | à faire |
 | P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | à faire |
 | P8 | Partage de vue (`SharedView`) | P7 | à faire |
@@ -242,3 +242,67 @@ Suite complète : **95 tests sur SQLite, 96 sur PostgreSQL**, `ruff` et `mypy --
 - Les plans de tickets clos sont archivés dans `docs/plans/` (changement de convention par
   rapport au `PLAN.md` unique : une revue lancée après le ticket suivant ne pouvait plus lire le
   plan qu'elle devait vérifier).
+
+### P2 — corrections après revue adversariale
+
+La revue a rendu **À CORRIGER** avec 4 failles de sécurité réelles. Toutes corrigées :
+
+1. **Énumération de comptes sur `/register`** — le *code de statut* était un oracle parfait
+   (201 pour une adresse libre, 409 pour une adresse déjà inscrite), quel que soit le soin
+   apporté au message. L'inscription répond désormais toujours `202` avec le même corps. Un test
+   vérifie en plus qu'avaler le conflit ne permet pas de reprendre le compte d'autrui en
+   réécrivant son mot de passe.
+2. **Limitation de débit entièrement contournable** — un seul seau par IP, vidé à chaque
+   connexion réussie : il suffisait d'intercaler un succès sur son propre compte pour attaquer
+   indéfiniment celui d'autrui (54 tentatives, 0 bloquée dans le repro de la revue). Remplacé par
+   deux seaux : un par cible (libéré au succès de *cette* cible) et un par IP (jamais libéré).
+   `/register` est désormais limité aussi. Test de non-régression :
+   `test_a_successful_login_does_not_unlock_attacks_on_other_accounts`.
+3. **Session admin non révocable** — `authenticate()` ne testait que la présence de
+   l'identifiant en session : rétrograder, désactiver ou supprimer un compte ne fermait pas les
+   sessions ouvertes (cookie de 14 jours). Le compte est maintenant revalidé à chaque requête.
+4. **Garde-fou `SECRET_KEY` fail-open** — `environment` valait `"development"` par défaut : un
+   déploiement oubliant `ENVIRONMENT` signait jetons et cookies avec une clé publiée dans le
+   dépôt. Le défaut est désormais `"production"`, donc l'oubli fait échouer le démarrage.
+   `env.example` et `docker-compose.yml` déclarent explicitement l'environnement de dev.
+5. **`env.example` restauré en double** (41 lignes au lieu de 20) — réécrit proprement, et
+   complété avec `SECRET_KEY` et les ports hôte.
+6. **Critère A5 non couvert** — `test_migrations.py` ne comparait que des noms de tables : une
+   migration oubliant `project.owner_id` passait au vert. Ajout de
+   `test_upgrade_head_creates_every_column_of_every_model`, qui compare colonne par colonne.
+7. **Adresses e-mail sensibles à la casse** — `Case@ex.fr` et `case@ex.fr` créaient deux comptes,
+   et l'utilisateur se retrouvait verrouillé hors du sien. Normalisation en minuscules à
+   l'inscription et à la connexion.
+8. **L'amendement cassait le tableau §6 de la spec** — le bloc était inséré au milieu du tableau
+   Markdown, masquant les trois lignes suivantes. Déplacé après le tableau.
+
+Nuance relevée par la revue et corrigée dans la spec : la casse de `passlib` est effective avec
+`bcrypt` **5.0** (avec 4.1, l'erreur est encore rattrapée en interne). La conclusion ne change
+pas.
+
+### P5 — Catalogue `FurnitureType` paramétrique · **fait**
+
+31 recettes de composition couvrant l'intégralité du tableau §4.3, API de consultation et
+d'administration, chargement idempotent.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| Chaque ligne du tableau §4.3 a une entrée | ✅ | `test_the_catalog_covers_the_whole_spec_table` (tableau de la spec recopié dans le test comme référence indépendante) |
+| Toutes les recettes sont valides | ✅ | `test_every_catalog_entry_is_a_valid_recipe` |
+| Vasque, baignoire, bac de douche déclarent une soustraction (§4.2) | ✅ | `test_the_bathroom_pieces_that_need_csg_declare_a_subtraction` |
+| La commode est fidèle à l'exemple §4.1 | ✅ | `test_the_commode_matches_the_spec_example` |
+| Seed idempotent | ✅ | `test_seeding_twice_creates_no_duplicate` + vérifié sur la stack (31 créées au premier démarrage) |
+| Lecture authentifiée, écriture superutilisateur | ✅ | `test_a_regular_user_cannot_write_the_shared_catalog` |
+| Recette invalide refusée par l'API | ✅ | `test_an_invalid_recipe_is_refused_by_the_api`, `test_an_update_cannot_desynchronise_slots_and_parts` |
+
+Suite complète : **131 tests sur SQLite**, `ruff` et `mypy --strict` verts.
+
+**Défaut trouvé par les tests, pas par relecture** : le validateur « `auto` seulement sur un axe
+répété » a détecté une recette fausse que j'avais écrite (le canapé plaçait `auto` sur l'axe y
+alors que les coussins se répètent sur x). Sans ce garde-fou, le défaut n'aurait été visible
+qu'au rendu 3D en P7.
+
+**Ordre** : P5 traité avant P4, ce que `plan-generation-ia.md` §5 autorise explicitement
+(« P5 peut démarrer en parallèle de P2–P4 »), et qui débloque P6.

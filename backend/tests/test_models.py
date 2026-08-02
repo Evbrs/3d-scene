@@ -344,6 +344,56 @@ async def test_admin_edits_every_model(
     assert reloaded.wall_thickness_cm == 15
 
 
+async def test_admin_session_is_revoked_when_the_account_loses_its_rights(
+    admin_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Une session admin doit être révocable.
+
+    Ne vérifier les droits qu'au moment du login rendrait la session valide jusqu'à expiration
+    du cookie (14 jours par défaut), même après rétrogradation ou suppression du compte.
+    """
+    assert (await admin_client.get("/admin/user/list")).status_code == 200
+
+    admin = (
+        await session.execute(select(User).where(User.email == "admin-test@exemple.fr"))
+    ).scalar_one()
+    admin.is_superuser = False
+    await session.commit()
+
+    downgraded = await admin_client.get("/admin/user/list")
+    assert downgraded.status_code in (302, 307), downgraded.status_code
+
+
+async def test_admin_session_dies_with_the_account(
+    admin_client: AsyncClient, session: AsyncSession
+) -> None:
+    admin = (
+        await session.execute(select(User).where(User.email == "admin-test@exemple.fr"))
+    ).scalar_one()
+    await session.delete(admin)
+    await session.commit()
+
+    response = await admin_client.get("/admin/user/list")
+    assert response.status_code in (302, 307), response.status_code
+
+
+async def test_a_non_superuser_cannot_log_into_the_admin(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    from app.core.security import hash_password
+
+    session.add(
+        User(email="simple@exemple.fr", hashed_password=hash_password("motdepasse-simple-2026"))
+    )
+    await session.commit()
+
+    await client.post(
+        "/admin/login", data={"username": "simple@exemple.fr", "password": "motdepasse-simple-2026"}
+    )
+    response = await client.get("/admin/user/list")
+    assert response.status_code in (302, 307)
+
+
 async def test_admin_never_exposes_the_password_hash(
     admin_client: AsyncClient, owner: User
 ) -> None:

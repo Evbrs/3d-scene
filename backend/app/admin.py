@@ -142,7 +142,27 @@ class AdminAuth(AuthenticationBackend):
         return True
 
     async def authenticate(self, request: Request) -> bool:
-        return bool(request.session.get("admin_user_id"))
+        """Revalide le compte à chaque requête.
+
+        Se contenter de la présence de l'identifiant en session rendrait la session
+        irrévocable : rétrograder, désactiver ou supprimer un compte ne fermerait pas les
+        sessions déjà ouvertes (cookie Starlette valable 14 jours par défaut).
+        """
+        user_id = request.session.get("admin_user_id")
+        if not user_id:
+            return False
+
+        engine = _sync_engine()
+        try:
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                still_allowed = bool(user and user.is_active and user.is_superuser)
+        finally:
+            engine.dispose()
+
+        if not still_allowed:
+            request.session.clear()
+        return still_allowed
 
 
 def _sync_engine() -> Engine:

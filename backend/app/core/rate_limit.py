@@ -1,9 +1,16 @@
 """Limitation de débit à fenêtre glissante, en mémoire.
 
-Sert à protéger la connexion contre le bourrage d'identifiants. L'implémentation est
+Protège la connexion et l'inscription contre le bourrage d'identifiants. L'implémentation est
 volontairement locale au processus : elle suffit pour un déploiement mono-instance et ne fait
 peser aucune dépendance sur Redis avant P9. Le passage à un compteur Redis partagé — nécessaire
-dès qu'il y a plusieurs workers — est explicitement inscrit au ticket P12.
+dès qu'il y a plusieurs workers — est inscrit au ticket P12.
+
+**Deux seaux, pas un seul.** Un unique seau par IP remis à zéro à chaque succès est entièrement
+contournable : il suffit d'intercaler une connexion réussie sur son propre compte tous les N
+essais pour attaquer indéfiniment le compte d'autrui. D'où la séparation :
+
+- un seau **par cible** (l'adresse e-mail visée), remis à zéro quand *cette* cible s'authentifie ;
+- un seau **par IP**, jamais remis à zéro, qui plafonne le volume total quelle que soit la cible.
 """
 
 from collections import defaultdict, deque
@@ -36,8 +43,45 @@ class SlidingWindowRateLimiter:
         return True
 
     def reset(self, key: str) -> None:
-        """Remet le compteur à zéro (appelé après une authentification réussie)."""
+        """Remet à zéro le compteur d'**une** clé."""
         self._events.pop(key, None)
 
     def clear(self) -> None:
         self._events.clear()
+
+
+@dataclass
+class LoginRateLimiter:
+    """Composition des deux seaux décrits dans le docstring du module."""
+
+    per_target: SlidingWindowRateLimiter
+    per_client: SlidingWindowRateLimiter
+
+    def allow(self, client_key: str, target_key: str, now: float) -> bool:
+        """Vrai si la tentative est autorisée. Les deux seaux sont incrémentés.
+
+        Les deux `hit` sont évalués sans court-circuit : sauter l'incrément du second seau parce
+        que le premier a déjà refusé laisserait une fenêtre d'attaque en alternant les cibles.
+        """
+        target_ok = self.per_target.hit(f"{client_key}|{target_key}", now)
+        client_ok = self.per_client.hit(client_key, now)
+        return target_ok and client_ok
+
+    def reset_target(self, client_key: str, target_key: str) -> None:
+        """Après une authentification réussie, seul le seau de *cette* cible est libéré.
+
+        Le seau par IP reste intact : c'est lui qui empêche d'utiliser un succès sur son propre
+        compte comme jeton de remise à zéro pour attaquer d'autres comptes.
+        """
+        self.per_target.reset(f"{client_key}|{target_key}")
+
+    def clear(self) -> None:
+        self.per_target.clear()
+        self.per_client.clear()
+
+
+def build_login_rate_limiter() -> LoginRateLimiter:
+    return LoginRateLimiter(
+        per_target=SlidingWindowRateLimiter(max_attempts=10, window_seconds=300),
+        per_client=SlidingWindowRateLimiter(max_attempts=60, window_seconds=300),
+    )

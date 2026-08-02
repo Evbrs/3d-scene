@@ -38,11 +38,14 @@ services:
     # Les migrations sont appliquées au démarrage : sans ça, une stack fraîchement montée sert
     # une API sur une base sans tables. En production ce sera une étape de déploiement distincte
     # (P12), pas un effet de bord du lancement de l'application.
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "alembic upgrade head && python -m app.cli seed-catalog && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
       REDIS_URL: redis://redis:6379/0
       ENVIRONMENT: development
+      # Explicite : la valeur par défaut du code est « production », qui refuse de démarrer sans
+      # SECRET_KEY forte. C'est voulu — voir app/core/config.py.
+      SECRET_KEY: ${SECRET_KEY:-cle-de-developpement-a-remplacer-absolument-32+}
       DEBUG: "true"
     ports:
       - "8000:8000"

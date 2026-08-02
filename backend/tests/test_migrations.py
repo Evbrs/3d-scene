@@ -92,6 +92,31 @@ def test_upgrade_head_creates_every_table_on_an_empty_database(empty_database_ur
     assert "alembic_version" in created
 
 
+def test_upgrade_head_creates_every_column_of_every_model(empty_database_url: str) -> None:
+    """Comparer les noms de tables ne suffit pas.
+
+    Une migration qui oublie une colonne (par exemple `project.owner_id`) laisse le jeu de
+    tables inchangé : le test passerait alors que le schéma est faux. On compare donc les
+    colonnes, table par table, avec les modèles.
+    """
+    command.upgrade(_alembic_config(empty_database_url), "head")
+
+    engine = create_engine(empty_database_url)
+    try:
+        inspector = inspect(engine)
+        schema = None if is_sqlite(empty_database_url) else MIGRATION_SCHEMA
+        for table_name, table in SQLModel.metadata.tables.items():
+            actual = {
+                column["name"] for column in inspector.get_columns(table_name, schema=schema)
+            }
+            expected = {column.name for column in table.columns}
+            assert expected <= actual, (
+                f"colonnes manquantes sur {table_name} : {sorted(expected - actual)}"
+            )
+    finally:
+        engine.dispose()
+
+
 def test_downgrade_base_removes_every_table(empty_database_url: str) -> None:
     """Une migration non réversible est une impasse opérationnelle : on vérifie l'aller-retour."""
     config = _alembic_config(empty_database_url)

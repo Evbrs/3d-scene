@@ -27,20 +27,26 @@ from app.models.base import utcnow
 VALID_PASSWORD = "motdepasse-solide-2026"
 
 
-@pytest.fixture(autouse=True)
-def _reset_rate_limiter() -> None:
-    """Le limiteur est un état de processus : sans remise à zéro, les tests se contaminent."""
-    login_rate_limiter.clear()
-
-
 async def _register(client: AsyncClient, email: str, password: str = VALID_PASSWORD) -> int:
     response = await client.post(
         "/api/auth/register", json={"email": email, "password": password}
     )
-    assert response.status_code == 201, response.text
-    user_id = response.json()["id"]
-    assert isinstance(user_id, int)
-    return user_id
+    assert response.status_code == 202, response.text
+    return await _user_id(client, email, password)
+
+
+async def _user_id(client: AsyncClient, email: str, password: str = VALID_PASSWORD) -> int:
+    """Identifiant du compte, obtenu par le seul canal désormais disponible : la connexion.
+
+    L'inscription ne renvoie plus l'utilisateur créé — elle répondrait différemment selon que
+    l'adresse existe ou non, ce qui suffirait à énumérer les comptes.
+    """
+    tokens = await _login(client, email, password)
+    profile = await client.get("/api/auth/me", headers=_auth(tokens["access_token"]))
+    assert profile.status_code == 200, profile.text
+    identifier = profile.json()["id"]
+    assert isinstance(identifier, int)
+    return identifier
 
 
 async def _login(client: AsyncClient, email: str, password: str = VALID_PASSWORD) -> dict[str, str]:
@@ -180,18 +186,58 @@ async def test_an_invalid_email_is_refused(client: AsyncClient) -> None:
     assert response.status_code == 422
 
 
-async def test_registering_twice_does_not_reveal_that_the_account_exists(
+async def test_registering_twice_is_indistinguishable_from_a_first_registration(
     client: AsyncClient,
 ) -> None:
-    await _register(client, "doublon@exemple.fr")
-
-    response = await client.post(
+    """Le *code de statut* est un oracle aussi bavard que le message : il doit être identique."""
+    first = await client.post(
         "/api/auth/register", json={"email": "doublon@exemple.fr", "password": VALID_PASSWORD}
     )
+    second = await client.post(
+        "/api/auth/register", json={"email": "doublon@exemple.fr", "password": "un-autre-mdp-12"}
+    )
 
-    assert response.status_code == 409
-    assert "doublon@exemple.fr" not in response.text
-    assert "existe" not in response.json()["detail"].lower()
+    assert first.status_code == second.status_code == 202
+    assert first.json() == second.json()
+    assert "doublon@exemple.fr" not in second.text
+
+
+async def test_a_second_registration_does_not_overwrite_the_password(
+    client: AsyncClient,
+) -> None:
+    """Avaler le conflit ne doit pas se transformer en prise de contrôle du compte."""
+    await _register(client, "cible-reprise@exemple.fr")
+
+    await client.post(
+        "/api/auth/register",
+        json={"email": "cible-reprise@exemple.fr", "password": "mot-de-passe-pirate-99"},
+    )
+
+    hijacked = await client.post(
+        "/api/auth/token",
+        data={"username": "cible-reprise@exemple.fr", "password": "mot-de-passe-pirate-99"},
+    )
+    assert hijacked.status_code == 401
+    assert (await _login(client, "cible-reprise@exemple.fr")) is not None
+
+
+async def test_email_is_case_insensitive(client: AsyncClient) -> None:
+    """Sinon `Alice@ex.fr` et `alice@ex.fr` sont deux comptes, et l'un verrouille l'autre."""
+    await _register(client, "Casse@Exemple.FR")
+
+    connected = await client.post(
+        "/api/auth/token", data={"username": "casse@exemple.fr", "password": VALID_PASSWORD}
+    )
+    assert connected.status_code == 200
+
+    # Et la seconde inscription avec une autre casse ne crée pas de doublon.
+    await client.post(
+        "/api/auth/register", json={"email": "CASSE@exemple.fr", "password": "encore-un-mdp-12"}
+    )
+    still_mine = await client.post(
+        "/api/auth/token", data={"username": "casse@exemple.fr", "password": VALID_PASSWORD}
+    )
+    assert still_mine.status_code == 200
 
 
 async def test_login_with_a_wrong_password_is_refused(client: AsyncClient) -> None:
@@ -240,13 +286,54 @@ async def test_login_is_rate_limited(client: AsyncClient) -> None:
     await _register(client, "cible@exemple.fr")
 
     statuses = []
-    for _ in range(login_rate_limiter.max_attempts + 2):
+    for _ in range(login_rate_limiter.per_target.max_attempts + 2):
         response = await client.post(
             "/api/auth/token", data={"username": "cible@exemple.fr", "password": "mauvais-xxxx"}
         )
         statuses.append(response.status_code)
 
     assert 429 in statuses, f"aucune limitation de débit déclenchée : {statuses}"
+
+
+async def test_a_successful_login_does_not_unlock_attacks_on_other_accounts(
+    client: AsyncClient,
+) -> None:
+    """Le contournement classique : intercaler un succès sur son propre compte pour vider le
+    compteur, et reprendre l'attaque sur la victime. Le seau par IP doit y résister."""
+    await _register(client, "victime@exemple.fr")
+    await _register(client, "attaquant@exemple.fr")
+
+    blocked = False
+    for _ in range(12):
+        for _ in range(9):
+            response = await client.post(
+                "/api/auth/token",
+                data={"username": "victime@exemple.fr", "password": "essai-invalide"},
+            )
+            if response.status_code == 429:
+                blocked = True
+                break
+        if blocked:
+            break
+        # Succès sur son propre compte : ne doit PAS libérer le quota visant la victime.
+        await _login(client, "attaquant@exemple.fr")
+
+    assert blocked, "l'alternance succès/échecs contourne entièrement la limitation de débit"
+
+
+async def test_registration_is_also_rate_limited(client: AsyncClient) -> None:
+    """Sinon l'inscription fournit une réserve inépuisable de comptes valides."""
+    statuses = []
+    for index in range(70):
+        response = await client.post(
+            "/api/auth/register",
+            json={"email": f"masse{index}@exemple.fr", "password": VALID_PASSWORD},
+        )
+        statuses.append(response.status_code)
+        if response.status_code == 429:
+            break
+
+    assert 429 in statuses, "l'inscription n'est pas limitée en débit"
 
 
 # --- Protection des routes --------------------------------------------------------------------
