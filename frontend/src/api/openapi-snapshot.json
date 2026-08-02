@@ -1,0 +1,2949 @@
+{
+  "components": {
+    "schemas": {
+      "Body_login_api_auth_token_post": {
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "password",
+            "title": "Client Secret"
+          },
+          "grant_type": {
+            "anyOf": [
+              {
+                "pattern": "^password$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Type"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string"
+          },
+          "scope": {
+            "default": "",
+            "title": "Scope",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "Body_login_api_auth_token_post",
+        "type": "object"
+      },
+      "ConflictDetail": {
+        "description": "Corps de réponse d'un 409 sur conflit d'édition.\n\nDéclaré dans les `responses` des routes d'écriture : le schéma OpenAPI est la source de\nvérité du frontend (`docs/plan-generation-ia.md` §6), un 409 non documenté y serait\ninvisible. `current_version` est aussi renvoyé dans l'en-tête `X-Current-Version`.",
+        "properties": {
+          "current_version": {
+            "title": "Current Version",
+            "type": "integer"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "current_version"
+        ],
+        "title": "ConflictDetail",
+        "type": "object"
+      },
+      "Covering": {
+        "additionalProperties": false,
+        "description": "Revêtement d'une face (`docs/spec-complete.md` §1).",
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "material": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LayingPattern"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit_height_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Height Cm"
+          },
+          "unit_width_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Width Cm"
+          }
+        },
+        "title": "Covering",
+        "type": "object"
+      },
+      "ElementCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "colors": {
+            "additionalProperties": {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            "maxProperties": 24,
+            "title": "Colors",
+            "type": "object"
+          },
+          "depth_cm": {
+            "default": 50.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Depth Cm",
+            "type": "number"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Height Cm",
+            "type": "number"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ElementKind",
+            "default": "furniture"
+          },
+          "rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Rotation Deg",
+            "type": "number"
+          },
+          "variant_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 32,
+            "title": "Variant Params",
+            "type": "object"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "width_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Width Cm",
+            "type": "number"
+          },
+          "x_offset_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "X Offset Cm",
+            "type": "number"
+          },
+          "y_offset_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Y Offset Cm",
+            "type": "number"
+          }
+        },
+        "title": "ElementCreate",
+        "type": "object"
+      },
+      "ElementKind": {
+        "description": "Nature d'un élément posé sur une face.\n\nLes ouvertures (`DOOR_*`, `WINDOW`) deviennent des trous dans le mur extrudé\n(`docs/spec-complete.md` §3.1) ; `FURNITURE` référence un `FurnitureType` (§4).",
+        "enum": [
+          "door_hinged",
+          "door_sliding",
+          "window",
+          "furniture"
+        ],
+        "title": "ElementKind",
+        "type": "string"
+      },
+      "ElementRead": {
+        "additionalProperties": false,
+        "properties": {
+          "colors": {
+            "additionalProperties": {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            "maxProperties": 24,
+            "title": "Colors",
+            "type": "object"
+          },
+          "depth_cm": {
+            "default": 50.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Depth Cm",
+            "type": "number"
+          },
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Height Cm",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ElementKind",
+            "default": "furniture"
+          },
+          "rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Rotation Deg",
+            "type": "number"
+          },
+          "variant_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 32,
+            "title": "Variant Params",
+            "type": "object"
+          },
+          "width_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Width Cm",
+            "type": "number"
+          },
+          "x_offset_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "X Offset Cm",
+            "type": "number"
+          },
+          "y_offset_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Y Offset Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "face_id"
+        ],
+        "title": "ElementRead",
+        "type": "object"
+      },
+      "ElementUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "colors": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "type": "string"
+                },
+                "maxProperties": 24,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Colors"
+          },
+          "depth_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depth Cm"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height Cm"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElementKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rotation_deg": {
+            "anyOf": [
+              {
+                "maximum": 360.0,
+                "minimum": -360.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rotation Deg"
+          },
+          "variant_params": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxProperties": 32,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Params"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "width_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width Cm"
+          },
+          "x_offset_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Offset Cm"
+          },
+          "y_offset_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y Offset Cm"
+          }
+        },
+        "title": "ElementUpdate",
+        "type": "object"
+      },
+      "FaceKind": {
+        "description": "Nature d'une face d'une pièce.\n\nLe plafond est une face à part entière (`docs/spec-complete.md` §1).",
+        "enum": [
+          "wall",
+          "floor",
+          "ceiling"
+        ],
+        "title": "FaceKind",
+        "type": "string"
+      },
+      "FaceRead": {
+        "properties": {
+          "covering": {
+            "additionalProperties": true,
+            "title": "Covering",
+            "type": "object"
+          },
+          "elements": {
+            "items": {
+              "$ref": "#/components/schemas/ElementRead"
+            },
+            "title": "Elements",
+            "type": "array"
+          },
+          "end_x_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End X Cm"
+          },
+          "end_y_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Y Cm"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FaceKind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "room_id": {
+            "title": "Room Id",
+            "type": "integer"
+          },
+          "start_x_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start X Cm"
+          },
+          "start_y_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Y Cm"
+          }
+        },
+        "required": [
+          "id",
+          "room_id",
+          "label",
+          "kind",
+          "start_x_cm",
+          "start_y_cm",
+          "end_x_cm",
+          "end_y_cm",
+          "covering"
+        ],
+        "title": "FaceRead",
+        "type": "object"
+      },
+      "FaceUpdate": {
+        "additionalProperties": false,
+        "description": "Une face n'est pas créée ni supprimée directement : elle découle du polygone de la pièce.\n\nSeul son revêtement est modifiable par le client.",
+        "properties": {
+          "covering": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Covering"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "FaceUpdate",
+        "type": "object"
+      },
+      "FurnitureCategory": {
+        "description": "Catégories du catalogue cible (`docs/spec-complete.md` §4.3).",
+        "enum": [
+          "general",
+          "bathroom",
+          "bedroom",
+          "living_room",
+          "kitchen"
+        ],
+        "title": "FurnitureCategory",
+        "type": "string"
+      },
+      "FurnitureTypeCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/FurnitureCategory"
+          },
+          "color_slots": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Color Slots",
+            "type": "array"
+          },
+          "default_depth_cm": {
+            "default": 50.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1000.0,
+            "title": "Default Depth Cm",
+            "type": "number"
+          },
+          "default_height_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1000.0,
+            "title": "Default Height Cm",
+            "type": "number"
+          },
+          "default_width_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1000.0,
+            "title": "Default Width Cm",
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Parts",
+            "type": "array"
+          },
+          "slug": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "category",
+          "color_slots",
+          "parts"
+        ],
+        "title": "FurnitureTypeCreate",
+        "type": "object"
+      },
+      "FurnitureTypePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FurnitureTypeRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "FurnitureTypePage",
+        "type": "object"
+      },
+      "FurnitureTypeRead": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "color_slots": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Color Slots",
+            "type": "array"
+          },
+          "default_depth_cm": {
+            "title": "Default Depth Cm",
+            "type": "number"
+          },
+          "default_height_cm": {
+            "title": "Default Height Cm",
+            "type": "number"
+          },
+          "default_width_cm": {
+            "title": "Default Width Cm",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Parts",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "category",
+          "color_slots",
+          "parts",
+          "default_width_cm",
+          "default_height_cm",
+          "default_depth_cm"
+        ],
+        "title": "FurnitureTypeRead",
+        "type": "object"
+      },
+      "FurnitureTypeUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FurnitureCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "color_slots": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 12,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Slots"
+          },
+          "default_depth_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Depth Cm"
+          },
+          "default_height_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Height Cm"
+          },
+          "default_width_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Width Cm"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "parts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Part"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts"
+          }
+        },
+        "title": "FurnitureTypeUpdate",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "LayingPattern": {
+        "description": "Motif de pose d'un revêtement (`docs/spec-complete.md` §1).",
+        "enum": [
+          "straight",
+          "staggered",
+          "chevron",
+          "herringbone"
+        ],
+        "title": "LayingPattern",
+        "type": "string"
+      },
+      "Part": {
+        "additionalProperties": false,
+        "description": "Une primitive de la recette.",
+        "properties": {
+          "color_slot": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Color Slot",
+            "type": "string"
+          },
+          "gap": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Gap",
+            "type": "number"
+          },
+          "operation": {
+            "default": "add",
+            "enum": [
+              "add",
+              "subtract"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "rel_position": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2.5,
+                    "minimum": -1.5,
+                    "type": "number"
+                  },
+                  {
+                    "const": "auto",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2.5,
+                    "minimum": -1.5,
+                    "type": "number"
+                  },
+                  {
+                    "const": "auto",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2.5,
+                    "minimum": -1.5,
+                    "type": "number"
+                  },
+                  {
+                    "const": "auto",
+                    "type": "string"
+                  }
+                ]
+              }
+            ],
+            "title": "Rel Position",
+            "type": "array"
+          },
+          "rel_size": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2.5,
+                "type": "number"
+              },
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2.5,
+                "type": "number"
+              },
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2.5,
+                "type": "number"
+              }
+            ],
+            "title": "Rel Size",
+            "type": "array"
+          },
+          "repeat_x": {
+            "default": 1,
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Repeat X",
+            "type": "integer"
+          },
+          "repeat_y": {
+            "default": 1,
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Repeat Y",
+            "type": "integer"
+          },
+          "repeat_z": {
+            "default": 1,
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Repeat Z",
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PartPrimitive"
+          }
+        },
+        "required": [
+          "type",
+          "rel_position",
+          "rel_size",
+          "color_slot"
+        ],
+        "title": "Part",
+        "type": "object"
+      },
+      "PartPrimitive": {
+        "description": "Primitives disponibles dans une recette de composition (`docs/spec-complete.md` §4.1).",
+        "enum": [
+          "box",
+          "cylinder",
+          "sphere"
+        ],
+        "title": "PartPrimitive",
+        "type": "string"
+      },
+      "ProjectCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProjectCreate",
+        "type": "object"
+      },
+      "ProjectPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset",
+          "items"
+        ],
+        "title": "ProjectPage",
+        "type": "object"
+      },
+      "ProjectRead": {
+        "description": "Vue complète : le plan entier, tel que consommé par l'éditeur 2D et le viewer 3D.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/components/schemas/RoomRead"
+            },
+            "title": "Rooms",
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ProjectRead",
+        "type": "object"
+      },
+      "ProjectSummary": {
+        "description": "Vue légère, pour la liste des projets : pas de chargement de tout l'arbre.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ProjectSummary",
+        "type": "object"
+      },
+      "ProjectUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "ProjectUpdate",
+        "type": "object"
+      },
+      "RefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "RefreshRequest",
+        "type": "object"
+      },
+      "RegistrationAccepted": {
+        "description": "Réponse d'inscription, volontairement identique que le compte existe ou non.\n\nRenvoyer 201 pour une adresse libre et 409 pour une adresse déjà inscrite fournit un oracle\nd'énumération parfait : le code de statut suffit à savoir qui possède un compte, quel que\nsoit le soin apporté au message d'erreur.",
+        "properties": {
+          "detail": {
+            "default": "Si cette adresse n'est pas déjà utilisée, le compte a été créé. Connectez-vous pour continuer.",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "title": "RegistrationAccepted",
+        "type": "object"
+      },
+      "RoomCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "ceiling_height_cm": {
+            "default": 250.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Ceiling Height Cm",
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "polygon": {
+            "items": {
+              "items": {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "title": "Polygon",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "wall_thickness_cm": {
+            "default": 10.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Wall Thickness Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RoomCreate",
+        "type": "object"
+      },
+      "RoomRead": {
+        "properties": {
+          "ceiling_height_cm": {
+            "title": "Ceiling Height Cm",
+            "type": "number"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceRead"
+            },
+            "title": "Faces",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "polygon": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Polygon",
+            "type": "array"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "integer"
+          },
+          "wall_thickness_cm": {
+            "title": "Wall Thickness Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "wall_thickness_cm",
+          "ceiling_height_cm",
+          "polygon"
+        ],
+        "title": "RoomRead",
+        "type": "object"
+      },
+      "RoomUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "ceiling_height_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ceiling Height Cm"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "polygon": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "maximum": 100000.0,
+                    "minimum": -100000.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polygon"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "wall_thickness_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Thickness Cm"
+          }
+        },
+        "title": "RoomUpdate",
+        "type": "object"
+      },
+      "TokenPair": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token"
+        ],
+        "title": "TokenPair",
+        "type": "object"
+      },
+      "UserCreate": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 12,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "UserCreate",
+        "type": "object"
+      },
+      "UserRead": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_superuser": {
+            "title": "Is Superuser",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "is_active",
+          "is_superuser"
+        ],
+        "title": "UserRead",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "/api/auth/token"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "info": {
+    "title": "Éditeur de plan de rénovation 2D → 3D",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/auth/me": {
+      "get": {
+        "operationId": "read_current_user_api_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Current User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "description": "Échange un jeton de rafraîchissement contre une nouvelle paire (rotation).",
+        "operationId": "refresh_api_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "description": "Inscription.\n\nRépond toujours 202 avec le même corps, que l'adresse soit libre ou déjà prise (voir\n`RegistrationAccepted`). L'inscription est elle aussi limitée en débit : sans ça, elle\nfournirait une source inépuisable de comptes valides pour contourner la limitation de la\nconnexion.",
+        "operationId": "register_api_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/token": {
+      "post": {
+        "description": "Connexion. `username` porte l'adresse e-mail (nom de champ imposé par OAuth2).",
+        "operationId": "login_api_auth_token_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_login_api_auth_token_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/elements/{element_id}": {
+      "delete": {
+        "operationId": "delete_element_api_elements__element_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "element_id",
+            "required": true,
+            "schema": {
+              "title": "Element Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Element",
+        "tags": [
+          "plan"
+        ]
+      },
+      "patch": {
+        "operationId": "update_element_api_elements__element_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "element_id",
+            "required": true,
+            "schema": {
+              "title": "Element Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Element",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/faces/{face_id}": {
+      "patch": {
+        "description": "Met à jour le revêtement d'une face.\n\nNi création ni suppression : les faces découlent du polygone de la pièce.",
+        "operationId": "update_face_api_faces__face_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "face_id",
+            "required": true,
+            "schema": {
+              "title": "Face Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaceRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Face",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/faces/{face_id}/elements": {
+      "post": {
+        "operationId": "create_element_api_faces__face_id__elements_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "face_id",
+            "required": true,
+            "schema": {
+              "title": "Face Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ElementCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Element",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/furniture-types": {
+      "get": {
+        "description": "Catalogue paginé, filtrable par catégorie et par nom.",
+        "operationId": "list_furniture_types_api_furniture_types_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/FurnitureCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FurnitureTypePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Furniture Types",
+        "tags": [
+          "catalogue"
+        ]
+      },
+      "post": {
+        "operationId": "create_furniture_type_api_furniture_types_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FurnitureTypeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FurnitureTypeRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Furniture Type",
+        "tags": [
+          "catalogue"
+        ]
+      }
+    },
+    "/api/furniture-types/{slug}": {
+      "delete": {
+        "description": "Suppression d'une entrée du catalogue.\n\nLes éléments qui la référencent ne sont pas supprimés : la clé étrangère est en\n`ON DELETE SET NULL` (P1), pour qu'un retrait du catalogue ne détruise pas les plans.",
+        "operationId": "delete_furniture_type_api_furniture_types__slug__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Furniture Type",
+        "tags": [
+          "catalogue"
+        ]
+      },
+      "get": {
+        "operationId": "read_furniture_type_api_furniture_types__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FurnitureTypeRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Furniture Type",
+        "tags": [
+          "catalogue"
+        ]
+      },
+      "patch": {
+        "operationId": "update_furniture_type_api_furniture_types__slug__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FurnitureTypeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FurnitureTypeRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Furniture Type",
+        "tags": [
+          "catalogue"
+        ]
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "description": "Liste paginée des projets de l'utilisateur.\n\nVue résumée : charger l'arbre complet de chaque projet pour une liste serait un gâchis\nproportionnel à la taille des plans.",
+        "operationId": "list_projects_api_projects_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Projects",
+        "tags": [
+          "plan"
+        ]
+      },
+      "post": {
+        "operationId": "create_project_api_projects_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Project",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/projects/{project_id}": {
+      "delete": {
+        "operationId": "delete_project_api_projects__project_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Project",
+        "tags": [
+          "plan"
+        ]
+      },
+      "get": {
+        "operationId": "read_project_api_projects__project_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Project",
+        "tags": [
+          "plan"
+        ]
+      },
+      "patch": {
+        "description": "Modification d'un projet, avec verrouillage optimiste (spec §8, cas 3).\n\nSi le client fournit `version`, une divergence est signalée par un 409 plutôt que par un\nécrasement silencieux — c'est l'arbitrage tranché par la spec.",
+        "operationId": "update_project_api_projects__project_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Project",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/rooms": {
+      "post": {
+        "description": "Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond).",
+        "operationId": "create_room_api_projects__project_id__rooms_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Room",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/scene": {
+      "get": {
+        "description": "Scene graph complet du projet, prêt à être traduit en objets Three.js.\n\nLe type de retour est un dictionnaire libre et non un modèle Pydantic : la forme des nœuds\ndépend de leur nature (mur, sol, meuble), et un `Union` discriminé de six variantes\nalourdirait le schéma OpenAPI sans rien apporter au client, qui aiguille sur `kind`.",
+        "operationId": "read_scene_graph_api_projects__project_id__scene_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Scene Graph Api Projects  Project Id  Scene Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Scene Graph",
+        "tags": [
+          "scene"
+        ]
+      }
+    },
+    "/api/rooms/{room_id}": {
+      "delete": {
+        "operationId": "delete_room_api_rooms__room_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "room_id",
+            "required": true,
+            "schema": {
+              "title": "Room Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Room",
+        "tags": [
+          "plan"
+        ]
+      },
+      "get": {
+        "operationId": "read_room_api_rooms__room_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "room_id",
+            "required": true,
+            "schema": {
+              "title": "Room Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Room",
+        "tags": [
+          "plan"
+        ]
+      },
+      "patch": {
+        "description": "Modifie une pièce. Un changement de polygone resynchronise les faces.\n\nSi la nouvelle forme supprime des murs portant des éléments, la requête est refusée (409)\ntant que `force: true` n'est pas envoyé : perdre des meubles et des ouvertures en réponse à\nun `200 OK` est une perte de données invisible pour l'utilisateur.",
+        "operationId": "update_room_api_rooms__room_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "room_id",
+            "required": true,
+            "schema": {
+              "title": "Room Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Room",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/rooms/{room_id}/faces": {
+      "get": {
+        "operationId": "list_faces_api_rooms__room_id__faces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "room_id",
+            "required": true,
+            "schema": {
+              "title": "Room Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FaceRead"
+                  },
+                  "title": "Response List Faces Api Rooms  Room Id  Faces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Faces",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Sonde de vivacité utilisée par Docker, la CI et les critères d'acceptation P0.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  }
+}

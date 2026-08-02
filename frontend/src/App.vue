@@ -1,75 +1,172 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
+import { RouterLink, RouterView, useRouter } from 'vue-router'
 
-import { fetchHealth } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 
-type BackendState = 'loading' | 'ok' | 'error'
+const auth = useAuthStore()
+const router = useRouter()
 
-const state = ref<BackendState>('loading')
-const detail = ref<string>('')
+onMounted(() => auth.restore())
 
-onMounted(async () => {
-  try {
-    const health = await fetchHealth()
-    state.value = health.status === 'ok' ? 'ok' : 'error'
-    detail.value = `status = ${health.status}`
-  } catch (error) {
-    state.value = 'error'
-    detail.value = error instanceof Error ? error.message : String(error)
-  }
-})
+function signOut(): void {
+  auth.signOut()
+  void router.push({ name: 'connexion' })
+}
 </script>
 
 <template>
-  <main class="shell">
-    <h1>Éditeur de plan de rénovation 2D → 3D</h1>
-    <p class="subtitle">
-      Écran de test du scaffolding (ticket P0).
-    </p>
+  <a
+    class="skip-link"
+    href="#contenu"
+  >Aller au contenu principal</a>
 
-    <section
-      aria-labelledby="backend-status-title"
-      class="card"
+  <header class="app-header">
+    <RouterLink
+      class="brand"
+      to="/projets"
     >
-      <h2 id="backend-status-title">
-        État du backend
-      </h2>
-      <p
-        aria-live="polite"
-        :data-state="state"
+      Plan de rénovation
+    </RouterLink>
+    <nav
+      v-if="auth.user"
+      aria-label="Navigation principale"
+    >
+      <RouterLink to="/projets">
+        Projets
+      </RouterLink>
+      <button
+        type="button"
+        @click="signOut"
       >
-        <span v-if="state === 'loading'">Vérification de <code>GET /health</code>…</span>
-        <span v-else-if="state === 'ok'">Backend joignable — {{ detail }}</span>
-        <span v-else>Backend injoignable — {{ detail }}</span>
-      </p>
-    </section>
+        Se déconnecter ({{ auth.user.email }})
+      </button>
+    </nav>
+  </header>
+
+  <main id="contenu">
+    <RouterView />
   </main>
 </template>
 
-<style scoped>
-.shell {
-  margin: 0 auto;
-  max-width: 44rem;
-  padding: 2rem 1rem;
-  font-family: system-ui, sans-serif;
+<style>
+:root {
+  --texte: #14181d;
+  --texte-doux: #41474f;
+  --fond: #ffffff;
+  --bordure: #c9ced6;
+  --accent: #0b4fd6;
+  --erreur: #8a0f18;
+  --succes: #0a5c2c;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--texte);
+  background: var(--fond);
   line-height: 1.5;
 }
 
-.subtitle {
-  color: #4a4a4a;
+/* Contraste AAA (7:1) et focus toujours visible : conventions d'accessibilité du projet. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 
-.card {
-  border: 1px solid #d4d4d4;
-  border-radius: 0.5rem;
-  padding: 1rem;
+.skip-link {
+  position: absolute;
+  left: -9999px;
 }
 
-[data-state='ok'] {
-  color: #0b6b2f;
+.skip-link:focus {
+  left: 0.5rem;
+  top: 0.5rem;
+  z-index: 10;
+  background: var(--fond);
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--accent);
+  border-radius: 0.25rem;
 }
 
-[data-state='error'] {
-  color: #8a1010;
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--bordure);
+}
+
+.app-header nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+main {
+  padding: 1.25rem;
+  margin: 0 auto;
+  max-width: 78rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--bordure);
+  border-radius: 0.35rem;
+  background: var(--fond);
+  color: var(--texte);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button[data-variant='primary'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+input,
+select {
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--bordure);
+  border-radius: 0.35rem;
+  width: 100%;
+}
+
+.erreur {
+  color: var(--erreur);
+  font-weight: 600;
 }
 </style>

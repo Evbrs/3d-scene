@@ -17,10 +17,10 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P1 | Modèles SQLModel + migrations Alembic + admin SQLAdmin | P0 | **fait** |
 | P2 | Auth JWT, permissions objet | P1 | **fait** |
 | P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | **fait** |
-| P4 | Éditeur 2D (Vue + Konva) | P3 | à faire |
+| P4 | Éditeur 2D (Vue + Konva) | P3 | **fait** |
 | P5 | Catalogue `FurnitureType` paramétrique | P1 | **fait** |
 | P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | **fait** |
-| P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | à faire |
+| P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | **fait** |
 | P8 | Partage de vue (`SharedView`) | P7 | à faire |
 | P9 | Export PDF/image + Celery | P4, P7 | à faire |
 | P10 | Passe performance (cache, eager loading, indexation) | P3–P9 | à faire |
@@ -389,3 +389,43 @@ Suite complète : **176 tests sur SQLite, 177 sur PostgreSQL**, `ruff` et `mypy 
 **Arbitrages de la spec respectés** : calcul synchrone (§8 cas 2 — la migration vers Celery et sa
 mesure sont le sujet de P9) ; approche `THREE.Shape` + trous plutôt que CSG (§8 cas 5), le CSG
 n'étant que *signalé* par `requires_csg` pour les meubles de §4.2 ; aucun cache (§8 cas 6 → P10).
+
+### P4 et P7 — éditeur 2D et viewer 3D · **fait**
+
+Traités ensemble : ils partagent l'ossature du frontend (client HTTP typé, routeur, stores,
+styles). Les livrer séparément aurait imposé de la construire deux fois.
+
+**Éditeur 2D (P4)** — canvas Konva avec tracé de polygone au clic, fermeture du contour,
+magnétisme sur grille réglable, déplacement de sommets, cotes et lettrage affichés en direct,
+détection de contour auto-sécant, panneau de pose des revêtements et des éléments.
+
+**Viewer 3D (P7)** — traduction du scene graph en objets Three.js via TresJS, 7 presets de
+caméra, liste de faces avec les trois états visible / transparente / masquée, isolement d'une
+face (qui bascule aussi sur sa caméra d'élévation), capture PNG de la vue courante (§3.5).
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| Lettrage client identique au backend | ✅ | `editor/geometry.spec.ts` (mêmes cas que le test Python) |
+| Conversion plan ↔ écran réversible, magnétisme | ✅ | `editor/geometry.spec.ts` |
+| Contour auto-sécant détecté | ✅ | nœud papillon détecté, pièce en L acceptée |
+| Trois états de visibilité conformes à §3.4 | ✅ | `viewer/visibility.spec.ts` |
+| Isolement par transparence, pas par masquage | ✅ | `viewer/visibility.spec.ts` |
+| Ouvertures → trous dans la forme Three.js | ✅ | `viewer/geometry.spec.ts` |
+| Aucun chemin inventé par le client | ✅ | `api/contract.spec.ts` + job CI `contrat-api` |
+| build / test / lint verts | ✅ | 44 tests, build 261 ms, eslint propre |
+
+**Le garde-fou anti-hallucination du frontend est rendu exécutable.** `plan-generation-ia.md` §6
+prévoit que l'OpenAPI serve de source de vérité ; c'était jusqu'ici une intention. Désormais :
+un instantané du schéma est versionné, un test confronte chaque chemin appelé par `client.ts` à
+cet instantané, et un job CI régénère l'instantané depuis le backend pour échouer s'il a dérivé.
+Sans ce dernier maillon, le test aurait pu valider indéfiniment un contrat périmé.
+
+**Défaut trouvé par ce test, pas par relecture** : `listFurnitureTypes` interpolait toute la
+chaîne de requête dans le chemin (`/api/furniture-types${query}`), ce qui rendait le contrat
+invérifiable statiquement. Corrigé par un helper `withQuery` qui garde les chemins littéraux.
+
+**Non-objectifs tenus** : aucun partage de vue (P8), aucun export PDF (P9), aucun CSG réel — les
+primitives `subtract` sont ignorées à l'affichage plutôt que rendues en plein, ce qui donnerait
+une baignoire pleine au lieu de creuse.
