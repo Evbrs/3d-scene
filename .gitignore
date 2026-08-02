@@ -1,0 +1,24 @@
+# Secrets — jamais commités (CLAUDE.md global)
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Outils / OS
+.DS_Store
+.idea/
+.vscode/

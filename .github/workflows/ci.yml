@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest, ruff, mypy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Types (mypy)
+        run: mypy .
+
+      - name: Tests (pytest)
+        run: pytest
+
+  frontend:
+    name: Frontend (build, tests, lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Tests (vitest)
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  compose:
+    name: Stack Docker (docker compose up)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Valider le fichier compose
+        run: docker compose config -q
+
+      - name: Démarrer la stack
+        run: docker compose up -d --wait --wait-timeout 300
+
+      - name: Vérifier GET /health
+        run: |
+          body=$(curl --fail --silent --show-error http://localhost:8000/health)
+          echo "réponse: $body"
+          test "$body" = '{"status":"ok"}'
+
+      - name: Vérifier que le frontend répond
+        run: curl --fail --silent --show-error --output /dev/null http://localhost:5173
+
+      - name: Logs en cas d'échec
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Arrêter la stack
+        if: always()
+        run: docker compose down -v
