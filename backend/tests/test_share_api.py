@@ -142,7 +142,7 @@ async def test_an_expired_share_is_indistinguishable_from_a_missing_one(
     auth_client: AsyncClient, client: AsyncClient, session: AsyncSession
 ) -> None:
     """Distinguer les deux cas confirmerait qu'un lien a existé."""
-    project_id, token = await _shared_project(auth_client)
+    _project_id, token = await _shared_project(auth_client)
 
     shared = (
         await session.execute(select(SharedView).where(col(SharedView.token) == token))

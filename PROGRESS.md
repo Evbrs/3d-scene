@@ -23,7 +23,7 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | **fait** |
 | P8 | Partage de vue (`SharedView`) | P7 | **fait** |
 | P9 | Export PDF/image + Celery | P4, P7 | **fait** |
-| P10 | Passe performance (cache, eager loading, indexation) | P3–P9 | à faire |
+| P10 | Passe performance (cache, eager loading, indexation) | P3–P9 | **fait** |
 | P11 | Passe tests d'intégration / cas limites | P0–P10 | à faire |
 | P12 | Durcissement déploiement | P0–P11 | à faire |
 
@@ -537,3 +537,52 @@ volume Docker nommé hérite des droits du répertoire de l'image — `/exports`
 donc `PermissionError` à la première écriture. Les tests en mode `task_always_eager` ne pouvaient
 pas le voir : ils écrivent ailleurs, sous une autre identité. Corrigé dans le `Dockerfile`. C'est
 l'illustration de la règle du `CLAUDE.md` : un ticket n'est pas fini sur la seule foi des tests.
+
+### P10 — Passe performance · **fait**
+
+**§8 cas 4 — le N+1, mesuré avant d'être corrigé.** Un compteur de requêtes SQL remplace la
+lecture de `echo=True` à l'œil : la mesure devient une assertion.
+
+| Chargement | 1 pièce | 3 pièces | 6 pièces |
+|---|---|---|---|
+| Naïf (relations chargées à la demande) | croît | croît | croît |
+| Anticipé (`selectinload`) | **4 requêtes** | **4 requêtes** | **4 requêtes** |
+
+Le premier test *documente le problème* plutôt que de protéger un comportement : il échouerait si
+quelqu'un supposait à tort que SQLAlchemy résout le N+1 tout seul. Vu depuis l'API,
+`GET /api/projects/{id}` et `GET /api/projects/{id}/scene` émettent le même nombre de requêtes
+pour 1 et pour 6 pièces.
+
+**§8 cas 6 — cache du scene graph, mesuré sur la stack réelle avec Redis :**
+
+| Appel | En-tête `X-Cache` | Durée |
+|---|---|---|
+| 1ᵉʳ appel | `miss` | 17,0 ms |
+| 2ᵉ appel | `hit` | **2,9 ms** (≈ 6× plus rapide) |
+| Après édition du plan | `miss` | recalculé |
+
+**L'invalidation est structurelle, pas déclarative.** La clé porte la version du projet
+(`scene:1:v9`, `scene:1:v10`) : une écriture change la version, donc la clé, donc l'entrée visée.
+Il n'y a aucun `delete` à placer sur chaque chemin d'écriture — et donc aucun à oublier quand on
+en ajoutera un. Le prix assumé : les entrées périmées restent en mémoire jusqu'à expiration (TTL
+d'une heure), ce que la lecture des clés Redis confirme.
+
+Seul cas nécessitant une purge explicite : la **suppression** d'un projet, où aucune version
+future ne viendra rendre les anciennes clés inatteignables.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| N+1 reproduit et mesuré | ✅ | `test_the_naive_loading_really_produces_an_n_plus_one` (3 tailles) |
+| Chargement anticipé constant | ✅ | exactement 4 requêtes, quelle que soit la taille |
+| Requêtes de l'API indépendantes de la taille du plan | ✅ | 2 tests |
+| Clé portant la version | ✅ | test + clés observées dans Redis |
+| Édition immédiatement reflétée | ✅ | `test_the_scene_reflects_an_edit_immediately` |
+| Panne Redis sans conséquence | ✅ | `test_the_cache_degrades_gracefully_when_redis_fails` |
+
+**Un seul index ajouté** — `(owner_id, updated_at)` — calqué sur la requête réelle de la liste
+des projets. Indexer « au cas où » coûte à chaque écriture pour un gain hypothétique ; §8 cas 1
+reste appliqué (géométrie en JSON, aucun besoin de requête n'ayant émergé).
+
+Suite : **224 tests backend**, `ruff` et `mypy --strict` verts.

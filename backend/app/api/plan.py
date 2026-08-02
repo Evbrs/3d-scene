@@ -21,6 +21,7 @@ from app.api.permissions import (
     get_owned_project,
     get_owned_room,
 )
+from app.core.cache import scene_cache
 from app.models.base import utcnow
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 from app.schemas.plan import (
@@ -207,6 +208,9 @@ async def delete_project(
     project = await get_owned_project(session, project_id, current_user)
     await session.delete(project)
     await session.commit()
+    # Seul cas où l'invalidation par version ne suffit pas : aucune version future ne viendra
+    # rendre les clés inatteignables, il faut donc les retirer.
+    await scene_cache.forget_project(project_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

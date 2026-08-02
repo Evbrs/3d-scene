@@ -4,14 +4,12 @@ import asyncio
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.models.base import utcnow
 from app.services.export_pdf import render_project_pdf
-
-T = TypeVar("T")
 
 
 def export_directory() -> Path:
@@ -60,7 +58,7 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
         return payload
 
 
-def run_blocking(coroutine: Coroutine[Any, Any, T]) -> T:
+def run_blocking[T](coroutine: Coroutine[Any, Any, T]) -> T:
     """Exécute une coroutine depuis un contexte synchrone, boucle en cours ou non.
 
     Un worker Celery n'a pas de boucle d'évènements : `asyncio.run` suffirait. Mais en mode

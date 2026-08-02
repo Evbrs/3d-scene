@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # Répertoire des exports générés (P9). Monté en volume dans docker-compose.
     export_dir: str = "/tmp/renovation-exports"
 
+    # Cache du scene graph (spec §8, cas 6). Désactivable pour mesurer le gain — et désactivé
+    # par défaut dans les tests, qui n'ont pas de Redis.
+    cache_enabled: bool = True
+
     # Bascule Celery en exécution immédiate : les tests tournent ainsi sans broker.
     celery_eager: bool = False
 

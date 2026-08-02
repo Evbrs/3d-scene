@@ -7,12 +7,13 @@ asynchrone contredirait la décision et priverait P9 de sa mesure de référence
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
+from app.core.cache import scene_cache
 from app.geometry.scene import build_scene_graph
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 
@@ -127,14 +128,30 @@ async def load_scene_inputs(
 
 @router.get("/projects/{project_id}/scene")
 async def read_scene_graph(
-    project_id: int, session: SessionDep, current_user: CurrentUser
+    project_id: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+    response: Response,
 ) -> dict[str, Any]:
     """Scene graph complet du projet, prêt à être traduit en objets Three.js.
 
     Le type de retour est un dictionnaire libre et non un modèle Pydantic : la forme des nœuds
     dépend de leur nature (mur, sol, meuble), et un `Union` discriminé de six variantes
     alourdirait le schéma OpenAPI sans rien apporter au client, qui aiguille sur `kind`.
+
+    Le résultat est mis en cache sous une clé portant la version du projet (spec §8, cas 6) :
+    toute écriture du plan incrémente cette version, donc rend l'ancienne entrée inatteignable.
+    L'en-tête `X-Cache` expose le résultat, pour que la mesure soit faisable depuis un client.
     """
-    await get_owned_project(session, project_id, current_user)
+    owned = await get_owned_project(session, project_id, current_user)
+
+    cached = await scene_cache.get(project_id, owned.version)
+    if cached is not None:
+        response.headers["X-Cache"] = "hit"
+        return cached
+
     project, catalog = await load_scene_inputs(session, project_id)
-    return build_scene_graph(project_to_plain_dict(project), catalog)
+    scene = build_scene_graph(project_to_plain_dict(project), catalog)
+    await scene_cache.set(project_id, owned.version, scene)
+    response.headers["X-Cache"] = "miss"
+    return scene

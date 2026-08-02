@@ -1,62 +1,64 @@
-# PLAN.md — Ticket P9 : export PDF et tâches Celery
+# PLAN.md — Ticket P10 : passe performance
 
 > Plan du ticket **en cours**. Plans des tickets clos : `docs/plans/`.
-> Source : `docs/plan-generation-ia.md` §5 (P9), `docs/spec-complete.md` §1, §3.5, §6, §8 cas 2.
+> Source : `docs/plan-generation-ia.md` §5 (P10), `docs/spec-complete.md` §8 cas 4 et 6.
 
 ## Objectif
 
-Export PDF d'un projet, généré en tâche de fond par Celery, avec le chemin synchrone conservé
-comme référence de mesure.
+Mesurer puis traiter les deux points de performance que la spec désigne : le N+1 sur le
+chargement des relations, et le recalcul du scene graph à chaque requête.
 
 ## Référence spec
 
-§1 (« Export PDF et image »), §3.5 (« export PDF détaillé par mur »), §6 (Celery + Redis),
-**§8 cas 2** : « Construire en synchrone (P6), migrer vers Celery (P9) **en mesurant le gain
-avant/après** ».
+- **§8 cas 4** : « **Mesurer** le N+1 en activant le logging SQL (`echo=True`) **avant**
+  d'optimiser — sinon l'optimisation n'a pas de sens concret. »
+- **§8 cas 6** : « Cache Redis, invalidé à la modification du plan. […] Bon terrain pour
+  pratiquer l'invalidation de cache — un des rares vrais problèmes difficiles de l'informatique. »
 
 ## Fichiers autorisés
 
-`backend/app/services/export_pdf.py`, `backend/app/core/celery_app.py`,
-`backend/app/tasks/exports.py`, `backend/app/api/exports.py`,
-`backend/tests/test_export_api.py`.
+`backend/app/core/cache.py`, `backend/tests/test_performance.py`,
+`backend/alembic/versions/` (index).
 
-**Extensions signalées** : `backend/app/main.py`, `backend/app/core/config.py`,
-`backend/pyproject.toml` (reportlab), `backend/tests/conftest.py`, `backend/Dockerfile`,
-`docker-compose.yml` (service `worker` + volume partagé).
+**Extensions signalées** : `backend/app/api/scene.py` et `backend/app/api/plan.py` (branchement
+du cache), `backend/app/core/config.py`, `backend/app/models/plan.py` (index composite),
+`backend/tests/conftest.py`.
 
 ## Non-objectifs
 
-- Aucun devis chiffré (§1 le mentionne dans la vision, aucune phase ne le porte)
-- Aucun export d'image côté serveur : §3.5 confie la capture PNG au canvas Three.js, déjà fait
-  en P7
-- Aucune optimisation mesurée du reste de l'API (→ P10)
+- Aucune optimisation non mesurée : c'est le sens même de l'arbitrage §8 cas 4
+- Aucune dénormalisation de la géométrie (§8 cas 1 : rester en JSON tant qu'aucun besoin de
+  requête n'apparaît — il n'en est apparu aucun)
 
 ## Décisions
 
-- **Les deux chemins sont exposés**, synchrone et asynchrone. Ce n'est pas de l'indécision :
-  §8 cas 2 exige une mesure avant/après, et supprimer le chemin synchrone la rendrait
-  impossible à rejouer. Il sert aussi de repli si le broker est indisponible.
-- **PDF vectoriel** (reportlab) plutôt qu'assemblage de captures : le plan reste net à
-  l'impression et l'export ne dépend d'aucun navigateur.
-- **Horodatage injecté** dans le moteur de rendu : la sortie devient reproductible, donc
-  testable.
-- **La tâche ne renvoie jamais le PDF**, seulement un descriptif : faire transiter des
-  mégaoctets par le backend de résultats Redis serait un contresens.
-- **Le worker crée son propre moteur de base** : les connexions ne survivent pas à un fork.
-- **Téléchargement re-vérifié** : nom de fichier verrouillé par motif, chemin reconstruit depuis
-  le répertoire d'export, propriété du projet revérifiée à chaque téléchargement.
+- **Le N+1 est d'abord reproduit, puis corrigé.** Un test compte les requêtes du chargement naïf
+  et démontre qu'il croît avec la taille du plan ; un autre démontre que le chargement anticipé
+  le rend constant. Un compteur de requêtes remplace la lecture de logs à l'œil : la mesure
+  devient une assertion.
+- **La clé de cache porte la version du projet.** C'est le cœur de la conception : au lieu de
+  supprimer une entrée à chaque écriture — ce qui suppose de n'oublier aucun chemin d'écriture —
+  une modification *change la clé*. Comme toute écriture du plan incrémente `Project.version`
+  (garanti depuis P3), l'invalidation devient structurelle plutôt que déclarative.
+- **Un cache indisponible dégrade, il ne casse pas** : une panne Redis fait recalculer la scène,
+  jamais échouer la requête. Sans ça, une optimisation devient un point de défaillance unique.
+- **Purge explicite à la suppression d'un projet** : c'est le seul cas où aucune version future
+  ne viendra rendre les anciennes clés inatteignables.
+- **Un seul index ajouté**, calqué sur la requête réelle de la liste des projets. Indexer « au
+  cas où » coûte à chaque écriture pour un gain hypothétique.
 
 ## Critères d'acceptation (exécutables)
 
 | # | Critère | Vérification |
 |---|---|---|
-| A1 | Le rendu produit un PDF valide et reproductible | `tests/test_export_api.py` |
-| A2 | L'export asynchrone rend la main immédiatement et produit un fichier | test + stack réelle |
-| A3 | Le téléchargement est cloisonné et résiste à la traversée de chemin | 4 cas paramétrés |
-| A4 | Le gain synchrone/asynchrone est mesuré | `test_celery_shortens_the_perceived_latency` |
-| A5 | Toutes les routes sont authentifiées et cloisonnées | tests dédiés |
+| A1 | Le N+1 est reproduit et mesuré | `test_the_naive_loading_really_produces_an_n_plus_one` |
+| A2 | Le chargement anticipé rend le nombre de requêtes constant | `test_eager_loading_keeps_the_query_count_constant` |
+| A3 | Le nombre de requêtes de l'API ne dépend pas de la taille du plan | 2 tests (projet, scène) |
+| A4 | La clé de cache porte la version | `test_the_cache_key_carries_the_project_version` |
+| A5 | Une édition rend immédiatement la nouvelle scène | `test_the_scene_reflects_an_edit_immediately` |
+| A6 | Une panne Redis ne casse rien | `test_the_cache_degrades_gracefully_when_redis_fails` |
 
 ## Definition of done
 
-Critères verts + vérification sur la stack réelle avec un **vrai** worker Celery + revue
-`spec-reviewer` + `PROGRESS.md` à jour.
+Critères verts + mesure relevée sur la stack réelle avec Redis + revue `spec-reviewer` +
+`PROGRESS.md` à jour.

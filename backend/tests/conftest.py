@@ -25,6 +25,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("ENVIRONMENT", "development")
 # Celery en exécution immédiate : la suite tourne sans broker (P9).
 os.environ.setdefault("CELERY_EAGER", "true")
+# Le cache est désactivé par défaut en test : la suite doit tourner sans Redis, et une
+# assertion sur un cache partagé entre tests serait fragile.
+os.environ.setdefault("CACHE_ENABLED", "false")
 os.environ.setdefault("EXPORT_DIR", str(_TMP_DIR / "exports"))
 
 import pytest  # noqa: E402

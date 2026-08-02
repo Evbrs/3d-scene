@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 # Pas de `from __future__ import annotations` dans ce module : SQLModel résout les annotations
 # de `Relationship` à l'exécution, et une annotation devenue chaîne ("list['Room']") est refusée
 # par SQLAlchemy (« seems to be using a generic class as the argument to relationship() »).
-from sqlalchemy import Column, Integer, UniqueConstraint
+from sqlalchemy import Column, Index, Integer, UniqueConstraint
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.types import JSON
 from sqlmodel import Field, Relationship
@@ -29,6 +29,10 @@ class Project(TimestampedModel, table=True):
     """Un projet de rénovation, racine de l'arbre du plan."""
 
     __tablename__ = "project"
+    # Index composite calqué sur la requête réelle de `GET /api/projects` :
+    # `WHERE owner_id = ? ORDER BY updated_at DESC`. Deux index séparés obligeraient PostgreSQL à
+    # trier après filtrage ; celui-ci sert le filtre *et* l'ordre.
+    __table_args__ = (Index("ix_project_owner_updated", "owner_id", "updated_at"),)
 
     # Verrouillage optimiste (spec §8, cas 3) : SQLAlchemy incrémente `version` à chaque UPDATE
     # et lève `StaleDataError` si la ligne a changé entre-temps, au lieu d'écraser silencieusement.

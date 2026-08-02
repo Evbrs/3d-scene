@@ -541,6 +541,77 @@
         "title": "ElementUpdate",
         "type": "object"
       },
+      "ExportAccepted": {
+        "description": "Réponse du chemin asynchrone : la requête HTTP rend la main immédiatement.",
+        "properties": {
+          "poll_url": {
+            "title": "Poll Url",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "poll_url"
+        ],
+        "title": "ExportAccepted",
+        "type": "object"
+      },
+      "ExportStatus": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "state",
+          "ready"
+        ],
+        "title": "ExportStatus",
+        "type": "object"
+      },
       "FaceKind": {
         "description": "Nature d'une face d'une pièce.\n\nLe plafond est une face à part entière (`docs/spec-complete.md` §1).",
         "enum": [
@@ -2104,6 +2175,56 @@
         ]
       }
     },
+    "/api/exports/{task_id}": {
+      "get": {
+        "description": "État d'un export.\n\nLe contenu du résultat n'expose aucun chemin absolu : seul le nom de fichier est renvoyé, et\nle téléchargement repasse par une route qui revérifie la propriété du projet.",
+        "operationId": "read_export_status_api_exports__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 8,
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Export Status",
+        "tags": [
+          "export"
+        ]
+      }
+    },
     "/api/faces/{face_id}": {
       "patch": {
         "description": "Met à jour le revêtement d'une face.\n\nNi création ni suppression : les faces découlent du polygone de la pièce.",
@@ -2776,6 +2897,166 @@
         ]
       }
     },
+    "/api/projects/{project_id}/exports/pdf": {
+      "post": {
+        "description": "Demande un export PDF en tâche de fond.\n\nLa réponse est immédiate : c'est tout l'intérêt du passage à Celery pour un traitement dont\nla durée croît avec la taille du plan.",
+        "operationId": "request_pdf_export_api_projects__project_id__exports_pdf_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Request Pdf Export",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/exports/pdf/direct": {
+      "get": {
+        "description": "Génère et renvoie le PDF dans la requête (chemin synchrone de référence).\n\nConservé délibérément : c'est le point de comparaison qui rend mesurable le gain apporté par\nCelery, comme l'exige `docs/spec-complete.md` §8 (cas 2). `measure=true` ajoute la durée de\ngénération dans un en-tête, pour comparer sans instrumenter le client.",
+        "operationId": "export_pdf_synchronously_api_projects__project_id__exports_pdf_direct_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "measure",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Measure",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Export Pdf Synchronously",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/exports/{filename}": {
+      "get": {
+        "description": "Téléchargement d'un export déjà généré.\n\nLe motif du nom de fichier est verrouillé par le routeur, et le chemin est reconstruit à\npartir du répertoire d'export : un `../` n'a aucun moyen d'y entrer (traversée de chemin).\nLa propriété du projet est revérifiée ici, pas seulement à la demande d'export.",
+        "operationId": "download_export_api_projects__project_id__exports__filename__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "pattern": "^projet-\\d+-[A-Za-z0-9\\-]+\\.pdf$",
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download Export",
+        "tags": [
+          "export"
+        ]
+      }
+    },
     "/api/projects/{project_id}/rooms": {
       "post": {
         "description": "Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond).",
@@ -2846,7 +3127,7 @@
     },
     "/api/projects/{project_id}/scene": {
       "get": {
-        "description": "Scene graph complet du projet, prêt à être traduit en objets Three.js.\n\nLe type de retour est un dictionnaire libre et non un modèle Pydantic : la forme des nœuds\ndépend de leur nature (mur, sol, meuble), et un `Union` discriminé de six variantes\nalourdirait le schéma OpenAPI sans rien apporter au client, qui aiguille sur `kind`.",
+        "description": "Scene graph complet du projet, prêt à être traduit en objets Three.js.\n\nLe type de retour est un dictionnaire libre et non un modèle Pydantic : la forme des nœuds\ndépend de leur nature (mur, sol, meuble), et un `Union` discriminé de six variantes\nalourdirait le schéma OpenAPI sans rien apporter au client, qui aiguille sur `kind`.\n\nLe résultat est mis en cache sous une clé portant la version du projet (spec §8, cas 6) :\ntoute écriture du plan incrémente cette version, donc rend l'ancienne entrée inatteignable.\nL'en-tête `X-Cache` expose le résultat, pour que la mesure soit faisable depuis un client.",
         "operationId": "read_scene_graph_api_projects__project_id__scene_get",
         "parameters": [
           {
