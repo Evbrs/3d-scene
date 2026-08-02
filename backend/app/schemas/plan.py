@@ -5,7 +5,7 @@ stocke. Un client ne doit jamais pouvoir fixer un `id`, un `owner_id` ou un horo
 """
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -16,13 +16,23 @@ from app.models.base import ElementKind, FaceKind, LayingPattern
 Centimeters = Annotated[float, Field(gt=0, le=10_000)]
 Coordinate = Annotated[float, Field(ge=-100_000, le=100_000)]
 
+# Un seul type de couleur pour toute l'API. Avoir deux validations distinctes — un motif
+# hexadécimal ici, un simple « commence par # et fait 7 caractères » là — laissait passer
+# `#zzzzzz` sur un emplacement de meuble alors que la même valeur était refusée sur un revêtement.
+HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
+
+# Les blobs JSON libres sont bornés : sans limite, un compte authentifié peut y écrire plusieurs
+# mégaoctets par élément et saturer le stockage.
+ColorSlots = Annotated[dict[str, HexColor], Field(max_length=24)]
+VariantParams = Annotated[dict[str, str | int | float | bool | None], Field(max_length=32)]
+
 
 class Covering(BaseModel):
     """Revêtement d'une face (`docs/spec-complete.md` §1)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    color: HexColor | None = None
     material: str | None = Field(default=None, max_length=100)
     unit_width_cm: Centimeters | None = None
     unit_height_cm: Centimeters | None = None
@@ -43,20 +53,12 @@ class ElementBase(BaseModel):
     depth_cm: Centimeters = 50.0
     rotation_deg: Annotated[float, Field(ge=-360, le=360)] = 0.0
     furniture_type_id: int | None = None
-    colors: dict[str, str] = Field(default_factory=dict)
-    variant_params: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("colors")
-    @classmethod
-    def _validate_colors(cls, value: dict[str, str]) -> dict[str, str]:
-        for slot, color in value.items():
-            if not isinstance(color, str) or not color.startswith("#") or len(color) != 7:
-                raise ValueError(f"couleur invalide pour l'emplacement {slot!r} : {color!r}")
-        return value
+    colors: ColorSlots = Field(default_factory=dict)
+    variant_params: VariantParams = Field(default_factory=dict)
 
 
 class ElementCreate(ElementBase):
-    pass
+    version: int | None = Field(default=None, ge=1)
 
 
 class ElementUpdate(BaseModel):
@@ -70,8 +72,12 @@ class ElementUpdate(BaseModel):
     depth_cm: Centimeters | None = None
     rotation_deg: Annotated[float, Field(ge=-360, le=360)] | None = None
     furniture_type_id: int | None = None
-    colors: dict[str, str] | None = None
-    variant_params: dict[str, Any] | None = None
+    # Mêmes types que sur `ElementBase`. Redéclarer `dict[str, str]` ici contournait la validation
+    # des couleurs : la valeur invalide était écrite en base, puis faisait échouer la
+    # sérialisation de *toutes* les lectures traversant cet élément (500 permanent).
+    colors: ColorSlots | None = None
+    variant_params: VariantParams | None = None
+    version: int | None = Field(default=None, ge=1)
 
 
 class ElementRead(ElementBase):
@@ -87,12 +93,14 @@ class ElementRead(ElementBase):
 class FaceUpdate(BaseModel):
     """Une face n'est pas créée ni supprimée directement : elle découle du polygone de la pièce.
 
-    Seuls son revêtement et sa hauteur sont modifiables par le client.
+    Seul son revêtement est modifiable par le client.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     covering: Covering | None = None
+    # Verrouillage optimiste : version du projet lue par le client (voir `ProjectUpdate`).
+    version: int | None = Field(default=None, ge=1)
 
 
 class FaceRead(BaseModel):
@@ -145,7 +153,7 @@ class RoomBase(BaseModel):
 
 
 class RoomCreate(RoomBase):
-    pass
+    version: int | None = Field(default=None, ge=1)
 
 
 class RoomUpdate(BaseModel):
@@ -155,6 +163,10 @@ class RoomUpdate(BaseModel):
     wall_thickness_cm: Centimeters | None = None
     ceiling_height_cm: Centimeters | None = None
     polygon: Polygon | None = None
+    # Verrouillage optimiste : version du projet lue par le client (voir `ProjectUpdate`).
+    version: int | None = Field(default=None, ge=1)
+    # Confirme explicitement la suppression de murs portant des éléments (perte de données).
+    force: bool = False
 
     _validate_polygon = field_validator("polygon")(RoomBase._validate_polygon.__func__)  # type: ignore[attr-defined]
 
@@ -227,7 +239,12 @@ class ProjectPage(Page):
 
 
 class ConflictDetail(BaseModel):
-    """Corps de réponse d'un 409 sur conflit d'édition."""
+    """Corps de réponse d'un 409 sur conflit d'édition.
 
-    detail: Literal["Le projet a été modifié entre-temps"]
+    Déclaré dans les `responses` des routes d'écriture : le schéma OpenAPI est la source de
+    vérité du frontend (`docs/plan-generation-ia.md` §6), un 409 non documenté y serait
+    invisible. `current_version` est aussi renvoyé dans l'en-tête `X-Current-Version`.
+    """
+
+    detail: str
     current_version: int

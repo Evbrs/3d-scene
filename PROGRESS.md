@@ -306,3 +306,47 @@ qu'au rendu 3D en P7.
 
 **Ordre** : P5 traité avant P4, ce que `plan-generation-ia.md` §5 autorise explicitement
 (« P5 peut démarrer en parallèle de P2–P4 »), et qui débloque P6.
+
+### P3 — corrections après revue adversariale
+
+La revue a rendu **À CORRIGER**, dont un défaut bloquant. Tout est corrigé :
+
+1. **BLOQUANT — perte d'intégrité et déni de service persistant.** `ElementUpdate` redéclarait
+   `colors: dict[str, str]` sans reporter la validation des couleurs. `PATCH` avec
+   `{"colors": {"corps": "rouge"}}` écrivait la valeur en base, *puis* faisait échouer la
+   sérialisation — et ensuite **toute** lecture traversant cet élément (`GET /projects/{id}`,
+   `/rooms/{id}`, `/rooms/{id}/faces`) renvoyait 500. Un compte authentifié rendait donc son
+   propre projet illisible en une requête, sans plus aucun moyen de retrouver l'élément fautif
+   par l'API. Corrigé par un type `ColorSlots` partagé entre création et mise à jour.
+2. **Validations de couleur divergentes** : `#zzzzzz`, `#      `, `#<b>abc` étaient acceptés sur
+   un emplacement de meuble et refusés sur un revêtement. Type `HexColor` unique pour toute l'API.
+3. **Le verrouillage optimiste ne couvrait rien du plan** — `version` n'était incrémentée que par
+   `PATCH /projects` : créer une pièce, poser un revêtement ou un meuble laissait la version
+   inchangée, donc « dernière écriture gagne » sur le plan lui-même, exactement l'option écartée
+   par §8 cas 3. Toutes les écritures passent désormais par `_claim_project`, qui vérifie la
+   version transmise et marque le projet modifié. Effet de bord corrigé au passage : un projet
+   activement édité remonte enfin en tête de la liste triée par `updated_at`.
+4. **Appariement des murs positionnel, donc faux** : insérer un sommet en tête du polygone
+   décalait tous les rangs, et chaque mur héritait du revêtement et des meubles de son voisin —
+   avec des éléments se retrouvant hors du mur qui les portait. Les murs sont maintenant
+   appariés par leur **géométrie** ; seul le lettrage reste positionnel.
+5. **Sol et plafond jamais supprimés** : vider un polygone laissait deux faces orphelines, alors
+   qu'une pièce créée avec un polygone vide n'en a aucune. Deux pièces dans le même état avaient
+   donc des faces différentes selon leur historique.
+6. **Réduire un polygone détruisait silencieusement les meubles posés**, en `200 OK`. L'opération
+   est désormais refusée (409) tant que `force: true` n'est pas envoyé.
+7. **`ConflictDetail` était du code mort** : le schéma est branché dans les `responses` des
+   routes d'écriture, donc publié dans l'OpenAPI — source de vérité du frontend.
+8. **Le 409 de `StaleDataError` n'émettait pas `X-Current-Version`** (le seul cas réellement
+   concurrent, donc celui où le client en a le plus besoin).
+9. **Blobs JSON non bornés** : `variant_params` acceptait 3 Mo par élément. Bornés en nombre de
+   clés et en types.
+10. **Aucune validation géométrique des éléments** : une porte 9999×9999 à `x=99999` sur un mur
+    de 400 cm était acceptée, et c'est le scene graph (P6) qui l'aurait découvert.
+11. **`covering: null`** était un no-op silencieux : l'effacement d'un revêtement est désormais
+    possible.
+12. **Documentation inexacte** : « 19 routes » comptait aussi celles de l'auth ; l'API du plan en
+    expose **14**. `FaceUpdate` mentionnait une hauteur qui n'existe pas.
+
+19 tests de non-régression ajoutés, un par défaut. Suite : **150 tests sur SQLite, 151 sur
+PostgreSQL**.

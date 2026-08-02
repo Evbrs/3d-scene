@@ -3,6 +3,8 @@
 Référence : `docs/spec-complete.md` §7 (phase P3) et §8 (verrouillage optimiste, eager loading).
 """
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +13,7 @@ from sqlmodel import select
 from app.models import FurnitureType, Project
 from app.services.faces import CEILING_LABEL, FLOOR_LABEL, wall_label
 
-CARRE = [[0, 0], [400, 0], [400, 300], [0, 300]]
+CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
 
 
 # --- Lettrage des faces (règle métier pure) ---------------------------------------------------
@@ -474,3 +476,267 @@ async def test_deleting_a_project_removes_its_whole_tree(
     session.expunge_all()
     remaining = (await session.execute(select(Project))).scalars().all()
     assert [p.id for p in remaining] == []
+
+
+# --- Régressions issues de la revue adversariale du ticket P3 -------------------------------
+
+
+async def _room_with_faces(
+    client: AsyncClient, polygon: list[list[float]] | None = None
+) -> dict[str, Any]:
+    project = (await client.post("/api/projects", json={"name": "Régression"})).json()
+    created = await client.post(
+        f"/api/projects/{project['id']}/rooms",
+        json={"name": "Pièce", "polygon": polygon or CARRE},
+    )
+    room: dict[str, Any] = created.json()
+    return room
+
+
+async def test_updating_an_element_with_an_invalid_colour_is_refused(
+    auth_client: AsyncClient,
+) -> None:
+    """Régression : `ElementUpdate` ne reportait pas la validation des couleurs.
+
+    La valeur invalide était écrite en base, puis faisait échouer la sérialisation de *toutes*
+    les lectures traversant cet élément — l'arbre du projet devenait illisible (500 permanent),
+    sans plus aucun moyen de retrouver l'élément fautif par l'API.
+    """
+    room = await _room_with_faces(auth_client)
+    element = (
+        await auth_client.post(
+            f"/api/faces/{room['faces'][0]['id']}/elements", json={"kind": "furniture"}
+        )
+    ).json()
+
+    refused = await auth_client.patch(
+        f"/api/elements/{element['id']}", json={"colors": {"corps": "rouge"}}
+    )
+    assert refused.status_code == 422, refused.text
+
+    # Et surtout : l'arbre reste lisible.
+    assert (await auth_client.get(f"/api/rooms/{room['id']}")).status_code == 200
+    assert (await auth_client.get(f"/api/rooms/{room['id']}/faces")).status_code == 200
+
+
+@pytest.mark.parametrize("colour", ["#zzzzzz", "#      ", "#<b>abc", "#-12345", "rouge", "#fff"])
+async def test_element_colours_are_as_strict_as_covering_colours(
+    auth_client: AsyncClient, colour: str
+) -> None:
+    """Régression : deux validations divergentes laissaient passer `#zzzzzz` sur un meuble."""
+    room = await _room_with_faces(auth_client)
+    face_id = room["faces"][0]["id"]
+
+    on_element = await auth_client.post(
+        f"/api/faces/{face_id}/elements", json={"kind": "furniture", "colors": {"corps": colour}}
+    )
+    on_covering = await auth_client.patch(
+        f"/api/faces/{face_id}", json={"covering": {"color": colour}}
+    )
+
+    assert on_element.status_code == 422, f"{colour!r} accepté sur un meuble"
+    assert on_covering.status_code == 422, f"{colour!r} accepté sur un revêtement"
+
+
+async def test_editing_the_plan_bumps_the_project_version(auth_client: AsyncClient) -> None:
+    """Régression : seul `PATCH /projects` incrémentait `version`.
+
+    Le verrouillage optimiste ne protégeait donc rien du plan lui-même — pièces, faces et
+    éléments restaient en « dernière écriture gagne », l'option que la spec §8 cas 3 écarte.
+    """
+    project = (await auth_client.post("/api/projects", json={"name": "Versionné"})).json()
+    assert project["version"] == 1
+
+    room = (
+        await auth_client.post(
+            f"/api/projects/{project['id']}/rooms", json={"name": "Pièce", "polygon": CARRE}
+        )
+    ).json()
+    after_room = (await auth_client.get(f"/api/projects/{project['id']}")).json()["version"]
+    assert after_room > 1, "créer une pièce doit faire évoluer la version du projet"
+
+    await auth_client.patch(
+        f"/api/faces/{room['faces'][0]['id']}", json={"covering": {"color": "#123456"}}
+    )
+    after_covering = (await auth_client.get(f"/api/projects/{project['id']}")).json()["version"]
+    assert after_covering > after_room, "poser un revêtement doit faire évoluer la version"
+
+    await auth_client.post(
+        f"/api/faces/{room['faces'][0]['id']}/elements", json={"kind": "window"}
+    )
+    after_element = (await auth_client.get(f"/api/projects/{project['id']}")).json()["version"]
+    assert after_element > after_covering, "poser un élément doit faire évoluer la version"
+
+
+@pytest.mark.parametrize(
+    ("method", "path_template", "body"),
+    [
+        ("patch", "/api/rooms/{room_id}", {"name": "Renommée", "version": 1}),
+        ("patch", "/api/faces/{face_id}", {"covering": {"color": "#abcdef"}, "version": 1}),
+        ("post", "/api/faces/{face_id}/elements", {"kind": "window", "version": 1}),
+    ],
+)
+async def test_a_stale_version_is_rejected_on_every_plan_write(
+    auth_client: AsyncClient, method: str, path_template: str, body: dict[str, Any]
+) -> None:
+    room = await _room_with_faces(auth_client)
+    # Une première écriture fait passer la version au-delà de 1.
+    await auth_client.patch(f"/api/rooms/{room['id']}", json={"name": "Première écriture"})
+
+    path = path_template.format(room_id=room["id"], face_id=room["faces"][0]["id"])
+    response = await auth_client.request(method.upper(), path, json=body)
+
+    assert response.status_code == 409, response.text
+    assert "X-Current-Version" in response.headers
+
+
+async def test_inserting_a_vertex_at_the_head_keeps_walls_attached_to_their_geometry(
+    auth_client: AsyncClient,
+) -> None:
+    """Régression : l'appariement des murs était positionnel, pas géométrique.
+
+    Insérer un sommet en tête décale tous les rangs : chaque mur héritait alors du revêtement et
+    des meubles de son voisin, et les éléments se retrouvaient hors du mur qui les portait.
+    """
+    room = await _room_with_faces(auth_client)
+    face_a = next(face for face in room["faces"] if face["label"] == "A")
+    await auth_client.patch(f"/api/faces/{face_a['id']}", json={"covering": {"color": "#ff0000"}})
+    await auth_client.post(
+        f"/api/faces/{face_a['id']}/elements",
+        json={"kind": "window", "x_offset_cm": 300, "width_cm": 40, "height_cm": 100},
+    )
+
+    # Même pièce physique, décrite à partir d'un autre sommet de départ.
+    decale: list[list[float]] = [[-100.0, 150.0], *CARRE]
+    updated = await auth_client.patch(f"/api/rooms/{room['id']}", json={"polygon": decale})
+    assert updated.status_code == 200, updated.text
+
+    faces = updated.json()["faces"]
+    survivor = next(face for face in faces if face["id"] == face_a["id"])
+    # Le mur d'origine existe toujours, avec sa géométrie : seul son *rang* a changé.
+    assert (survivor["start_x_cm"], survivor["start_y_cm"]) == (0, 0)
+    assert (survivor["end_x_cm"], survivor["end_y_cm"]) == (400, 0)
+    assert survivor["covering"] == {"color": "#ff0000"}
+    assert len(survivor["elements"]) == 1
+    assert survivor["elements"][0]["x_offset_cm"] == 300
+
+
+async def test_emptying_the_polygon_removes_floor_and_ceiling_too(
+    auth_client: AsyncClient,
+) -> None:
+    """Régression : le sol et le plafond survivaient à la disparition du polygone.
+
+    Deux pièces dans le même état (polygone vide) avaient alors des faces différentes selon leur
+    seul historique, alors que la règle est « les faces découlent du polygone ».
+    """
+    room = await _room_with_faces(auth_client)
+    assert len(room["faces"]) == 6
+
+    updated = await auth_client.patch(f"/api/rooms/{room['id']}", json={"polygon": []})
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["faces"] == []
+
+
+async def test_shrinking_the_polygon_refuses_to_silently_destroy_elements(
+    auth_client: AsyncClient,
+) -> None:
+    """Régression : réduire un polygone supprimait les meubles posés, en 200 OK et sans avertir."""
+    pentagone: list[list[float]] = [*CARRE, [-100.0, 150.0]]
+    room = await _room_with_faces(auth_client, pentagone)
+    face_e = next(face for face in room["faces"] if face["label"] == "E")
+    await auth_client.post(
+        f"/api/faces/{face_e['id']}/elements",
+        json={"kind": "door_hinged", "width_cm": 80, "height_cm": 200},
+    )
+
+    refused = await auth_client.patch(f"/api/rooms/{room['id']}", json={"polygon": CARRE})
+    assert refused.status_code == 409, refused.text
+    assert "force" in refused.json()["detail"]
+
+    # Rien n'a bougé.
+    unchanged = (await auth_client.get(f"/api/rooms/{room['id']}")).json()
+    assert len([f for f in unchanged["faces"] if f["kind"] == "wall"]) == 5
+
+    # Avec confirmation explicite, l'opération passe.
+    confirmed = await auth_client.patch(
+        f"/api/rooms/{room['id']}", json={"polygon": CARRE, "force": True}
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    walls = [face for face in confirmed.json()["faces"] if face["kind"] == "wall"]
+    assert sorted(face["label"] for face in walls) == ["A", "B", "C", "D"]
+
+
+async def test_an_element_larger_than_its_wall_is_refused(auth_client: AsyncClient) -> None:
+    """Régression : une porte de 9999 par 9999 a x=99999 sur un mur de 400 cm etait acceptee."""
+    room = await _room_with_faces(auth_client)
+    face_a = next(face for face in room["faces"] if face["label"] == "A")
+
+    too_wide = await auth_client.post(
+        f"/api/faces/{face_a['id']}/elements",
+        json={"kind": "door_hinged", "x_offset_cm": 99_999, "width_cm": 9999, "height_cm": 9999},
+    )
+    assert too_wide.status_code == 422, too_wide.text
+    assert "déborde" in too_wide.json()["detail"]
+
+    fits = await auth_client.post(
+        f"/api/faces/{face_a['id']}/elements",
+        json={"kind": "door_hinged", "x_offset_cm": 50, "width_cm": 90, "height_cm": 200},
+    )
+    assert fits.status_code == 201, fits.text
+
+
+async def test_moving_an_element_out_of_its_wall_is_refused(auth_client: AsyncClient) -> None:
+    room = await _room_with_faces(auth_client)
+    face_a = next(face for face in room["faces"] if face["label"] == "A")
+    element = (
+        await auth_client.post(
+            f"/api/faces/{face_a['id']}/elements",
+            json={"kind": "window", "x_offset_cm": 50, "width_cm": 90, "height_cm": 100},
+        )
+    ).json()
+
+    response = await auth_client.patch(
+        f"/api/elements/{element['id']}", json={"x_offset_cm": 380}
+    )
+    assert response.status_code == 422
+
+
+async def test_an_oversized_json_blob_is_refused(auth_client: AsyncClient) -> None:
+    """Régression : `variant_params` acceptait 3 Mo par élément, sans aucune borne."""
+    room = await _room_with_faces(auth_client)
+
+    response = await auth_client.post(
+        f"/api/faces/{room['faces'][0]['id']}/elements",
+        json={
+            "kind": "furniture",
+            "variant_params": {f"cle{index}": "x" * 100 for index in range(200)},
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_the_conflict_schema_is_published_in_openapi(auth_client: AsyncClient) -> None:
+    """Le schéma OpenAPI est la source de vérité du frontend : le 409 doit y figurer."""
+    schema = (await auth_client.get("/openapi.json")).json()
+
+    for path, method in [
+        ("/api/projects/{project_id}", "patch"),
+        ("/api/rooms/{room_id}", "patch"),
+        ("/api/faces/{face_id}", "patch"),
+        ("/api/elements/{element_id}", "patch"),
+    ]:
+        responses = schema["paths"][path][method]["responses"]
+        assert "409" in responses, f"{method.upper()} {path} ne documente pas le conflit"
+
+
+async def test_clearing_a_covering_is_possible(auth_client: AsyncClient) -> None:
+    """`covering: null` doit effacer, et non être un no-op silencieux."""
+    room = await _room_with_faces(auth_client)
+    face_id = room["faces"][0]["id"]
+    await auth_client.patch(f"/api/faces/{face_id}", json={"covering": {"color": "#123456"}})
+
+    cleared = await auth_client.patch(f"/api/faces/{face_id}", json={"covering": None})
+
+    assert cleared.status_code == 200
+    assert cleared.json()["covering"] == {}
