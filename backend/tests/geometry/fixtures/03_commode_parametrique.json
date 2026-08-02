@@ -1,0 +1,70 @@
+{
+  "description": "Développement d'une recette paramétrique (spec §4.1) : la commode et ses 4 tiroirs répétés, posée contre le mur A.",
+  "reasoning": [
+    "Le meuble est posé sur le mur A (de (0,0) à (400,0)), à x_offset 50, y_offset 0. Dimensions de l'instance : 100 × 85 × 45. Épaisseur du mur : 10.",
+    "Placement du centre de la boîte englobante :",
+    "  - le long du mur : x_offset + largeur/2 = 50 + 50 = 100 → contribution (100, 0, 0) car direction = (1,0,0)",
+    "  - en hauteur : y_offset + hauteur/2 = 0 + 42.5 → contribution (0, 42.5, 0)",
+    "  - en profondeur : le mur est centré sur son axe, donc sa face intérieure est à 10/2 = 5 ; le meuble s'étend ensuite de 45/2 = 22.5 → 5 + 22.5 = 27.5 vers l'intérieur, soit (0, 0, 27.5) car la normale rentrante du mur A est (0,0,1)",
+    "  → position = (100, 42.5, 27.5), rotation_y = 0 (yaw du mur A = 0, rotation propre de l'élément = 0)",
+    "Développement des primitives. Chaque primitive donne : taille = rel_size × dimensions, décalage = (rel_position - 0.5) × dimensions.",
+    "  - corps : rel_size (1,1,1) → 100 × 85 × 45 ; rel_position (0.5,0.5,0.5) → décalage (0, 0, 0)",
+    "  - facade : rel_size (0.9,0.18,0.02) → 90 × 15.3 × 0.9",
+    "      répétée 4 fois sur y avec gap 0.02 : pas = 0.18 + 0.02 = 0.20 ; les copies sont centrées sur la position donnée, ici `auto` = 0.5",
+    "      centres relatifs = 0.5 + (i - 1.5) × 0.20 = 0.20, 0.40, 0.60, 0.80",
+    "      décalages y = (centre - 0.5) × 85 = -25.5, -8.5, +8.5, +25.5",
+    "      décalage x = (0.5 - 0.5) × 100 = 0 ; décalage z = (1.01 - 0.5) × 45 = 22.95 (la façade dépasse légèrement du corps, d'où le 1.01 de la spec)",
+    "  - poignee : rel_size (0.25,0.03,0.03) → 25 × 2.55 × 1.35 ; pas = 0.03 + 0.17 = 0.20, mêmes centres, mêmes décalages y ; décalage z = (1.04 - 0.5) × 45 = 24.3",
+    "Couleurs : l'instance ne fournit que `corps`. Les emplacements non renseignés valent null — le rendu appliquera son matériau par défaut plutôt qu'une couleur inventée ici.",
+    "Total : 1 + 4 + 4 = 9 primitives."
+  ],
+  "input": {
+    "furniture_type": {
+      "id": 500,
+      "slug": "commode",
+      "name": "Commode",
+      "category": "bedroom",
+      "color_slots": ["corps", "facade", "poignee"],
+      "parts": [
+        {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "corps"},
+        {"type": "box", "rel_position": [0.5, "auto", 1.01], "rel_size": [0.9, 0.18, 0.02], "color_slot": "facade", "repeat_y": 4, "gap": 0.02},
+        {"type": "box", "rel_position": [0.5, "auto", 1.04], "rel_size": [0.25, 0.03, 0.03], "color_slot": "poignee", "repeat_y": 4, "gap": 0.17}
+      ]
+    },
+    "wall": {
+      "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0,
+      "wall_thickness_cm": 10.0, "ceiling_height_cm": 250.0
+    },
+    "element": {
+      "id": 3000,
+      "kind": "furniture",
+      "x_offset_cm": 50, "y_offset_cm": 0,
+      "width_cm": 100, "height_cm": 85, "depth_cm": 45,
+      "rotation_deg": 0,
+      "furniture_type_id": 500,
+      "colors": {"corps": "#8b5a2b"},
+      "variant_params": {}
+    }
+  },
+  "expected": {
+    "kind": "furniture",
+    "element_id": 3000,
+    "face_label": "A",
+    "furniture_type_slug": "commode",
+    "position": [100.0, 42.5, 27.5],
+    "rotation_y": 0.0,
+    "size_cm": [100.0, 85.0, 45.0],
+    "primitives": [
+      {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [100.0, 85.0, 45.0], "color_slot": "corps", "color": "#8b5a2b", "operation": "add"},
+      {"type": "box", "offset": [0.0, -25.5, 22.95], "size": [90.0, 15.3, 0.9], "color_slot": "facade", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, -8.5, 22.95], "size": [90.0, 15.3, 0.9], "color_slot": "facade", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, 8.5, 22.95], "size": [90.0, 15.3, 0.9], "color_slot": "facade", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, 25.5, 22.95], "size": [90.0, 15.3, 0.9], "color_slot": "facade", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, -25.5, 24.3], "size": [25.0, 2.55, 1.35], "color_slot": "poignee", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, -8.5, 24.3], "size": [25.0, 2.55, 1.35], "color_slot": "poignee", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, 8.5, 24.3], "size": [25.0, 2.55, 1.35], "color_slot": "poignee", "color": null, "operation": "add"},
+      {"type": "box", "offset": [0.0, 25.5, 24.3], "size": [25.0, 2.55, 1.35], "color_slot": "poignee", "color": null, "operation": "add"}
+    ],
+    "requires_csg": false
+  }
+}

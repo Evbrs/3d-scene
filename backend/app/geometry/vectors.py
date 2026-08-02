@@ -75,8 +75,13 @@ def yaw_from_direction(direction: Vector3) -> float:
     """Rotation autour de l'axe Y qui amène l'axe `+X` sur `direction`, en radians.
 
     C'est la seule rotation nécessaire pour poser un mur : les murs sont verticaux.
+
+    Le `+ 0.0` n'est pas décoratif : la négation d'un `0.0` donne `-0.0`, et `atan2(-0.0, -1)`
+    vaut `-π` là où `atan2(0.0, -1)` vaut `+π`. Les deux décrivent la même rotation, mais la
+    sortie ne serait plus canonique — un mur orienté vers `-X` sortirait tantôt à `π`, tantôt à
+    `-π`, ce qui casse la comparaison aux fixtures et l'efficacité du cache (P10).
     """
-    return float(np.arctan2(-direction[2], direction[0]))
+    return float(np.arctan2(-direction[2] + 0.0, direction[0]))
 
 
 def polygon_centroid(polygon: list[list[float]]) -> tuple[float, float]:

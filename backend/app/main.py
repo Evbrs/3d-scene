@@ -11,6 +11,7 @@ from app.api.auth import router as auth_router
 from app.api.furniture import router as furniture_router
 from app.api.health import router as health_router
 from app.api.plan import router as plan_router
+from app.api.scene import router as scene_router
 from app.core.config import get_settings
 
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(plan_router)
     app.include_router(furniture_router)
+    app.include_router(scene_router)
     mount_admin(app)
     return app
 

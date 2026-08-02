@@ -19,7 +19,7 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | **fait** |
 | P4 | Éditeur 2D (Vue + Konva) | P3 | à faire |
 | P5 | Catalogue `FurnitureType` paramétrique | P1 | **fait** |
-| P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | à faire |
+| P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | **fait** |
 | P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | à faire |
 | P8 | Partage de vue (`SharedView`) | P7 | à faire |
 | P9 | Export PDF/image + Celery | P4, P7 | à faire |
@@ -350,3 +350,42 @@ La revue a rendu **À CORRIGER**, dont un défaut bloquant. Tout est corrigé :
 
 19 tests de non-régression ajoutés, un par défaut. Suite : **150 tests sur SQLite, 151 sur
 PostgreSQL**.
+
+### P6 — Scene graph 3D côté backend · **fait**
+
+Calcul complet de la scène (murs extrudés avec trous, sol, plafond, mobilier développé, 7 presets
+de caméra) exposé par `GET /api/projects/{id}/scene`.
+
+**Méthode** — les fixtures de `backend/tests/geometry/fixtures/` ont été calculées **à la main
+avant l'implémentation**, chacune accompagnée du raisonnement qui produit ses valeurs (champ
+`reasoning`). C'est la contre-mesure exigée par `plan-generation-ia.md` §6 : des valeurs
+attendues issues du code lui-même ne prouveraient rien.
+
+**Résultat de la confrontation** : 17 des 18 tests sont passés au premier essai. Le seul écart
+était réel — `rotation_y` sortait à `-π` là où la fixture attend `+π`, parce que la négation d'un
+`0.0` donne `-0.0` et fait basculer `atan2`. Les deux valeurs décrivent la même rotation, mais la
+sortie n'était pas canonique : un même mur pouvait sortir tantôt à `π`, tantôt à `-π`, ce qui
+aurait cassé le cache de P10. Conformément à `CLAUDE.md`, **c'est le code qui a été corrigé**, pas
+la fixture.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| La pièce de référence produit le scene graph attendu | ✅ | `test_a_bare_room_matches_its_reference_fixture` (comparaison récursive champ par champ) |
+| Une ouverture devient un trou, pas un objet | ✅ | fixture 02 : `holes` conforme, 0 nœud de mobilier |
+| Une recette paramétrique se développe conformément à la fixture | ✅ | fixture 03 : 9 primitives, décalages `-25.5 / -8.5 / +8.5 / +25.5` |
+| Le sens de saisie du polygone est sans conséquence | ✅ | fixture 04 : scène identique en horaire et en trigonométrique |
+| Un preset de caméra par face + 3 vues d'ensemble | ✅ | `test_every_face_has_its_own_camera_preset` |
+| Les vues par face regardent depuis l'intérieur | ✅ | produit scalaire caméra→mur / normale sortante > 0 |
+| API authentifiée et cloisonnée | ✅ | `tests/test_scene_api.py` |
+| JSON stable entre deux appels | ✅ | `test_the_scene_graph_is_stable_between_two_calls` |
+
+Vérifié aussi sur la stack réelle : 6 nœuds, 7 caméras, aire 120000 cm², mur A d'origine
+`(0,0,0)` et de normale `(0,0,-1)`.
+
+Suite complète : **176 tests sur SQLite, 177 sur PostgreSQL**, `ruff` et `mypy --strict` verts.
+
+**Arbitrages de la spec respectés** : calcul synchrone (§8 cas 2 — la migration vers Celery et sa
+mesure sont le sujet de P9) ; approche `THREE.Shape` + trous plutôt que CSG (§8 cas 5), le CSG
+n'étant que *signalé* par `requires_csg` pour les meubles de §4.2 ; aucun cache (§8 cas 6 → P10).

@@ -1,0 +1,58 @@
+{
+  "description": "Un mur portant une fenêtre et une porte : chaque ouverture devient un trou dans la forme extrudée (spec §3.1 et §3.2, approche simple).",
+  "reasoning": [
+    "Seul le mur A est décrit ici ; les autres faces sont omises de l'entrée pour que la fixture reste lisible.",
+    "Mur A : de (0,0) à (400,0), longueur 400, hauteur sous plafond 250. Repère local : u le long du mur (0 → 400), v en hauteur (0 → 250).",
+    "Fenêtre : x_offset 80, y_offset 100, largeur 90, hauteur 110. Le trou va donc de u=80 à u=80+90=170, et de v=100 à v=100+110=210.",
+    "Porte : x_offset 250, y_offset 0, largeur 90, hauteur 204. Le trou va de u=250 à u=340, et de v=0 à v=204. Une porte part du sol : son y_offset est nul.",
+    "Les ouvertures ne produisent AUCUN nœud de mobilier : ce sont des trous, pas des objets posés (spec §3.1).",
+    "L'ordre des trous suit l'ordre des éléments dans la face, pour que la sortie soit déterministe."
+  ],
+  "input": {
+    "project_id": 2,
+    "rooms": [
+      {
+        "id": 20,
+        "name": "Chambre",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {
+            "id": 200,
+            "label": "A",
+            "kind": "wall",
+            "start_x_cm": 0,
+            "start_y_cm": 0,
+            "end_x_cm": 400,
+            "end_y_cm": 0,
+            "covering": {"color": "#f5f5f5", "material": "peinture"},
+            "elements": [
+              {"id": 2000, "kind": "window", "x_offset_cm": 80, "y_offset_cm": 100, "width_cm": 90, "height_cm": 110, "depth_cm": 12, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}},
+              {"id": 2001, "kind": "door_hinged", "x_offset_cm": 250, "y_offset_cm": 0, "width_cm": 90, "height_cm": 204, "depth_cm": 5, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected_wall_node": {
+    "kind": "wall",
+    "face_id": 200,
+    "face_label": "A",
+    "length_cm": 400.0,
+    "height_cm": 250.0,
+    "origin": [0.0, 0.0, 0.0],
+    "rotation_y": 0.0,
+    "outward_normal": [0.0, 0.0, -1.0],
+    "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+    "holes": [
+      [[80.0, 100.0], [170.0, 100.0], [170.0, 210.0], [80.0, 210.0]],
+      [[250.0, 0.0], [340.0, 0.0], [340.0, 204.0], [250.0, 204.0]]
+    ],
+    "extrude_depth_cm": 10.0,
+    "extrude_offset_cm": -5.0,
+    "covering": {"color": "#f5f5f5", "material": "peinture"}
+  },
+  "expected_furniture_node_count": 0
+}
