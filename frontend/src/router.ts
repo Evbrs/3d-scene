@@ -24,6 +24,13 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    // Volontairement hors `requiresAuth` : c'est le principe du lien de partage (spec §3.5).
+    path: '/partage/:token',
+    name: 'partage',
+    component: () => import('@/views/PublicViewerView.vue'),
+    props: true,
+  },
+  {
     path: '/projets/:projectId/vue-3d',
     name: 'viewer',
     component: () => import('@/views/ViewerView.vue'),

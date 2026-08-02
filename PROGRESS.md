@@ -21,7 +21,7 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P5 | Catalogue `FurnitureType` paramétrique | P1 | **fait** |
 | P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | **fait** |
 | P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | **fait** |
-| P8 | Partage de vue (`SharedView`) | P7 | à faire |
+| P8 | Partage de vue (`SharedView`) | P7 | **fait** |
 | P9 | Export PDF/image + Celery | P4, P7 | à faire |
 | P10 | Passe performance (cache, eager loading, indexation) | P3–P9 | à faire |
 | P11 | Passe tests d'intégration / cas limites | P0–P10 | à faire |
@@ -476,3 +476,27 @@ ce qui a changé et pourquoi. Aucune fixture n'a été touchée pour accommoder 
 échouent (1 → 2 tests, 2 → 2 tests, 3 → 2 tests, 4 → 1 test).
 
 Suite : **180 tests sur SQLite, 181 sur PostgreSQL**, `ruff` et `mypy --strict` verts.
+
+### P8 — Partage de vue · **fait**
+
+Lien permalien en lecture seule, sans authentification, avec révocation et expiration
+optionnelle. Page publique dédiée côté frontend.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| Création, liste et révocation par le propriétaire | ✅ | `test_the_owner_can_create_and_revoke_a_share` |
+| Lecture sans authentification | ✅ | test + `curl` sans en-tête sur la stack réelle |
+| Aucune fuite d'information sur le propriétaire | ✅ | test dédié + vérification sur la stack (`owner`, `email`, `version`, `updated_at`, `project_id` tous absents) |
+| Jeton imprévisible | ✅ | 43 caractères, 256 bits d'entropie, 5 jetons tous distincts |
+| Endpoint public limité en débit | ✅ | `test_the_public_endpoint_is_rate_limited` |
+| Lien expiré indiscernable d'un lien inexistant | ✅ | même code **et** même corps de réponse |
+| Cloisonnement entre comptes | ✅ | 404 sur partage et révocation d'autrui |
+| `state` invalide refusé | ✅ | 5 cas paramétrés |
+
+Suite : **197 tests backend**, 44 tests frontend, `ruff` / `mypy --strict` / build verts.
+
+**Les trois contraintes de la spec §3.5 sont traitées comme la fonctionnalité elle-même** — un
+endpoint public sans jeton imprévisible, sans limitation de débit et sans filtrage des données
+serait une régression de sécurité déguisée en fonctionnalité.

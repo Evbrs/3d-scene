@@ -18,6 +18,7 @@ import {
   isolate,
   nextVisibility,
   showEverything,
+  toViewState,
 } from '@/viewer/visibility'
 
 const props = defineProps<{ projectId: string }>()
@@ -72,6 +73,24 @@ function resetVisibility(): void {
  * `preserveDrawingBuffer` est indispensable : sans lui, le canvas WebGL est vidé après chaque
  * rendu et `toDataURL` renvoie une image noire.
  */
+const shareUrl = ref<string | null>(null)
+const shareError = ref<string | null>(null)
+
+/** Crée un lien de partage figeant l'état d'affichage courant (spec §3.5). */
+async function share(): Promise<void> {
+  shareError.value = null
+  try {
+    const state = toViewState(visibility.value, activeCamera.value)
+    const created = await api.createSharedView(Number(props.projectId), {
+      ...state,
+      room_index: roomIndex.value,
+    })
+    shareUrl.value = `${window.location.origin}/partage/${created.token}`
+  } catch (caught) {
+    shareError.value = caught instanceof Error ? caught.message : String(caught)
+  }
+}
+
 function capture(): void {
   const canvas = canvasHost.value?.querySelector('canvas')
   if (!canvas) return
@@ -213,7 +232,33 @@ function capture(): void {
           >
             Capturer cette vue
           </button>
+          <button
+            type="button"
+            @click="share"
+          >
+            Partager
+          </button>
         </div>
+
+        <p
+          v-if="shareUrl"
+          class="partage"
+        >
+          <label for="lien-partage">Lien de partage (lecture seule, sans compte)</label>
+          <input
+            id="lien-partage"
+            :value="shareUrl"
+            readonly
+            @focus="($event.target as HTMLInputElement).select()"
+          >
+        </p>
+        <p
+          v-if="shareError"
+          class="erreur"
+          role="alert"
+        >
+          {{ shareError }}
+        </p>
       </aside>
     </div>
   </section>
@@ -290,7 +335,12 @@ td {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+
+.partage {
+  margin-top: 0.75rem;
 }
 </style>

@@ -1326,6 +1326,38 @@
         "title": "ProjectUpdate",
         "type": "object"
       },
+      "PublicSceneResponse": {
+        "description": "Réponse de l'endpoint public.\n\nNe contient **aucune** information sur le propriétaire : ni identifiant, ni adresse e-mail,\nni date de modification du projet. Un lien de partage ne doit rien révéler de plus que la\nvue elle-même.",
+        "properties": {
+          "kind": {
+            "const": "shared-view",
+            "default": "shared-view",
+            "title": "Kind",
+            "type": "string"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          },
+          "scene": {
+            "additionalProperties": true,
+            "title": "Scene",
+            "type": "object"
+          },
+          "state": {
+            "additionalProperties": true,
+            "title": "State",
+            "type": "object"
+          }
+        },
+        "required": [
+          "project_name",
+          "state",
+          "scene"
+        ],
+        "title": "PublicSceneResponse",
+        "type": "object"
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -1542,6 +1574,80 @@
         "title": "RoomUpdate",
         "type": "object"
       },
+      "SharedViewCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in_days": {
+            "anyOf": [
+              {
+                "maximum": 365.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Days"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ViewState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "SharedViewCreate",
+        "type": "object"
+      },
+      "SharedViewRead": {
+        "description": "Vue destinée au **propriétaire** : contient le jeton, donc jamais exposée publiquement.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "integer"
+          },
+          "state": {
+            "additionalProperties": true,
+            "title": "State",
+            "type": "object"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "token",
+          "state",
+          "created_at"
+        ],
+        "title": "SharedViewRead",
+        "type": "object"
+      },
       "TokenPair": {
         "properties": {
           "access_token": {
@@ -1653,6 +1759,73 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ViewState": {
+        "additionalProperties": false,
+        "description": "Configuration d'affichage partagée.\n\nVolontairement fermée (`extra=\"forbid\"`) et bornée : `state` est écrit par un client et relu\npar un endpoint **public**. Accepter un JSON libre en ferait un vecteur de stockage arbitraire\nservi sans authentification.",
+        "properties": {
+          "camera_position": {
+            "anyOf": [
+              {
+                "maxItems": 3,
+                "minItems": 3,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Position"
+          },
+          "camera_preset": {
+            "maxLength": 50,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9\\-]+$",
+            "title": "Camera Preset",
+            "type": "string"
+          },
+          "room_index": {
+            "default": 0,
+            "maximum": 999.0,
+            "minimum": 0.0,
+            "title": "Room Index",
+            "type": "integer"
+          },
+          "transparent_faces": {
+            "items": {
+              "maxLength": 16,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "title": "Transparent Faces",
+            "type": "array"
+          },
+          "visible_faces": {
+            "items": {
+              "maxLength": 16,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "title": "Visible Faces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "camera_preset"
+        ],
+        "title": "ViewState",
         "type": "object"
       }
     },
@@ -2721,6 +2894,158 @@
         ]
       }
     },
+    "/api/projects/{project_id}/shared-views": {
+      "get": {
+        "operationId": "list_shared_views_api_projects__project_id__shared_views_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SharedViewRead"
+                  },
+                  "title": "Response List Shared Views Api Projects  Project Id  Shared Views Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Shared Views",
+        "tags": [
+          "partage"
+        ]
+      },
+      "post": {
+        "description": "Crée un lien de partage sur un projet dont on est propriétaire.",
+        "operationId": "create_shared_view_api_projects__project_id__shared_views_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharedViewCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedViewRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Shared View",
+        "tags": [
+          "partage"
+        ]
+      }
+    },
+    "/api/public/views/{token}": {
+      "get": {
+        "description": "Lecture publique d'une vue partagée. **Aucune authentification.**\n\nLe message d'erreur est le même pour un jeton inexistant et pour un jeton expiré : les\ndistinguer permettrait de confirmer qu'un lien a existé.",
+        "operationId": "read_public_view_api_public_views__token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 16,
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicSceneResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Public View",
+        "tags": [
+          "partage"
+        ]
+      }
+    },
     "/api/rooms/{room_id}": {
       "delete": {
         "operationId": "delete_room_api_rooms__room_id__delete",
@@ -2920,6 +3245,47 @@
         "summary": "List Faces",
         "tags": [
           "plan"
+        ]
+      }
+    },
+    "/api/shared-views/{shared_view_id}": {
+      "delete": {
+        "description": "Révoque un lien. Un partage qu'on ne peut pas retirer n'est pas un partage maîtrisé.",
+        "operationId": "revoke_shared_view_api_shared_views__shared_view_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shared_view_id",
+            "required": true,
+            "schema": {
+              "title": "Shared View Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Revoke Shared View",
+        "tags": [
+          "partage"
         ]
       }
     },

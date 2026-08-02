@@ -253,6 +253,52 @@ export function readSceneGraph(projectId: number): Promise<SceneGraph> {
   return request<SceneGraph>(`/api/projects/${projectId}/scene`)
 }
 
+// --- Partage de vue (P8) --------------------------------------------------------------------
+
+export interface SharedView {
+  id: number
+  project_id: number
+  token: string
+  state: Record<string, unknown>
+  created_at: string
+}
+
+export interface PublicView {
+  kind: 'shared-view'
+  project_name: string
+  state: Record<string, unknown>
+  scene: SceneGraph
+}
+
+export function createSharedView(
+  projectId: number,
+  state: Record<string, unknown>,
+  expiresInDays?: number,
+): Promise<SharedView> {
+  return request<SharedView>(`/api/projects/${projectId}/shared-views`, {
+    method: 'POST',
+    body: JSON.stringify({ state, expires_in_days: expiresInDays ?? null }),
+  })
+}
+
+export function listSharedViews(projectId: number): Promise<SharedView[]> {
+  return request<SharedView[]>(`/api/projects/${projectId}/shared-views`)
+}
+
+export function revokeSharedView(sharedViewId: number): Promise<void> {
+  return request<void>(`/api/shared-views/${sharedViewId}`, { method: 'DELETE' })
+}
+
+/** Lecture publique : volontairement sans jeton, c'est tout l'intérêt du lien de partage. */
+export async function readPublicView(token: string): Promise<PublicView> {
+  const response = await fetch(`${API_BASE_URL}/api/public/views/${encodeURIComponent(token)}`)
+  const body: unknown = await response.json()
+  if (!response.ok) {
+    throw new ApiError(response.status, extractDetail(body, response.status), body)
+  }
+  return body as PublicView
+}
+
 export function openApiSchema(): Promise<Record<string, unknown>> {
   return request<Record<string, unknown>>('/openapi.json')
 }
