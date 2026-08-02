@@ -11,10 +11,27 @@ from typing import Any, ClassVar
 
 from fastapi import FastAPI
 from sqladmin import Admin, ModelView
+from sqladmin.authentication import AuthenticationBackend
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Session
+from sqlmodel import col, select
+from starlette.requests import Request
 
 from app.core.config import get_settings
-from app.models import Element, Face, FurnitureType, Project, Room, SharedView
+from app.core.security import DUMMY_PASSWORD_HASH, verify_password
+from app.models import Element, Face, FurnitureType, Project, Room, SharedView, User
+
+
+class UserAdmin(ModelView, model=User):
+    name = "Utilisateur"
+    name_plural = "Utilisateurs"
+    icon = "fa-solid fa-user"
+    column_list: ClassVar[list[Any]] = [User.id, User.email, User.is_active, User.is_superuser]
+    column_searchable_list: ClassVar[list[Any]] = [User.email]
+    # Le hachage du mot de passe ne doit apparaître ni en détail, ni dans un formulaire : le
+    # back-office n'a aucune raison de l'exposer, même à un administrateur.
+    column_details_exclude_list: ClassVar[list[Any]] = [User.hashed_password]
+    form_excluded_columns: ClassVar[list[Any]] = [User.hashed_password]
 
 
 class ProjectAdmin(ModelView, model=Project):
@@ -24,6 +41,7 @@ class ProjectAdmin(ModelView, model=Project):
     column_list: ClassVar[list[Any]] = [
         Project.id,
         Project.name,
+        Project.owner_id,
         Project.version,
         Project.created_at,
     ]
@@ -81,8 +99,50 @@ class SharedViewAdmin(ModelView, model=SharedView):
         SharedView.token,
         SharedView.created_at,
     ]
-    # Un token de partage ne se modifie pas à la main : il est généré côté API (P8).
-    can_edit = False
+    # La vue est éditable — le critère d'acceptation P1 demande que *chaque* modèle le soit —
+    # mais le token en est exclu : c'est un secret de partage généré côté API (P8), le modifier
+    # à la main casserait silencieusement les liens déjà diffusés.
+    form_excluded_columns: ClassVar[list[Any]] = [SharedView.token]
+
+
+class AdminAuth(AuthenticationBackend):
+    """Authentification du back-office : compte superutilisateur uniquement.
+
+    Sans ce garde-fou, `/admin` expose un CRUD complet sur toutes les données, sans jeton, sur
+    le même port que l'API. La session est signée avec `SECRET_KEY` — la même clé dont le
+    démarrage exige qu'elle soit forte hors développement.
+    """
+
+    async def login(self, request: Request) -> bool:
+        form = await request.form()
+        email = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+
+        engine = _sync_engine()
+        try:
+            with Session(engine) as session:
+                user = session.execute(
+                    select(User).where(col(User.email) == email)
+                ).scalar_one_or_none()
+        finally:
+            engine.dispose()
+
+        # Le hachage est vérifié même si le compte n'existe pas (temps de réponse constant).
+        hashed = user.hashed_password if user else DUMMY_PASSWORD_HASH
+        if not verify_password(password, hashed):
+            return False
+        if user is None or not user.is_active or not user.is_superuser:
+            return False
+
+        request.session.update({"admin_user_id": user.id})
+        return True
+
+    async def logout(self, request: Request) -> bool:
+        request.session.clear()
+        return True
+
+    async def authenticate(self, request: Request) -> bool:
+        return bool(request.session.get("admin_user_id"))
 
 
 def _sync_engine() -> Engine:
@@ -94,8 +154,15 @@ def _sync_engine() -> Engine:
 
 def mount_admin(app: FastAPI) -> Admin:
     """Monte l'admin sur `/admin` et y déclare une vue par modèle."""
-    admin = Admin(app, _sync_engine(), title="Plan de rénovation — Admin")
+    settings = get_settings()
+    admin = Admin(
+        app,
+        _sync_engine(),
+        title="Plan de rénovation — Admin",
+        authentication_backend=AdminAuth(secret_key=settings.secret_key),
+    )
     for view in (
+        UserAdmin,
         ProjectAdmin,
         RoomAdmin,
         FaceAdmin,

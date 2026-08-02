@@ -154,7 +154,15 @@ SharedView
 | ORM / validation | **SQLModel** (SQLAlchemy + Pydantic) | fait par l'auteur de FastAPI pour éviter la duplication modèle DB / schéma API ; possibilité de redescendre en SQLAlchemy pur si besoin de contrôle fin |
 | Migrations | **Alembic** | équivalent des migrations Django, mais explicite plutôt qu'auto-généré par magie — bon exercice pour comprendre ce qu'une migration fait réellement |
 | Admin / back-office | **SQLAdmin** | admin CRUD auto-généré à partir des modèles SQLAlchemy/SQLModel, pour combler l'absence d'admin natif de FastAPI (gestion du catalogue `FurnitureType` notamment) |
-| Auth | JWT via le pattern officiel FastAPI (`OAuth2PasswordBearer` + `passlib`/`python-jose`) | FastAPI ne fournit pas d'auth intégrée ; ce pattern est celui du tutoriel officiel, donc le plus fiable à faire générer par un agent IA (très bien documenté, faible risque d'API inventée) ; `fastapi-users` existe mais est en mode maintenance, pas un bon choix long terme |
+| Auth | JWT via le pattern officiel FastAPI (`OAuth2PasswordBearer` + `pwdlib`/`pyjwt`) | FastAPI ne fournit pas d'auth intégrée ; ce pattern est celui du tutoriel officiel, donc le plus fiable à faire générer par un agent IA (très bien documenté, faible risque d'API inventée) ; `fastapi-users` existe mais est en mode maintenance, pas un bon choix long terme |
+
+> **Amendement (ticket P2)** — cette ligne citait initialement `passlib` / `python-jose`.
+> Vérification faite au moment de l'implémentation : `passlib` n'a plus été publié depuis
+> octobre 2020 et lève `AttributeError: module 'bcrypt' has no attribute '__about__'` avec
+> `bcrypt >= 4.1` (reproduit en local). Le tutoriel officiel FastAPI — la raison même du choix —
+> s'appuie désormais sur `pwdlib` et `pyjwt`. Le critère de la spec est donc mieux respecté par
+> `pwdlib` (Argon2id) + `pyjwt` que par les deux librairies nommées à l'origine. Aucune autre
+> décision d'architecture n'est modifiée.
 | Tâches async | Celery + Redis | standard le plus répandu et le plus transférable sur le marché de l'emploi, indépendant du framework web (fonctionne à l'identique avec FastAPI) |
 | Base de données | PostgreSQL | JSON pour la géométrie, tables normalisées pour le reste |
 | Calcul géométrique | Python + `numpy` | scene graph, normales, extrusions |

@@ -5,7 +5,11 @@ Aucun secret en dur : tout vient de variables d'environnement (voir `env.example
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Valeur sentinelle : sa présence hors développement fait échouer le démarrage.
+DEV_SECRET_KEY = "cle-de-developpement-a-remplacer-absolument-32+"
 
 
 class Settings(BaseSettings):
@@ -25,15 +29,40 @@ class Settings(BaseSettings):
     # Journalisation SQL — sert à mesurer les N+1 avant de les optimiser (spec §8, cas 4).
     sql_echo: bool = False
 
-    # Clé de signature des sessions SQLAdmin. Valeur de développement uniquement : en production
-    # la variable d'environnement est obligatoire (vérifié au démarrage, voir `main.py`).
-    secret_key: str = "dev-secret-key-change-me"
+    # Clé de signature des jetons JWT. Valeur de développement uniquement : hors développement,
+    # une clé faible fait échouer le démarrage (voir le validateur ci-dessous).
+    secret_key: str = DEV_SECRET_KEY
+
+    # Durées de vie des jetons (spec §6, auth JWT). Un jeton d'accès court limite la fenêtre
+    # d'exploitation en cas de vol ; le jeton de rafraîchissement porte la session longue.
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
 
     # Redis / Celery (spec §6, utilisés à partir de P9)
     redis_url: str = "redis://localhost:6379/0"
 
     # Origines autorisées pour le frontend Vite en dev
     cors_origins: list[str] = ["http://localhost:5173"]
+
+    @property
+    def is_development(self) -> bool:
+        return self.environment == "development"
+
+    @model_validator(mode="after")
+    def _reject_weak_secret_outside_development(self) -> "Settings":
+        """Interdit de démarrer en production avec la clé de développement.
+
+        Le seuil de 32 octets est celui de la RFC 7518 §3.2 pour HMAC-SHA256 : en dessous, PyJWT
+        lui-même émet un `InsecureKeyLengthWarning`.
+        """
+        if self.is_development:
+            return self
+        if self.secret_key == DEV_SECRET_KEY or len(self.secret_key) < 32:
+            raise ValueError(
+                "SECRET_KEY doit être définie et faire au moins 32 caractères "
+                f"hors développement (ENVIRONMENT={self.environment!r})."
+            )
+        return self
 
 
 @lru_cache

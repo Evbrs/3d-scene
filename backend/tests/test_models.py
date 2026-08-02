@@ -5,6 +5,7 @@ Référence : `docs/plan-generation-ia.md` §8 (P1), `docs/spec-complete.md` §5
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,12 +21,18 @@ from app.models import (
     Project,
     Room,
     SharedView,
+    User,
 )
+from app.models.base import utcnow
 
 
-async def _make_plan(session: AsyncSession) -> tuple[Project, Room, Face, Element]:
+async def _make_plan(session: AsyncSession, owner: User) -> tuple[Project, Room, Face, Element]:
     """Crée l'arbre Project → Room → Face → Element et le persiste."""
-    project = Project(name="Rénovation appartement", description="T3 à rénover")
+    project = Project(
+        name="Rénovation appartement",
+        description="T3 à rénover",
+        owner_id=owner.id or 0,
+    )
     session.add(project)
     await session.flush()
 
@@ -68,8 +75,10 @@ async def _make_plan(session: AsyncSession) -> tuple[Project, Room, Face, Elemen
 # --- A2 : création et relecture de l'arbre --------------------------------------------------
 
 
-async def test_creates_and_reads_back_project_room_face_element(session: AsyncSession) -> None:
-    project, room, face, element = await _make_plan(session)
+async def test_creates_and_reads_back_project_room_face_element(
+    session: AsyncSession, owner: User
+) -> None:
+    project, room, face, element = await _make_plan(session, owner)
 
     session.expunge_all()
     # Eager loading explicite : en asynchrone, un chargement paresseux lèverait
@@ -106,8 +115,10 @@ async def test_creates_and_reads_back_project_room_face_element(session: AsyncSe
     assert face.room_id == room.id
 
 
-async def test_deleting_a_project_cascades_to_the_whole_tree(session: AsyncSession) -> None:
-    project, _room, _face, _element = await _make_plan(session)
+async def test_deleting_a_project_cascades_to_the_whole_tree(
+    session: AsyncSession, owner: User
+) -> None:
+    project, _room, _face, _element = await _make_plan(session, owner)
 
     await session.delete(project)
     await session.commit()
@@ -132,8 +143,10 @@ async def test_foreign_key_blocks_element_on_missing_face(
     await session.rollback()
 
 
-async def test_face_label_is_unique_within_a_room(session: AsyncSession) -> None:
-    _project, room, _face, _element = await _make_plan(session)
+async def test_face_label_is_unique_within_a_room(
+    session: AsyncSession, owner: User
+) -> None:
+    _project, room, _face, _element = await _make_plan(session, owner)
 
     session.add(Face(room_id=room.id or 0, label="A", kind=FaceKind.WALL))
 
@@ -184,13 +197,13 @@ async def test_furniture_recipe_survives_a_round_trip(session: AsyncSession) -> 
 
 
 async def test_optimistic_locking_detects_a_concurrent_write(
-    session: AsyncSession, engine: object
+    session: AsyncSession, engine: object, owner: User
 ) -> None:
     """Spec §8, cas 3 : verrouillage optimiste, pas de « dernière écriture gagne »."""
     from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
     assert isinstance(engine, AsyncEngine)
-    project = Project(name="Projet partagé")
+    project = Project(name="Projet partagé", owner_id=owner.id or 0)
     session.add(project)
     await session.commit()
     assert project.version == 1
@@ -210,8 +223,10 @@ async def test_optimistic_locking_detects_a_concurrent_write(
     await session.rollback()
 
 
-async def test_shared_view_state_is_stored_as_json(session: AsyncSession) -> None:
-    project = Project(name="Projet à partager")
+async def test_shared_view_state_is_stored_as_json(
+    session: AsyncSession, owner: User
+) -> None:
+    project = Project(name="Projet à partager", owner_id=owner.id or 0)
     session.add(project)
     await session.flush()
 
@@ -231,24 +246,109 @@ async def test_shared_view_state_is_stored_as_json(session: AsyncSession) -> Non
     assert reloaded.state == state
 
 
+async def test_enums_are_stored_by_value_not_by_python_name(
+    session: AsyncSession, owner: User
+) -> None:
+    """La base et le JSON de l'API doivent parler la même langue.
+
+    Par défaut SQLAlchemy persiste le *nom* du membre (`CEILING`) alors que l'API sérialise sa
+    valeur (`"ceiling"`). Sans alignement, tout accès SQL direct doit connaître deux conventions.
+    """
+    _project, _room, face, element = await _make_plan(session, owner)
+
+    raw_face_kind = (
+        await session.execute(text("SELECT kind FROM face WHERE id = :id"), {"id": face.id})
+    ).scalar_one()
+    raw_element_kind = (
+        await session.execute(text("SELECT kind FROM element WHERE id = :id"), {"id": element.id})
+    ).scalar_one()
+
+    assert raw_face_kind == "wall", raw_face_kind
+    assert raw_element_kind == "window", raw_element_kind
+
+
 # --- A4 : admin SQLAdmin ----------------------------------------------------------------------
 
+ADMIN_IDENTITIES = ["user", "project", "room", "face", "element", "furniture-type", "shared-view"]
 
-@pytest.mark.parametrize(
-    "identity",
-    ["project", "room", "face", "element", "furniture-type", "shared-view"],
-)
-async def test_admin_lists_every_model(client: AsyncClient, identity: str) -> None:
+
+@pytest.mark.parametrize("identity", ADMIN_IDENTITIES)
+async def test_admin_requires_authentication(client: AsyncClient, identity: str) -> None:
+    """`/admin` expose un CRUD complet : il ne doit pas être accessible sans session."""
     response = await client.get(f"/admin/{identity}/list")
+
+    assert response.status_code in (302, 307), response.status_code
+    assert "/admin/login" in response.headers.get("location", "")
+
+
+@pytest.mark.parametrize("identity", ADMIN_IDENTITIES)
+async def test_admin_lists_every_model(admin_client: AsyncClient, identity: str) -> None:
+    response = await admin_client.get(f"/admin/{identity}/list")
     assert response.status_code == 200, response.text
 
 
-@pytest.mark.parametrize(
-    "identity",
-    ["project", "room", "face", "element", "furniture-type"],
-)
-async def test_admin_exposes_an_edit_form_for_every_editable_model(
-    client: AsyncClient, identity: str
+@pytest.mark.parametrize("identity", ADMIN_IDENTITIES)
+async def test_admin_exposes_a_creation_form_for_every_model(
+    admin_client: AsyncClient, identity: str
 ) -> None:
-    response = await client.get(f"/admin/{identity}/create")
+    response = await admin_client.get(f"/admin/{identity}/create")
     assert response.status_code == 200, response.text
+
+
+async def test_admin_edits_every_model(
+    admin_client: AsyncClient, session: AsyncSession, owner: User
+) -> None:
+    """Le critère demande que l'admin *permette d'éditer* : on charge le formulaire d'édition
+    de chaque modèle sur une ligne réelle, et on vérifie qu'une modification est bien écrite."""
+    _project, room, face, element = await _make_plan(session, owner)
+    furniture = FurnitureType(slug="table", name="Table", category="kitchen")
+    session.add(furniture)
+    shared = SharedView(project_id=_project.id or 0, token="jeton-admin", state={})
+    session.add(shared)
+    await session.commit()
+
+    rows = {
+        "user": owner.id,
+        "project": _project.id,
+        "room": room.id,
+        "face": face.id,
+        "element": element.id,
+        "furniture-type": furniture.id,
+        "shared-view": shared.id,
+    }
+    for identity, pk in rows.items():
+        response = await admin_client.get(f"/admin/{identity}/edit/{pk}")
+        assert response.status_code == 200, f"{identity} : {response.status_code}"
+
+    # Une édition réelle, pas seulement l'affichage du formulaire.
+    # Noms de champs relevés sur le formulaire réel : SQLAdmin expose la *relation*
+    # (`project`) et non la clé étrangère, et attend les horodatages.
+    now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    response = await admin_client.post(
+        f"/admin/room/edit/{room.id}",
+        data={
+            "project": str(_project.id),
+            "name": "Salle de bain rénovée",
+            "wall_thickness_cm": "15",
+            "ceiling_height_cm": "250",
+            "polygon": "[]",
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+    assert response.status_code in (200, 302), response.text
+
+    session.expunge_all()
+    reloaded = (await session.execute(select(Room).where(Room.id == room.id))).scalar_one()
+    assert reloaded.name == "Salle de bain rénovée"
+    assert reloaded.wall_thickness_cm == 15
+
+
+async def test_admin_never_exposes_the_password_hash(
+    admin_client: AsyncClient, owner: User
+) -> None:
+    for path in (f"/admin/user/details/{owner.id}", f"/admin/user/edit/{owner.id}"):
+        response = await admin_client.get(path)
+        assert response.status_code == 200
+        assert owner.hashed_password not in response.text, path
+        assert "hashed_password" not in response.text.lower(), path

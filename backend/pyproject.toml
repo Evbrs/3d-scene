@@ -17,6 +17,10 @@ dependencies = [
     # Tâches async (spec §6)
     "celery>=5.4",
     "redis>=5.2",
+    # Auth JWT (spec §6 — voir app/core/security.py pour l'écart assumé sur les librairies)
+    "pyjwt>=2.10",
+    "pwdlib[argon2]>=0.2",
+    "email-validator>=2.2",
     # Calcul géométrique (spec §6)
     "numpy>=2.1",
 ]

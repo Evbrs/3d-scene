@@ -12,7 +12,7 @@ Statuts : `à faire` · `en cours` · `en revue` · `fait`
 |---|---|---|---|
 | P0 | Scaffolding + CI | — | **fait** |
 | P1 | Modèles SQLModel + migrations Alembic + admin SQLAdmin | P0 | **fait** |
-| P2 | Auth JWT, permissions objet | P1 | à faire |
+| P2 | Auth JWT, permissions objet | P1 | **fait** |
 | P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | à faire |
 | P4 | Éditeur 2D (Vue + Konva) | P3 | à faire |
 | P5 | Catalogue `FurnitureType` paramétrique | P1 | à faire |
@@ -94,10 +94,10 @@ initiale, back-office SQLAdmin sur `/admin`.
 
 | Critère | État | Vérification |
 |---|---|---|
-| `alembic upgrade head` sur une base vide crée toutes les tables | ✅ | `tests/test_migrations.py` (+ aller-retour `downgrade base`) et application réelle sur la stack Docker : 6 tables + `alembic_version` |
+| `alembic upgrade head` sur une base vide crée toutes les tables | ✅ | `tests/test_migrations.py`, exécuté sur SQLite **et** sur PostgreSQL (schéma dédié) + application réelle sur la stack Docker |
 | Un test crée `Project → Room → Face → Element` et relit les relations | ✅ | `test_creates_and_reads_back_project_room_face_element` |
 | Un test vérifie qu'une FK bloque un `Element` sur une `Face` inexistante | ✅ | `test_foreign_key_blocks_element_on_missing_face`, avec garde `foreign_keys_enforced` |
-| L'admin liste et permet d'éditer chaque modèle sur `/admin` | ✅ | 6 vues en 200 sur la stack réelle + `POST /admin/project/create` → 302 et ligne créée en base |
+| L'admin liste et permet d'éditer chaque modèle sur `/admin` | ✅ | `test_admin_edits_every_model` : formulaire d'édition en 200 sur une ligne réelle des 7 modèles, plus une modification effectivement écrite en base |
 
 Suite complète : **23 tests verts sur SQLite *et* sur PostgreSQL**, `ruff` et `mypy --strict` verts.
 
@@ -117,13 +117,91 @@ Suite complète : **23 tests verts sur SQLite *et* sur PostgreSQL**, `ruff` et `
 - Le conteneur `backend` applique les migrations au démarrage (sinon la stack sert une API sur
   une base sans tables).
 
-**Hors périmètre annoncé, signalé** : `backend/app/db.py`, `backend/alembic.ini`,
-`backend/app/main.py` (montage de l'admin), `backend/tests/conftest.py`, `docker-compose.yml`,
-`.github/workflows/ci.yml` et `README.md` ont été touchés — aucun n'est listé dans les fichiers
-autorisés du ticket P1, mais chacun est nécessaire à un critère d'acceptation.
+**Hors périmètre annoncé** (liste complétée après revue) : `backend/app/db.py`,
+`backend/alembic.ini`, `backend/app/main.py`, `backend/tests/conftest.py`,
+`backend/tests/test_migrations.py`, `backend/app/core/config.py`, `backend/pyproject.toml`,
+`docker/postgres-init/01-create-test-database.sh`, `docker-compose.yml`,
+`.github/workflows/ci.yml`, `README.md`. Aucun n'est listé dans les fichiers autorisés du ticket
+P1 ; chacun est nécessaire à un critère d'acceptation.
 
 **Pièges rencontrés, corrigés** :
 - Une installation PostgreSQL locale occupait `5432` et masquait le conteneur (« role "app" does
   not exist » alors que la base est saine). Ports hôte décalés par défaut : `5433` et `6380`.
 - Pointer `TEST_DATABASE_URL` sur la base de développement la vidait (la suite fait `drop_all`
   en fin de test). Le volume PostgreSQL crée maintenant une base `app_test` dédiée.
+
+### P1 — corrections après revue adversariale
+
+La revue `spec-reviewer` a rendu **À CORRIGER** sur P1 avec un défaut réel de correction. Tout
+est corrigé dans le commit de P2 :
+
+1. **Migration non réversible sur PostgreSQL (bloquant).** `downgrade base` supprimait les tables
+   mais laissait les types ENUM `facekind` / `elementkind` : l'`upgrade` suivant échouait sur
+   « type "facekind" already exists ». Le défaut était invisible parce que
+   `tests/test_migrations.py` codait en dur une URL SQLite et ignorait `TEST_DATABASE_URL` — les
+   tests de migration ne tournaient jamais sur le moteur de production, contrairement à ce
+   qu'affirmait leur docstring. Corrigé : `downgrade()` supprime explicitement les types, les
+   tests de migration tournent aussi sur PostgreSQL (schéma dédié), et deux tests ont été ajoutés
+   (`test_the_migration_can_be_replayed_after_a_full_downgrade`,
+   `test_downgrade_also_removes_the_enum_types`). Vérifié comme non vacuous : en retirant le
+   correctif, ces deux tests échouent.
+2. **Critère A4 non couvert.** Le test interrogeait `/admin/{modèle}/create` (formulaire de
+   *création*) pour justifier « permet d'éditer », et `SharedView` était en lecture seule.
+   Corrigé : `SharedView` est éditable avec son `token` exclu du formulaire, et
+   `test_admin_edits_every_model` charge le formulaire d'édition de chaque modèle sur une ligne
+   réelle puis vérifie qu'une modification est bien persistée.
+3. **`env.example` supprimé par inadvertance** alors que `README.md`, `.gitignore` et
+   `config.py` y renvoient — la procédure de démarrage documentée était cassée sur un clone
+   frais. Fichier restauré.
+4. **Périmètre** : liste des fichiers hors périmètre complétée (ci-dessus).
+5. **Commentaire faux dans `config.py`** sur une vérification de `SECRET_KEY` qui n'existait pas.
+   La vérification existe désormais réellement (validateur qui refuse le démarrage hors
+   développement avec une clé faible ou par défaut).
+6. **Énumérations stockées par leur nom Python** (`CEILING`) alors que l'API sérialise leur
+   valeur (`"ceiling"`). Corrigé via `values_callable` ; couvert par
+   `test_enums_are_stored_by_value_not_by_python_name`. La migration initiale a été retouchée sur
+   place plutôt que corrigée par une migration supplémentaire : le projet n'est déployé nulle
+   part, et le seul environnement concerné (la base de dev locale) a été recréé.
+7. **Affirmations inexactes de `PROGRESS.md`** rectifiées ci-dessus.
+
+Points latents signalés par la revue, traités dans P2 :
+
+- **`/admin` était exposé sans authentification** (CRUD complet sur toutes les données, même
+  port que l'API) → back-office protégé par `AuthenticationBackend`, compte superutilisateur
+  requis, couvert par `test_admin_requires_authentication`.
+- **Colonnes JSON non mutables** : `room.polygon.append(...)` n'aurait jamais été persisté,
+  SQLAlchemy ne détectant pas les mutations en place. Or §8 cas 1 fait du JSON le stockage
+  principal de la géométrie, donc c'est le mode d'usage naturel en P3/P4. Toutes les colonnes
+  JSON utilisent maintenant `MutableDict` / `MutableList`.
+
+### P2 — Auth JWT et permissions objet · **fait**
+
+Comptes, JWT (accès + rafraîchissement), permissions objet par propriété du projet.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| Inscription, connexion, profil via JWT | ✅ | `tests/test_auth.py` + vérifié sur la stack Docker (`register` 201, `token` 200, `/me` 200) |
+| Mot de passe jamais stocké ni renvoyé en clair | ✅ | `test_the_password_is_never_returned_nor_stored_in_clear` — Argon2id, sel aléatoire |
+| Jeton absent / invalide / expiré / forgé / `alg:none` / de mauvais type refusé | ✅ | 8 tests dédiés |
+| Objet d'un autre utilisateur inaccessible (404) à tous les niveaux de l'arbre | ✅ | `test_object_permissions_*` (projet, pièce, face, élément) |
+| Migration `user` + `Project.owner_id`, réversible | ✅ | `tests/test_migrations.py` sur PostgreSQL, aller-retour + rejeu |
+| `/admin` inaccessible sans authentification | ✅ | `test_admin_requires_authentication` (7 modèles) + `curl` sur la stack → 302 vers `/admin/login` |
+
+Suite complète : **61 tests sur SQLite, 62 sur PostgreSQL**, `ruff` et `mypy --strict` verts.
+
+**Écart de spec formalisé** : `docs/spec-complete.md` §6 a été amendé (bloc « Amendement
+(ticket P2) ») pour remplacer `passlib` / `python-jose` par `pwdlib` / `pyjwt`. Motif vérifié
+empiriquement, pas de mémoire : `passlib` 1.7.4 (dernière publication octobre 2020) lève
+`AttributeError: module 'bcrypt' has no attribute '__about__'` avec `bcrypt` 5. Le tutoriel
+officiel FastAPI, raison invoquée par la spec pour ce choix, utilise désormais `pwdlib` + `pyjwt`.
+
+**Choix de sécurité** (au-delà du strict énoncé du ticket, alignés sur les conventions du
+`CLAUDE.md` global) : Argon2id, réponses et temps de réponse indistinguables entre compte
+inconnu et mauvais mot de passe, 404 au lieu de 403 sur les objets d'autrui, limitation de débit
+sur la connexion, refus de démarrer hors développement avec une `SECRET_KEY` faible, hachage de
+mot de passe jamais exposé dans le back-office.
+
+**À traiter en P12** : la limitation de débit est en mémoire du processus (insuffisant en
+multi-workers, à porter sur Redis) ; pas de révocation de jeton.

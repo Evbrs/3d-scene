@@ -39,9 +39,12 @@ get_settings.cache_clear()
 
 from app.db import get_session  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
+from app.models.user import User  # noqa: E402
+
+ADMIN_PASSWORD = "motdepasse-admin-de-test-2026"
 
 
-def _is_sqlite(url: str) -> bool:
+def is_sqlite(url: str) -> bool:
     return url.startswith("sqlite")
 
 
@@ -50,7 +53,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
     """Moteur de test, schéma créé et détruit autour de chaque test."""
     test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
-    if _is_sqlite(TEST_DATABASE_URL):
+    if is_sqlite(TEST_DATABASE_URL):
         # SQLite n'applique PAS les clés étrangères par défaut : sans ce PRAGMA, le test qui
         # vérifie qu'une FK bloque un Element orphelin passerait pour de mauvaises raisons.
         @event.listens_for(test_engine.sync_engine, "connect")
@@ -92,9 +95,39 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 
 @pytest.fixture
+async def admin_client(client: AsyncClient, session: AsyncSession) -> AsyncClient:
+    """Client authentifié sur le back-office avec un compte superutilisateur."""
+    from app.core.security import hash_password
+
+    admin = User(
+        email="admin-test@exemple.fr",
+        hashed_password=hash_password(ADMIN_PASSWORD),
+        is_superuser=True,
+    )
+    session.add(admin)
+    await session.commit()
+
+    response = await client.post(
+        "/admin/login", data={"username": "admin-test@exemple.fr", "password": ADMIN_PASSWORD}
+    )
+    assert response.status_code in (200, 302), response.text
+    return client
+
+
+@pytest.fixture
+async def owner(session: AsyncSession) -> User:
+    """Propriétaire par défaut des projets de test (P2 : tout projet a un propriétaire)."""
+    user = User(email="proprietaire-test@exemple.fr", hashed_password="argon2-factice")
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+@pytest.fixture
 async def foreign_keys_enforced(session: AsyncSession) -> bool:
     """Vrai si le moteur de test applique réellement les contraintes de clé étrangère."""
-    if not _is_sqlite(TEST_DATABASE_URL):
+    if not is_sqlite(TEST_DATABASE_URL):
         return True
     result = await session.execute(text("PRAGMA foreign_keys"))
     return bool(result.scalar())

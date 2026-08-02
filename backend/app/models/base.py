@@ -10,7 +10,22 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import DateTime
+from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
+
+
+def value_enum(enum_class: type[StrEnum], name: str) -> SAEnum:
+    """Type SQL pour une énumération, stockée sous sa *valeur* et non sous son nom Python.
+
+    Par défaut, SQLAlchemy persiste le *nom* du membre (`CEILING`) alors que l'API sérialise sa
+    valeur (`"ceiling"`) : la base et le JSON divergent, et tout accès SQL direct doit connaître
+    les deux conventions. `values_callable` aligne les deux.
+    """
+    return SAEnum(
+        enum_class,
+        name=name,
+        values_callable=lambda enum: [member.value for member in enum],
+    )
 
 
 def utcnow() -> datetime:

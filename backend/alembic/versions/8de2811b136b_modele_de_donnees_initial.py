@@ -77,7 +77,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('room_id', sa.Integer(), nullable=False),
     sa.Column('label', sqlmodel.sql.sqltypes.AutoString(length=8), nullable=False),
-    sa.Column('kind', sa.Enum('WALL', 'FLOOR', 'CEILING', name='facekind'), nullable=False),
+    sa.Column('kind', sa.Enum('wall', 'floor', 'ceiling', name='facekind'), nullable=False),
     sa.Column('start_x_cm', sa.Float(), nullable=True),
     sa.Column('start_y_cm', sa.Float(), nullable=True),
     sa.Column('end_x_cm', sa.Float(), nullable=True),
@@ -93,7 +93,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('face_id', sa.Integer(), nullable=False),
-    sa.Column('kind', sa.Enum('DOOR_HINGED', 'DOOR_SLIDING', 'WINDOW', 'FURNITURE', name='elementkind'), nullable=False),
+    sa.Column('kind', sa.Enum('door_hinged', 'door_sliding', 'window', 'furniture', name='elementkind'), nullable=False),
     sa.Column('x_offset_cm', sa.Float(), nullable=False),
     sa.Column('y_offset_cm', sa.Float(), nullable=False),
     sa.Column('width_cm', sa.Float(), nullable=False),
@@ -129,4 +129,14 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_furnituretype_slug'), table_name='furnituretype')
     op.drop_index(op.f('ix_furnituretype_category'), table_name='furnituretype')
     op.drop_table('furnituretype')
-    # ### end Alembic commands ###
+
+    # Sur PostgreSQL, un type ENUM survit à la suppression de la table qui l'utilise. Sans les
+    # suppressions ci-dessous, `downgrade base` puis `upgrade head` échoue sur
+    # « type "facekind" already exists » — la migration n'est réversible qu'en apparence.
+    # `checkfirst=True` rend l'opération inopérante sur les moteurs sans types nommés (SQLite).
+    bind = op.get_bind()
+    for enum_name, labels in (
+        ('facekind', ('wall', 'floor', 'ceiling')),
+        ('elementkind', ('door_hinged', 'door_sliding', 'window', 'furniture')),
+    ):
+        sa.Enum(*labels, name=enum_name).drop(bind, checkfirst=True)

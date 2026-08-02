@@ -14,6 +14,7 @@ from app.models.base import (
     utcnow,
 )
 from app.models.plan import Element, Face, FurnitureType, Project, Room, SharedView
+from app.models.user import User
 
 __all__ = [
     "Element",
@@ -28,5 +29,6 @@ __all__ = [
     "Room",
     "SharedView",
     "TimestampedModel",
+    "User",
     "utcnow",
 ]

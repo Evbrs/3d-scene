@@ -13,10 +13,11 @@ from typing import Any, ClassVar
 # de `Relationship` à l'exécution, et une annotation devenue chaîne ("list['Room']") est refusée
 # par SQLAlchemy (« seems to be using a generic class as the argument to relationship() »).
 from sqlalchemy import Column, Integer, UniqueConstraint
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.types import JSON
 from sqlmodel import Field, Relationship
 
-from app.models.base import ElementKind, FaceKind, TimestampedModel
+from app.models.base import ElementKind, FaceKind, TimestampedModel, value_enum
 
 # `version_id_col` de SQLAlchemy attend l'objet `Column` lui-même. Sous SQLModel, l'attribut de
 # classe n'est pas encore une `Column` au moment où `__mapper_args__` est lu : on construit donc
@@ -34,6 +35,8 @@ class Project(TimestampedModel, table=True):
     __mapper_args__: ClassVar[dict[str, Any]] = {"version_id_col": _project_version_column}
 
     id: int | None = Field(default=None, primary_key=True)
+    # Propriétaire du projet : socle des permissions objet (spec §7, P2).
+    owner_id: int = Field(foreign_key="user.id", index=True, ondelete="CASCADE")
     name: str = Field(max_length=200, index=True)
     description: str | None = Field(default=None, max_length=2000)
     version: int = Field(default=1, sa_column=_project_version_column)
@@ -65,7 +68,9 @@ class Room(TimestampedModel, table=True):
 
     # Polygone libre de la pièce (spec §1 : « polygones libres »), liste de sommets [x, y] en cm,
     # ordonnés dans le sens trigonométrique. JSON assumé (§8, cas 1).
-    polygon: list[list[float]] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    polygon: list[list[float]] = Field(
+        default_factory=list, sa_column=Column(MutableList.as_mutable(JSON), nullable=False)
+    )
 
     project: Project = Relationship(back_populates="rooms")
     faces: list["Face"] = Relationship(
@@ -87,7 +92,9 @@ class Face(TimestampedModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     room_id: int = Field(foreign_key="room.id", index=True, ondelete="CASCADE")
     label: str = Field(max_length=8)
-    kind: FaceKind = Field(default=FaceKind.WALL)
+    kind: FaceKind = Field(  # type: ignore[call-overload]
+        default=FaceKind.WALL, sa_type=value_enum(FaceKind, "facekind")
+    )
 
     # Segment du mur dans le plan 2D, en cm. Nul pour le sol et le plafond, dont la géométrie
     # se déduit du polygone de la pièce.
@@ -99,7 +106,7 @@ class Face(TimestampedModel, table=True):
     # Revêtement : {"color": "#RRGGBB", "material": "...", "unit_width_cm": n,
     #               "unit_height_cm": n, "pattern": "chevron"} — voir spec §1.
     covering: dict[str, Any] = Field(
-        default_factory=dict, sa_column=Column(JSON, nullable=False)
+        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
     )
 
     room: Room = Relationship(back_populates="faces")
@@ -126,9 +133,11 @@ class FurnitureType(TimestampedModel, table=True):
     name: str = Field(max_length=200)
     category: str = Field(max_length=50, index=True)
 
-    color_slots: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    color_slots: list[str] = Field(
+        default_factory=list, sa_column=Column(MutableList.as_mutable(JSON), nullable=False)
+    )
     parts: list[dict[str, Any]] = Field(
-        default_factory=list, sa_column=Column(JSON, nullable=False)
+        default_factory=list, sa_column=Column(MutableList.as_mutable(JSON), nullable=False)
     )
 
     # Dimensions par défaut proposées à l'instanciation (spec §4.4).
@@ -150,7 +159,9 @@ class Element(TimestampedModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     face_id: int = Field(foreign_key="face.id", index=True, ondelete="CASCADE")
-    kind: ElementKind = Field(default=ElementKind.FURNITURE)
+    kind: ElementKind = Field(  # type: ignore[call-overload]
+        default=ElementKind.FURNITURE, sa_type=value_enum(ElementKind, "elementkind")
+    )
 
     x_offset_cm: float = Field(default=0.0)
     y_offset_cm: float = Field(default=0.0)
@@ -163,9 +174,11 @@ class Element(TimestampedModel, table=True):
     furniture_type_id: int | None = Field(
         default=None, foreign_key="furnituretype.id", index=True, ondelete="SET NULL"
     )
-    colors: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    colors: dict[str, str] = Field(
+        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
+    )
     variant_params: dict[str, Any] = Field(
-        default_factory=dict, sa_column=Column(JSON, nullable=False)
+        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
     )
 
     face: Face = Relationship(back_populates="elements")
@@ -187,6 +200,8 @@ class SharedView(TimestampedModel, table=True):
 
     # {"visible_faces": [...], "transparent_faces": [...], "camera_preset": "...",
     #  "camera_position": [x, y, z]} — voir spec §3.4 et §3.5.
-    state: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    state: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
+    )
 
     project: Project = Relationship(back_populates="shared_views")
