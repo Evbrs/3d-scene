@@ -58,13 +58,20 @@ def wall_direction(start_2d: list[float], end_2d: list[float]) -> Vector3:
     return normalize(to_world(end_2d) - to_world(start_2d))
 
 
-def outward_normal(start_2d: list[float], end_2d: list[float]) -> Vector3:
+def outward_normal(
+    start_2d: list[float], end_2d: list[float], *, counter_clockwise: bool = True
+) -> Vector3:
     """Normale sortante d'un mur (pointant hors de la pièce).
 
-    Valable pour un polygone orienté dans le sens trigonométrique — d'où
-    `ensure_counter_clockwise` en amont. Voir `README.md` pour la vérification numérique.
+    La formule `Yup x direction` ne donne la normale *sortante* que si le mur est parcouru dans
+    le sens trigonométrique du contour. Orienter le polygone ne suffit donc pas : c'est le sens
+    de parcours **du segment** qui compte, et il est stocké tel que l'utilisateur l'a saisi.
+    D'où `counter_clockwise`, qui dit si les segments suivent déjà le bon sens.
+
+    Voir `README.md` pour la vérification numérique.
     """
-    return normalize(np.cross(UP, wall_direction(start_2d, end_2d)))
+    normal = normalize(np.cross(UP, wall_direction(start_2d, end_2d)))
+    return normal if counter_clockwise else -normal
 
 
 def wall_length(start_2d: list[float], end_2d: list[float]) -> float:

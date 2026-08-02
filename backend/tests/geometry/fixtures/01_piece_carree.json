@@ -7,12 +7,13 @@
     "Mur C : de (400,300) à (0,300). Longueur 400. Direction (-1,0,0). Normale = (0,0,1). rotation_y = atan2(0,-1) = 3.1416. Origine = (400,0,300).",
     "Mur D : de (0,300) à (0,0). Longueur 300. Direction (0,0,-1). Normale = (-1,0,0). rotation_y = atan2(1,0) = 1.5708. Origine = (0,0,300).",
     "Chaque mur est une forme locale (u,v) allant de (0,0) à (longueur, 250), extrudée de l'épaisseur 10, décalée de -5 pour être centrée sur l'axe du mur.",
-    "Sol : contour = polygone de la pièce, à la hauteur 0. Plafond : même contour à 250.",
     "Aire au sol = 400 × 300 = 120000 cm².",
     "Centroïde du rectangle = (200, 150) ; en 3D, milieu de la hauteur = (200, 125, 150).",
     "Caméra du dessus : hauteur = plafond + max(400,300) = 250 + 400 = 650. Position (200, 650, 150), cible (200, 0, 150). Demi-cadre = (400/2, 300/2) × 1.05 = (210, 157.5).",
     "Caméra isométrique : distance = 2 × max(400,300,250) = 800, direction (1,1,1)/√3 = 0.5773502692. 800 × 0.5773502692 = 461.8802153517. Position = (200,125,150) + ce vecteur = (661.8802, 586.8802, 611.8802).",
-    "Caméra du mur A : normale rentrante = (0,0,1) ; distance = max(400,250) = 400 ; centre du mur = (200,125,0) ; position = (200,125,400), cible = (200,125,0). Demi-cadre = (400/2, 250/2) × 1.05 = (210, 131.25)."
+    "Sol et plafond : le contour est émis avec son y négué, [[0,0],[400,0],[400,-300],[0,-300]], avec rotation_x = -pi/2 = -1.570796327. R_x(-pi/2) envoie (u, v, 0) sur (u, 0, -v) : le contour négué retombe donc exactement sur le polygone du plan, et la normale locale +Z devient +Y (sol tourné vers le haut).",
+    "Caméras par face : la caméra recule depuis le milieu du mur, le long de la normale rentrante, de 80 % de la profondeur disponible dans la pièce. Mur A : milieu (200,125,0), rentrante (0,0,1) ; projections des sommets = 0, 0, 300, 300 ; profondeur 300 ; recul 240 ; position (200,125,240). Mur B : milieu (400,125,150), rentrante (-1,0,0) ; profondeur 400 ; recul 320 ; position (80,125,150). Mur C : milieu (200,125,300), rentrante (0,0,-1) ; profondeur 300 ; recul 240 ; position (200,125,60). Mur D : milieu (0,125,150), rentrante (1,0,0) ; profondeur 400 ; recul 320 ; position (320,125,150).",
+    "Angles : pi/2 = 1.570796327 et pi = 3.141592654 a 9 decimales."
   ],
   "input": {
     "project_id": 1,
@@ -22,14 +23,93 @@
         "name": "Salon",
         "wall_thickness_cm": 10.0,
         "ceiling_height_cm": 250.0,
-        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "polygon": [
+          [
+            0,
+            0
+          ],
+          [
+            400,
+            0
+          ],
+          [
+            400,
+            300
+          ],
+          [
+            0,
+            300
+          ]
+        ],
         "faces": [
-          {"id": 100, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0, "covering": {}, "elements": []},
-          {"id": 101, "label": "B", "kind": "wall", "start_x_cm": 400, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 300, "covering": {}, "elements": []},
-          {"id": 102, "label": "C", "kind": "wall", "start_x_cm": 400, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 300, "covering": {}, "elements": []},
-          {"id": 103, "label": "D", "kind": "wall", "start_x_cm": 0, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 0, "covering": {}, "elements": []},
-          {"id": 104, "label": "SOL", "kind": "floor", "start_x_cm": null, "start_y_cm": null, "end_x_cm": null, "end_y_cm": null, "covering": {"color": "#cccccc"}, "elements": []},
-          {"id": 105, "label": "PLAFOND", "kind": "ceiling", "start_x_cm": null, "start_y_cm": null, "end_x_cm": null, "end_y_cm": null, "covering": {}, "elements": []}
+          {
+            "id": 100,
+            "label": "A",
+            "kind": "wall",
+            "start_x_cm": 0,
+            "start_y_cm": 0,
+            "end_x_cm": 400,
+            "end_y_cm": 0,
+            "covering": {},
+            "elements": []
+          },
+          {
+            "id": 101,
+            "label": "B",
+            "kind": "wall",
+            "start_x_cm": 400,
+            "start_y_cm": 0,
+            "end_x_cm": 400,
+            "end_y_cm": 300,
+            "covering": {},
+            "elements": []
+          },
+          {
+            "id": 102,
+            "label": "C",
+            "kind": "wall",
+            "start_x_cm": 400,
+            "start_y_cm": 300,
+            "end_x_cm": 0,
+            "end_y_cm": 300,
+            "covering": {},
+            "elements": []
+          },
+          {
+            "id": 103,
+            "label": "D",
+            "kind": "wall",
+            "start_x_cm": 0,
+            "start_y_cm": 300,
+            "end_x_cm": 0,
+            "end_y_cm": 0,
+            "covering": {},
+            "elements": []
+          },
+          {
+            "id": 104,
+            "label": "SOL",
+            "kind": "floor",
+            "start_x_cm": null,
+            "start_y_cm": null,
+            "end_x_cm": null,
+            "end_y_cm": null,
+            "covering": {
+              "color": "#cccccc"
+            },
+            "elements": []
+          },
+          {
+            "id": 105,
+            "label": "PLAFOND",
+            "kind": "ceiling",
+            "start_x_cm": null,
+            "start_y_cm": null,
+            "end_x_cm": null,
+            "end_y_cm": null,
+            "covering": {},
+            "elements": []
+          }
         ]
       }
     ]
@@ -51,10 +131,35 @@
             "face_label": "A",
             "length_cm": 400.0,
             "height_cm": 250.0,
-            "origin": [0.0, 0.0, 0.0],
+            "origin": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation_y": 0.0,
-            "outward_normal": [0.0, 0.0, -1.0],
-            "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+            "outward_normal": [
+              0.0,
+              0.0,
+              -1.0
+            ],
+            "outline": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                400.0,
+                0.0
+              ],
+              [
+                400.0,
+                250.0
+              ],
+              [
+                0.0,
+                250.0
+              ]
+            ],
             "holes": [],
             "extrude_depth_cm": 10.0,
             "extrude_offset_cm": -5.0,
@@ -66,10 +171,35 @@
             "face_label": "B",
             "length_cm": 300.0,
             "height_cm": 250.0,
-            "origin": [400.0, 0.0, 0.0],
-            "rotation_y": -1.5708,
-            "outward_normal": [1.0, 0.0, 0.0],
-            "outline": [[0.0, 0.0], [300.0, 0.0], [300.0, 250.0], [0.0, 250.0]],
+            "origin": [
+              400.0,
+              0.0,
+              0.0
+            ],
+            "rotation_y": -1.570796327,
+            "outward_normal": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "outline": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                300.0,
+                0.0
+              ],
+              [
+                300.0,
+                250.0
+              ],
+              [
+                0.0,
+                250.0
+              ]
+            ],
             "holes": [],
             "extrude_depth_cm": 10.0,
             "extrude_offset_cm": -5.0,
@@ -81,10 +211,35 @@
             "face_label": "C",
             "length_cm": 400.0,
             "height_cm": 250.0,
-            "origin": [400.0, 0.0, 300.0],
-            "rotation_y": 3.1416,
-            "outward_normal": [0.0, 0.0, 1.0],
-            "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+            "origin": [
+              400.0,
+              0.0,
+              300.0
+            ],
+            "rotation_y": 3.141592654,
+            "outward_normal": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "outline": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                400.0,
+                0.0
+              ],
+              [
+                400.0,
+                250.0
+              ],
+              [
+                0.0,
+                250.0
+              ]
+            ],
             "holes": [],
             "extrude_depth_cm": 10.0,
             "extrude_offset_cm": -5.0,
@@ -96,10 +251,35 @@
             "face_label": "D",
             "length_cm": 300.0,
             "height_cm": 250.0,
-            "origin": [0.0, 0.0, 300.0],
-            "rotation_y": 1.5708,
-            "outward_normal": [-1.0, 0.0, 0.0],
-            "outline": [[0.0, 0.0], [300.0, 0.0], [300.0, 250.0], [0.0, 250.0]],
+            "origin": [
+              0.0,
+              0.0,
+              300.0
+            ],
+            "rotation_y": 1.570796327,
+            "outward_normal": [
+              -1.0,
+              0.0,
+              0.0
+            ],
+            "outline": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                300.0,
+                0.0
+              ],
+              [
+                300.0,
+                250.0
+              ],
+              [
+                0.0,
+                250.0
+              ]
+            ],
             "holes": [],
             "extrude_depth_cm": 10.0,
             "extrude_offset_cm": -5.0,
@@ -109,19 +289,63 @@
             "kind": "floor",
             "face_id": 104,
             "face_label": "SOL",
-            "origin": [0.0, 0.0, 0.0],
-            "rotation_x": -1.5708,
-            "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 300.0], [0.0, 300.0]],
+            "origin": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation_x": -1.570796327,
+            "outline": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                400.0,
+                -0.0
+              ],
+              [
+                400.0,
+                -300.0
+              ],
+              [
+                0.0,
+                -300.0
+              ]
+            ],
             "holes": [],
-            "covering": {"color": "#cccccc"}
+            "covering": {
+              "color": "#cccccc"
+            }
           },
           {
             "kind": "ceiling",
             "face_id": 105,
             "face_label": "PLAFOND",
-            "origin": [0.0, 250.0, 0.0],
-            "rotation_x": -1.5708,
-            "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 300.0], [0.0, 300.0]],
+            "origin": [
+              0.0,
+              250.0,
+              0.0
+            ],
+            "rotation_x": -1.570796327,
+            "outline": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                400.0,
+                -0.0
+              ],
+              [
+                400.0,
+                -300.0
+              ],
+              [
+                0.0,
+                -300.0
+              ]
+            ],
             "holes": [],
             "covering": {}
           }
@@ -130,9 +354,21 @@
           {
             "name": "dessus",
             "kind": "orthographic",
-            "position": [200.0, 650.0, 150.0],
-            "target": [200.0, 0.0, 150.0],
-            "up": [0.0, 0.0, -1.0],
+            "position": [
+              200.0,
+              650.0,
+              150.0
+            ],
+            "target": [
+              200.0,
+              0.0,
+              150.0
+            ],
+            "up": [
+              0.0,
+              0.0,
+              -1.0
+            ],
             "half_width_cm": 210.0,
             "half_height_cm": 157.5,
             "face_label": null
@@ -140,27 +376,63 @@
           {
             "name": "isometrique",
             "kind": "perspective",
-            "position": [661.8802, 586.8802, 611.8802],
-            "target": [200.0, 125.0, 150.0],
-            "up": [0.0, 1.0, 0.0],
+            "position": [
+              661.8802,
+              586.8802,
+              611.8802
+            ],
+            "target": [
+              200.0,
+              125.0,
+              150.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ],
             "fov_deg": 50.0,
             "face_label": null
           },
           {
             "name": "orbite",
             "kind": "perspective",
-            "position": [661.8802, 586.8802, 611.8802],
-            "target": [200.0, 125.0, 150.0],
-            "up": [0.0, 1.0, 0.0],
+            "position": [
+              661.8802,
+              586.8802,
+              611.8802
+            ],
+            "target": [
+              200.0,
+              125.0,
+              150.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ],
             "fov_deg": 50.0,
             "face_label": null
           },
           {
             "name": "face-A",
             "kind": "orthographic",
-            "position": [200.0, 125.0, 400.0],
-            "target": [200.0, 125.0, 0.0],
-            "up": [0.0, 1.0, 0.0],
+            "position": [
+              200.0,
+              125.0,
+              240.0
+            ],
+            "target": [
+              200.0,
+              125.0,
+              0.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ],
             "half_width_cm": 210.0,
             "half_height_cm": 131.25,
             "face_label": "A"
@@ -168,9 +440,21 @@
           {
             "name": "face-B",
             "kind": "orthographic",
-            "position": [100.0, 125.0, 150.0],
-            "target": [400.0, 125.0, 150.0],
-            "up": [0.0, 1.0, 0.0],
+            "position": [
+              80.0,
+              125.0,
+              150.0
+            ],
+            "target": [
+              400.0,
+              125.0,
+              150.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ],
             "half_width_cm": 157.5,
             "half_height_cm": 131.25,
             "face_label": "B"
@@ -178,9 +462,21 @@
           {
             "name": "face-C",
             "kind": "orthographic",
-            "position": [200.0, 125.0, -100.0],
-            "target": [200.0, 125.0, 300.0],
-            "up": [0.0, 1.0, 0.0],
+            "position": [
+              200.0,
+              125.0,
+              60.0
+            ],
+            "target": [
+              200.0,
+              125.0,
+              300.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ],
             "half_width_cm": 210.0,
             "half_height_cm": 131.25,
             "face_label": "C"
@@ -188,15 +484,36 @@
           {
             "name": "face-D",
             "kind": "orthographic",
-            "position": [300.0, 125.0, 150.0],
-            "target": [0.0, 125.0, 150.0],
-            "up": [0.0, 1.0, 0.0],
+            "position": [
+              320.0,
+              125.0,
+              150.0
+            ],
+            "target": [
+              0.0,
+              125.0,
+              150.0
+            ],
+            "up": [
+              0.0,
+              1.0,
+              0.0
+            ],
             "half_width_cm": 157.5,
             "half_height_cm": 131.25,
             "face_label": "D"
           }
         ]
       }
+    ]
+  },
+  "revision": {
+    "date": "ticket P6, après revue adversariale",
+    "raison": "Deux valeurs attendues étaient fausses et ont été corrigées APRÈS démonstration de leur inexactitude par la revue — jamais pour faire passer un test. Elles sont redérivées ci-dessous.",
+    "corrections": [
+      "rotation_x du sol et du plafond : R_x(-pi/2) envoie le point local (u, v, 0) sur (u, 0, -v). Le contour était donc posé en miroir, sur des z negatifs, sous aucun mur. C'etait la seule valeur du lot que le champ `reasoning` ne derivait pas. Le contour est desormais emis avec son y negue : (u, -v, 0) retombe sur (u, 0, v), et la normale locale +Z devient +Y (sol tourne vers le haut).",
+      "position des cameras par face : la distance valait max(longueur, hauteur), sans rapport avec la profondeur de la piece. Sur ce rectangle, les cameras face-A (z=+400) et face-C (z=-100) tombaient hors de la piece (z dans [0,300]) : le mur oppose s'interposait. La distance est desormais bornee par la profondeur disponible.",
+      "precision des angles portee de 4 a 9 decimales : a 1e-4 rad pres, un mur de 10 m derive d'environ 1 cm a son extremite."
     ]
   }
 }

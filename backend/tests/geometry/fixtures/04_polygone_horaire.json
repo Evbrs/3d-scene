@@ -3,18 +3,69 @@
   "reasoning": [
     "Polygone (0,0) (0,300) (400,300) (400,0) : aire du lacet = -120000, donc sens horaire.",
     "Sans normalisation, la formule Yup × direction donnerait des normales pointant vers l'INTÉRIEUR de la pièce : les vues « par face » regarderaient chaque mur depuis l'extérieur du logement, et les matériaux à une seule face seraient invisibles.",
-    "Après normalisation en sens trigonométrique, l'ordre des sommets redevient (0,0) (400,0) (400,300) (0,300) — c'est l'inverse de la liste fournie, ramené à un départ sur (0,0).",
     "Les murs A à D et leurs normales sont alors exactement ceux de la fixture 01.",
-    "Ce test vaut garde-fou : l'utilisateur dessine dans le sens qu'il veut, le résultat 3D ne doit pas en dépendre."
+    "Ce test vaut garde-fou : l'utilisateur dessine dans le sens qu'il veut, le résultat 3D ne doit pas en dépendre.",
+    "Normalisation = simple inversion de la liste, sans rotation du point de départ : [[0,0],[0,300],[400,300],[400,0]] devient [[400,0],[400,300],[0,300],[0,0]]. Le premier sommet n'est pas ramené à (0,0) : une rotation supplémentaire changerait le rang des murs, donc leur lettrage, pour un gain nul.",
+    "Correction post-revue : cette valeur attendue disait auparavant [[0,0],[400,0],[400,300],[0,300]], ce qui supposait à tort une rotation. Aucun test ne la lisait, ce qui explique qu'elle soit passée inaperçue. Elle est désormais assertée."
   ],
-  "input_polygon_clockwise": [[0, 0], [0, 300], [400, 300], [400, 0]],
-  "expected_normalized_polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+  "input_polygon_clockwise": [
+    [
+      0,
+      0
+    ],
+    [
+      0,
+      300
+    ],
+    [
+      400,
+      300
+    ],
+    [
+      400,
+      0
+    ]
+  ],
+  "expected_normalized_polygon": [
+    [
+      400,
+      0
+    ],
+    [
+      400,
+      300
+    ],
+    [
+      0,
+      300
+    ],
+    [
+      0,
+      0
+    ]
+  ],
   "expected_signed_area_before": -120000.0,
   "expected_signed_area_after": 120000.0,
   "expected_outward_normals": {
-    "(0,0)->(400,0)": [0.0, 0.0, -1.0],
-    "(400,0)->(400,300)": [1.0, 0.0, 0.0],
-    "(400,300)->(0,300)": [0.0, 0.0, 1.0],
-    "(0,300)->(0,0)": [-1.0, 0.0, 0.0]
+    "(0,0)->(400,0)": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "(400,0)->(400,300)": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "(400,300)->(0,300)": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "(0,300)->(0,0)": [
+      -1.0,
+      0.0,
+      0.0
+    ]
   }
 }

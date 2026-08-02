@@ -125,6 +125,7 @@ def face_view(
     end_2d: list[float],
     height_cm: float,
     outward: Vector3,
+    polygon: list[list[float]] | None = None,
 ) -> CameraPreset:
     """Élévation à plat d'un mur (§3.3), orthographique.
 
@@ -139,9 +140,10 @@ def face_view(
     center[1] = height_cm / 2.0
 
     length = float(np.linalg.norm(end - start))
-    # En projection orthographique, la distance ne change pas la taille apparente : elle doit
-    # seulement placer la caméra hors de la géométrie.
-    distance = max(length, height_cm)
+    # En projection orthographique, la distance ne change pas la taille apparente. Elle doit en
+    # revanche laisser la caméra **à l'intérieur** de la pièce : placée au-delà du mur opposé,
+    # elle aurait ce mur devant elle et ne montrerait plus l'élévation demandée.
+    distance = _inside_distance(center, -outward, polygon, fallback=max(length, height_cm))
 
     return CameraPreset(
         name=f"face-{label}",
@@ -153,6 +155,27 @@ def face_view(
         half_width_cm=length / 2.0 * FRAMING_PADDING,
         half_height_cm=height_cm / 2.0 * FRAMING_PADDING,
     )
+
+
+def _inside_distance(
+    center: Vector3, inward: Vector3, polygon: list[list[float]] | None, fallback: float
+) -> float:
+    """Recul maximal utilisable depuis un mur sans sortir de la pièce.
+
+    On projette les sommets du contour sur l'axe rentrant : la plus grande projection positive
+    est la profondeur disponible. On en garde 80 % pour rester franchement à l'intérieur.
+    """
+    if not polygon:
+        return fallback
+
+    depths = [
+        float(np.dot(np.array([vertex[0], center[1], vertex[1]]) - center, inward))
+        for vertex in polygon
+    ]
+    available = max(depths, default=0.0)
+    if available <= 1.0:
+        return fallback
+    return available * 0.8
 
 
 def degrees_to_radians(degrees: float) -> float:

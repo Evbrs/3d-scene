@@ -13,6 +13,7 @@ import numpy as np
 from app.geometry.cameras import CameraPreset, face_view, isometric_view, orbit_view, top_view
 from app.geometry.furniture import expand_recipe, requires_csg
 from app.geometry.vectors import (
+    bounding_box,
     ensure_counter_clockwise,
     outward_normal,
     round_vector,
@@ -32,6 +33,11 @@ CEILING = "ceiling"
 
 DIGITS = 4
 
+# Les angles sont arrondis plus finement que les longueurs : à 1e-4 rad près, un mur de 10 m
+# dérive d'environ 1 cm à son extrémité. Un angle n'a pas d'unité métier, rien n'oblige à
+# l'arrondir au même pas qu'un centimètre.
+ANGLE_DIGITS = 9
+
 
 def _rect(u_min: float, v_min: float, u_max: float, v_max: float) -> list[list[float]]:
     return [
@@ -42,7 +48,9 @@ def _rect(u_min: float, v_min: float, u_max: float, v_max: float) -> list[list[f
     ]
 
 
-def _wall_node(face: dict[str, Any], room: dict[str, Any]) -> dict[str, Any]:
+def _wall_node(
+    face: dict[str, Any], room: dict[str, Any], *, counter_clockwise: bool
+) -> dict[str, Any]:
     """Un mur extrudé, avec un trou par ouverture.
 
     Approche « simple » de la spec §3.2 : une `THREE.Shape` avec des trous rectangulaires,
@@ -73,8 +81,10 @@ def _wall_node(face: dict[str, Any], room: dict[str, Any]) -> dict[str, Any]:
         "height_cm": round(height, DIGITS),
         # Origine du repère local : le départ du mur, au niveau du sol.
         "origin": round_vector(to_world(start), DIGITS),
-        "rotation_y": round(yaw_from_direction(wall_direction(start, end)), DIGITS),
-        "outward_normal": round_vector(outward_normal(start, end), DIGITS),
+        "rotation_y": round(yaw_from_direction(wall_direction(start, end)), ANGLE_DIGITS),
+        "outward_normal": round_vector(
+            outward_normal(start, end, counter_clockwise=counter_clockwise), DIGITS
+        ),
         "outline": _rect(0.0, 0.0, length, height),
         "holes": holes,
         "extrude_depth_cm": round(thickness, DIGITS),
@@ -89,16 +99,21 @@ def _horizontal_node(
 ) -> dict[str, Any]:
     """Sol ou plafond : le contour de la pièce, à plat.
 
-    `rotation_x = -π/2` amène le repère local `(u, v)` sur le plan horizontal `(x, z)` : le `v`
-    local devient donc l'axe `y` du plan 2D, sans réécriture des coordonnées.
+    Attention au signe. `R_x(-π/2)` envoie le point local `(u, v, 0)` sur `(u, 0, -v)` : le
+    contour se retrouverait **en miroir**, sur des `z` négatifs, donc sous aucun mur. Le contour
+    est donc émis avec son `y` négué, de sorte que `(u, -v, 0)` retombe sur `(u, 0, v)`.
+
+    Ce choix — plutôt que `+π/2`, qui replacerait correctement le contour — préserve en prime
+    l'orientation de la normale : la face locale `+Z` devient `+Y`, donc un sol tourné vers le
+    haut plutôt que vers le bas.
     """
     return {
         "kind": FLOOR if face["kind"] == "floor" else CEILING,
         "face_id": face["id"],
         "face_label": face["label"],
         "origin": [0.0, round(altitude, DIGITS), 0.0],
-        "rotation_x": round(-np.pi / 2.0, DIGITS),
-        "outline": [[round(x, DIGITS), round(y, DIGITS)] for x, y in polygon],
+        "rotation_x": round(-np.pi / 2.0, ANGLE_DIGITS),
+        "outline": [[round(x, DIGITS), round(-y, DIGITS)] for x, y in polygon],
         "holes": [],
         "covering": face.get("covering") or {},
     }
@@ -109,6 +124,9 @@ def _furniture_node(
     face: dict[str, Any],
     room: dict[str, Any],
     furniture_types: dict[int, dict[str, Any]],
+    *,
+    counter_clockwise: bool,
+    polygon: list[list[float]],
 ) -> dict[str, Any] | None:
     """Un meuble posé sur une face, développé en primitives absolues.
 
@@ -127,7 +145,7 @@ def _furniture_node(
         start = [face["start_x_cm"], face["start_y_cm"]]
         end = [face["end_x_cm"], face["end_y_cm"]]
         direction = wall_direction(start, end)
-        inward = -outward_normal(start, end)
+        inward = -outward_normal(start, end, counter_clockwise=counter_clockwise)
         thickness = float(room["wall_thickness_cm"])
 
         position = (
@@ -139,13 +157,17 @@ def _furniture_node(
         )
         rotation_y = yaw_from_direction(direction) + np.radians(float(element["rotation_deg"]))
     else:
-        # Sol et plafond : les décalages sont directement des coordonnées du plan.
+        # Sol et plafond : les décalages sont relatifs au coin de la boîte englobante de la
+        # pièce, pas des coordonnées absolues du plan. C'est la lecture qu'impose la validation
+        # en amont (`element_fits_on_face`, qui borne par l'étendue) ; les traiter comme
+        # absolues plaçait le meuble hors de la pièce dès que celle-ci n'est pas à l'origine.
+        min_x, min_y, _max_x, _max_y = bounding_box(polygon) if polygon else (0.0, 0.0, 0.0, 0.0)
         altitude = 0.0 if face["kind"] == "floor" else float(room["ceiling_height_cm"]) - height
         position = np.array(
             [
-                float(element["x_offset_cm"]) + width / 2.0,
+                min_x + float(element["x_offset_cm"]) + width / 2.0,
                 altitude + height / 2.0,
-                float(element["y_offset_cm"]) + depth / 2.0,
+                min_y + float(element["y_offset_cm"]) + depth / 2.0,
             ]
         )
         rotation_y = np.radians(float(element["rotation_deg"]))
@@ -160,7 +182,7 @@ def _furniture_node(
         "face_label": face["label"],
         "furniture_type_slug": furniture_type["slug"],
         "position": round_vector(position, DIGITS),
-        "rotation_y": round(float(rotation_y), DIGITS),
+        "rotation_y": round(float(rotation_y), ANGLE_DIGITS),
         "size_cm": [round(width, DIGITS), round(height, DIGITS), round(depth, DIGITS)],
         "primitives": [primitive.to_dict(DIGITS) for primitive in primitives],
         "requires_csg": requires_csg(primitives),
@@ -170,7 +192,11 @@ def _furniture_node(
 
 def build_room(room: dict[str, Any], furniture_types: dict[int, dict[str, Any]]) -> dict[str, Any]:
     """Scene graph d'une seule pièce."""
-    polygon = ensure_counter_clockwise(room.get("polygon") or [])
+    raw_polygon = room.get("polygon") or []
+    polygon = ensure_counter_clockwise(raw_polygon)
+    # Les segments de mur sont stockés dans l'ordre de saisie de l'utilisateur : orienter le
+    # polygone ne les réoriente pas. Ce drapeau dit si leur sens de parcours est déjà le bon.
+    counter_clockwise = signed_area(raw_polygon) >= 0
     height = float(room["ceiling_height_cm"])
     faces = list(room.get("faces") or [])
 
@@ -190,11 +216,18 @@ def build_room(room: dict[str, Any], furniture_types: dict[int, dict[str, Any]])
         if face["kind"] == WALL:
             if None in (face["start_x_cm"], face["start_y_cm"], face["end_x_cm"], face["end_y_cm"]):
                 continue
-            nodes.append(_wall_node(face, room))
+            nodes.append(_wall_node(face, room, counter_clockwise=counter_clockwise))
             start = [face["start_x_cm"], face["start_y_cm"]]
             end = [face["end_x_cm"], face["end_y_cm"]]
             cameras.append(
-                face_view(face["label"], start, end, height, outward_normal(start, end))
+                face_view(
+                    face["label"],
+                    start,
+                    end,
+                    height,
+                    outward_normal(start, end, counter_clockwise=counter_clockwise),
+                    polygon,
+                )
             )
         elif polygon:
             altitude = 0.0 if face["kind"] == "floor" else height
@@ -206,7 +239,14 @@ def build_room(room: dict[str, Any], furniture_types: dict[int, dict[str, Any]])
         for element in face.get("elements") or []:
             if element["kind"] in OPENING_KINDS:
                 continue
-            node = _furniture_node(element, face, room, furniture_types)
+            node = _furniture_node(
+                element,
+                face,
+                room,
+                furniture_types,
+                counter_clockwise=counter_clockwise,
+                polygon=polygon,
+            )
             if node is not None:
                 nodes.append(node)
 

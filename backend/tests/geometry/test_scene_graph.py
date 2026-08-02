@@ -9,6 +9,7 @@ lui-même ne prouverait rien.
 """
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -26,24 +27,30 @@ def load(name: str) -> dict[str, Any]:
     return payload
 
 
-def assert_matches(actual: Any, expected: Any, path: str = "") -> None:
+def assert_matches(actual: Any, expected: Any, path: str = "", *, strict_keys: bool = True) -> None:
     """Comparaison récursive avec un chemin lisible en cas d'écart.
 
     Un `assert actual == expected` sur des arbres de cette taille produit un diff illisible ;
     ici l'échec pointe directement le champ fautif.
+
+    `strict_keys` compare aussi l'**ensemble** des clés : sans ça, un champ ajouté ou renommé par
+    le code passerait inaperçu, et la fixture ne décrirait plus qu'un sous-ensemble du contrat.
     """
     if isinstance(expected, dict):
         assert isinstance(actual, dict), f"{path} : dict attendu, reçu {type(actual).__name__}"
+        if strict_keys:
+            unexpected = sorted(set(actual) - set(expected))
+            assert not unexpected, f"{path} : champs non décrits par la fixture : {unexpected}"
         for key, value in expected.items():
             assert key in actual, f"{path}.{key} absent du résultat"
-            assert_matches(actual[key], value, f"{path}.{key}")
+            assert_matches(actual[key], value, f"{path}.{key}", strict_keys=strict_keys)
     elif isinstance(expected, list):
         assert isinstance(actual, list), f"{path} : liste attendue, reçu {type(actual).__name__}"
         assert len(actual) == len(expected), (
             f"{path} : {len(actual)} éléments, {len(expected)} attendus"
         )
         for index, value in enumerate(expected):
-            assert_matches(actual[index], value, f"{path}[{index}]")
+            assert_matches(actual[index], value, f"{path}[{index}]", strict_keys=strict_keys)
     elif isinstance(expected, float):
         assert actual == pytest.approx(expected, abs=1e-4), f"{path} : {actual} ≠ {expected}"
     else:
@@ -275,19 +282,80 @@ def test_a_clockwise_polygon_is_normalised_before_any_computation() -> None:
 
     normalised = ensure_counter_clockwise(clockwise)
     assert signed_area(normalised) == pytest.approx(fixture["expected_signed_area_after"])
+    assert normalised == fixture["expected_normalized_polygon"]
 
 
-def test_the_scene_is_identical_whichever_way_the_room_was_drawn() -> None:
-    """Le sens de saisie de l'utilisateur ne doit avoir aucune conséquence en 3D."""
-    counter_clockwise = load("01_piece_carree.json")["input"]
-    clockwise = json.loads(json.dumps(counter_clockwise))
-    clockwise["rooms"][0]["polygon"] = load("04_polygone_horaire.json")[
-        "input_polygon_clockwise"
-    ]
+def _drawn_clockwise(source: dict[str, Any]) -> dict[str, Any]:
+    """La MÊME pièce, décrite dans l'autre sens : polygone **et** segments de mur inversés.
 
-    assert build_scene_graph(clockwise)["rooms"][0]["cameras"] == (
-        build_scene_graph(counter_clockwise)["rooms"][0]["cameras"]
-    )
+    Ne retourner que le polygone en laissant les faces intactes produirait une entrée
+    incohérente, que personne ne peut saisir — et un test qui passerait quoi qu'il arrive.
+    C'est exactement le défaut qu'avait la première version de ce test.
+    """
+    room = json.loads(json.dumps(source))["rooms"][0]
+    room["polygon"] = list(reversed(room["polygon"]))
+
+    walls = [face for face in room["faces"] if face["kind"] == "wall"]
+    others = [face for face in room["faces"] if face["kind"] != "wall"]
+    reversed_walls = []
+    for index, face in enumerate(reversed(walls)):
+        flipped = dict(face)
+        flipped["start_x_cm"], flipped["end_x_cm"] = face["end_x_cm"], face["start_x_cm"]
+        flipped["start_y_cm"], flipped["end_y_cm"] = face["end_y_cm"], face["start_y_cm"]
+        flipped["label"] = "ABCDEFGH"[index]
+        reversed_walls.append(flipped)
+    room["faces"] = reversed_walls + others
+    return {"project_id": source["project_id"], "rooms": [room]}
+
+
+def test_outward_normals_stay_outward_when_the_room_is_drawn_clockwise() -> None:
+    """Le sens de saisie de l'utilisateur ne doit avoir aucune conséquence sur la 3D.
+
+    Sans cette garantie, une pièce dessinée dans l'autre sens sort avec toutes ses normales
+    retournées vers l'intérieur : les matériaux à une seule face disparaissent et les élévations
+    regardent les murs depuis l'extérieur du logement.
+    """
+    source = load("01_piece_carree.json")["input"]
+    scene = build_scene_graph(_drawn_clockwise(source))
+
+    room = scene["rooms"][0]
+    centroid = (200.0, 150.0)  # centre du rectangle de référence
+
+    for node in room["nodes"]:
+        if node["kind"] != "wall":
+            continue
+        # Un vecteur allant du centre de la pièce vers le mur doit pointer dans le même sens que
+        # la normale sortante.
+        wall_center_x = node["origin"][0] + 0.0
+        wall_center_z = node["origin"][2] + 0.0
+        to_wall = (wall_center_x - centroid[0], wall_center_z - centroid[1])
+        normal = node["outward_normal"]
+        assert to_wall[0] * normal[0] + to_wall[1] * normal[2] > 0, (
+            f"la normale de la face {node['face_label']} pointe vers l'intérieur"
+        )
+
+
+def test_face_cameras_stay_inside_the_room_whichever_way_it_was_drawn() -> None:
+    """Une caméra d'élévation posée hors de la pièce a le mur opposé devant elle."""
+    source = load("01_piece_carree.json")["input"]
+
+    for scene_input in (source, _drawn_clockwise(source)):
+        room = build_scene_graph(scene_input)["rooms"][0]
+        for camera in room["cameras"]:
+            if camera["face_label"] is None:
+                continue
+            x, _y, z = camera["position"]
+            assert 0.0 <= x <= 400.0, f"{camera['name']} est hors de la pièce en x : {x}"
+            assert 0.0 <= z <= 300.0, f"{camera['name']} est hors de la pièce en z : {z}"
+
+
+def test_the_room_area_is_identical_whichever_way_it_was_drawn() -> None:
+    source = load("01_piece_carree.json")["input"]
+
+    direct = build_scene_graph(source)["rooms"][0]
+    reversed_room = build_scene_graph(_drawn_clockwise(source))["rooms"][0]
+
+    assert direct["floor_area_cm2"] == reversed_room["floor_area_cm2"] == 120000.0
 
 
 def test_outward_normals_point_away_from_the_room() -> None:
@@ -305,6 +373,77 @@ def test_outward_normals_point_away_from_the_room() -> None:
 
 
 # --- Robustesse ----------------------------------------------------------------------------------
+
+
+def test_the_floor_lands_under_the_walls_and_not_in_a_mirror() -> None:
+    """`R_x(-pi/2)` envoie (u, v, 0) sur (u, 0, -v) : sans négation du contour, le sol se
+    retrouve en miroir, sur des z négatifs, donc sous aucun mur."""
+    fixture = load("01_piece_carree.json")
+
+    room = build_scene_graph(fixture["input"])["rooms"][0]
+    floor = next(node for node in room["nodes"] if node["kind"] == "floor")
+
+    angle = floor["rotation_x"]
+    sin_a = math.sin(angle)
+    reconstructed = []
+    for u, v in floor["outline"]:
+        # R_x : (y, z) -> (y cos - z sin, y sin + z cos), appliqué au point local (u, v, 0).
+        world_z = v * sin_a
+        reconstructed.append(
+            (round(u + floor["origin"][0], 6), round(world_z + floor["origin"][2], 6))
+        )
+
+    assert sorted(reconstructed) == sorted(
+        (float(x), float(y)) for x, y in fixture["input"]["rooms"][0]["polygon"]
+    ), f"le sol est reconstruit sur {reconstructed}"
+
+
+def test_furniture_on_the_floor_stays_inside_a_room_far_from_the_origin() -> None:
+    """Les décalages au sol sont relatifs à la pièce, pas des coordonnées absolues du plan."""
+    scene = build_scene_graph(
+        {
+            "project_id": 8,
+            "rooms": [
+                {
+                    "id": 80,
+                    "name": "Pièce éloignée",
+                    "wall_thickness_cm": 10.0,
+                    "ceiling_height_cm": 250.0,
+                    "polygon": [[500, 500], [900, 500], [900, 800], [500, 800]],
+                    "faces": [
+                        {
+                            "id": 800, "label": "SOL", "kind": "floor",
+                            "start_x_cm": None, "start_y_cm": None,
+                            "end_x_cm": None, "end_y_cm": None,
+                            "covering": {},
+                            "elements": [
+                                {
+                                    "id": 8000, "kind": "furniture",
+                                    "x_offset_cm": 10, "y_offset_cm": 10,
+                                    "width_cm": 80, "height_cm": 40, "depth_cm": 40,
+                                    "rotation_deg": 0, "furniture_type_id": 1,
+                                    "colors": {}, "variant_params": {},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        {
+            1: {
+                "id": 1, "slug": "table",
+                "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5],
+                           "rel_size": [1, 1, 1], "color_slot": "plateau"}],
+                "color_slots": ["plateau"],
+            }
+        },
+    )
+
+    furniture = next(node for node in scene["rooms"][0]["nodes"] if node["kind"] == "furniture")
+    x, _y, z = furniture["position"]
+    assert 500.0 <= x <= 900.0, f"le meuble est hors de la pièce en x : {x}"
+    assert 500.0 <= z <= 800.0, f"le meuble est hors de la pièce en z : {z}"
 
 
 def test_a_room_without_polygon_produces_an_empty_scene() -> None:

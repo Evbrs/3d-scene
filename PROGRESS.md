@@ -429,3 +429,50 @@ invérifiable statiquement. Corrigé par un helper `withQuery` qui garde les che
 **Non-objectifs tenus** : aucun partage de vue (P8), aucun export PDF (P9), aucun CSG réel — les
 primitives `subtract` sont ignorées à l'affichage plutôt que rendues en plein, ce qui donnerait
 une baignoire pleine au lieu de creuse.
+
+### P6 — corrections après revue adversariale
+
+La revue a rendu **À CORRIGER** avec 3 défauts bloquants, trouvés par recalcul indépendant des
+fixtures et par injection de 13 mutations (les 13 avaient été détectées par les tests existants —
+mais aucun test ne couvrait les zones défaillantes ci-dessous).
+
+1. **BLOQUANT — le sens de saisie du polygone avait bien une conséquence** (critère A4 faux).
+   `ensure_counter_clockwise` n'était appliqué qu'au champ `polygon`, qui ne sert qu'au sol, au
+   plafond, aux caméras d'ensemble et à l'aire. Les murs, eux, sont construits à partir des
+   segments stockés, jamais réorientés. Sur une pièce dessinée dans le sens horaire, **les quatre
+   normales pointaient vers l'intérieur et les quatre caméras étaient hors du logement**.
+   Corrigé : l'orientation du contour est propagée aux segments de mur.
+2. **BLOQUANT — le test A4 ne testait pas A4.** Il ne remplaçait que le polygone en laissant les
+   faces intactes (entrée incohérente que personne ne peut saisir), puis ne comparait que les
+   caméras — dont les valeurs sont invariantes par inversion. Il passait quoi qu'il arrive.
+   Remplacé par trois tests qui retournent réellement la pièce et vérifient les normales,
+   l'appartenance des caméras à la pièce, et l'aire.
+3. **BLOQUANT — sol et plafond en miroir.** `R_x(-π/2)` envoie le point local `(u, v, 0)` sur
+   `(u, 0, -v)` : le contour était posé sur des `z` négatifs, donc **sous aucun mur**, et le
+   mobilier au sol atterrissait dans le demi-espace opposé. C'était la seule valeur de fixture
+   que le champ `reasoning` ne dérivait pas — d'où le fait qu'elle ait traversé la première
+   passe. Le contour est désormais émis avec son `y` négué.
+4. **Caméras d'élévation hors de la pièce** : la distance de recul valait `max(longueur,
+   hauteur)`, sans rapport avec la profondeur de la pièce. Elle est maintenant bornée par la
+   profondeur réellement disponible (80 %).
+5. **Mobilier au sol mal placé** : les décalages étaient traités comme des coordonnées absolues
+   du plan, alors que la validation amont les borne comme des offsets relatifs à la pièce. Une
+   pièce éloignée de l'origine plaçait ses meubles à des mètres de là.
+6. **Fixture 04 : une valeur attendue morte et fausse** — `expected_normalized_polygon` supposait
+   une rotation du point de départ que le code ne fait pas. Aucun test ne la lisait, ce qui
+   explique qu'elle soit passée inaperçue. Corrigée et désormais assertée.
+7. **`assert_matches` ne comparait qu'un sous-ensemble** : un champ ajouté par le code passait
+   inaperçu. Comparaison stricte des clés ajoutée.
+8. **Précision des angles** portée de 4 à 9 décimales : à 1e-4 rad près, un mur de 10 m dérive
+   d'environ 1 cm à son extrémité.
+
+**Modification de fixtures — assumée et documentée.** `CLAUDE.md` interdit d'ajuster une fixture
+pour faire passer un test. Ici la revue a **démontré** que deux valeurs étaient fausses (sol en
+miroir, caméras hors de la pièce) avant toute modification du code. Les valeurs corrigées sont
+redérivées à la main dans le champ `reasoning`, et un bloc `revision` de la fixture 01 explique
+ce qui a changé et pourquoi. Aucune fixture n'a été touchée pour accommoder du code.
+
+**Non-vacuité vérifiée** : en réinjectant chacun des quatre défauts, les tests correspondants
+échouent (1 → 2 tests, 2 → 2 tests, 3 → 2 tests, 4 → 1 test).
+
+Suite : **180 tests sur SQLite, 181 sur PostgreSQL**, `ruff` et `mypy --strict` verts.
