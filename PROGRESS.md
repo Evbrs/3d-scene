@@ -6,6 +6,9 @@ travail, pour ne pas redécouvrir ni contredire ce qui existe déjà.
 
 Statuts : `à faire` · `en cours` · `en revue` · `fait`
 
+Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archivés dans
+`docs/plans/`, pour qu'une revue reste rejouable contre le plan effectivement validé.
+
 ## Séquencement (`docs/plan-generation-ia.md` §5)
 
 | Ticket | Contenu | Dépend de | Statut |
@@ -13,7 +16,7 @@ Statuts : `à faire` · `en cours` · `en revue` · `fait`
 | P0 | Scaffolding + CI | — | **fait** |
 | P1 | Modèles SQLModel + migrations Alembic + admin SQLAdmin | P0 | **fait** |
 | P2 | Auth JWT, permissions objet | P1 | **fait** |
-| P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | à faire |
+| P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | **fait** |
 | P4 | Éditeur 2D (Vue + Konva) | P3 | à faire |
 | P5 | Catalogue `FurnitureType` paramétrique | P1 | à faire |
 | P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | à faire |
@@ -205,3 +208,37 @@ mot de passe jamais exposé dans le back-office.
 
 **À traiter en P12** : la limitation de débit est en mémoire du processus (insuffisant en
 multi-workers, à porter sur Redis) ; pas de révocation de jeton.
+
+### P3 — API CRUD du plan 2D · **fait**
+
+19 routes exposées (`/api/projects`, `/api/rooms`, `/api/faces`, `/api/elements`), schémas
+Pydantic imbriqués distincts des modèles, lettrage automatique des faces.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| CRUD complet projet / pièce / face / élément | ✅ | `tests/test_plan_api.py` |
+| Créer une pièce génère murs lettrés + sol + plafond | ✅ | `test_creating_a_room_generates_lettered_walls_plus_floor_and_ceiling` — 4 murs A–D, orientation des segments vérifiée |
+| Modifier le polygone préserve revêtements et éléments | ✅ | `test_growing_the_polygon_adds_walls_and_keeps_the_existing_ones` (identifiant de face conservé) |
+| Version périmée → 409 sans écrasement | ✅ | `test_a_stale_version_is_rejected_with_409` |
+| Toutes les routes authentifiées, aucun objet d'autrui atteignable | ✅ | `test_every_route_is_authenticated` (14 routes), `test_another_account_cannot_reach_the_whole_tree` (9 accès) |
+| Entrées invalides refusées (422) | ✅ | polygones dégénérés, couleurs non hexadécimales, dimensions négatives, champs interdits |
+| Arbre complet en une requête | ✅ | `test_reading_a_project_returns_the_whole_nested_tree` |
+
+Suite complète : **95 tests sur SQLite, 96 sur PostgreSQL**, `ruff` et `mypy --strict` verts.
+
+**Décisions prises pendant le ticket**
+
+- Les faces ne sont pas créables ni supprimables par l'API : elles découlent du polygone. Un test
+  vérifie que ces verbes renvoient bien 405.
+- La resynchronisation des faces est non destructive (conservation par étiquette), pour qu'une
+  correction de plan ne détruise pas les revêtements et les meubles déjà posés.
+- Lettrage A…Z puis AA, AB… : une pièce en L peut dépasser 26 murs, et recommencer à « A »
+  violerait la contrainte d'unicité `(room_id, label)` posée en P1.
+- Le verrouillage optimiste est *opt-in* : `version` absent = écriture directe, `version` fourni
+  et périmé = 409 avec `X-Current-Version`.
+- `extra="forbid"` sur tous les schémas d'entrée, contre l'assignation en masse.
+- Les plans de tickets clos sont archivés dans `docs/plans/` (changement de convention par
+  rapport au `PLAN.md` unique : une revue lancée après le ticket suivant ne pouvait plus lire le
+  plan qu'elle devait vérifier).

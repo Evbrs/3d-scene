@@ -42,6 +42,7 @@ from app.main import app as fastapi_app  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 ADMIN_PASSWORD = "motdepasse-admin-de-test-2026"
+USER_PASSWORD = "motdepasse-utilisateur-2026"
 
 
 def is_sqlite(url: str) -> bool:
@@ -92,6 +93,43 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     fastapi_app.dependency_overrides.clear()
+
+
+async def _authenticated_client(client: AsyncClient, email: str) -> AsyncClient:
+    """Client HTTP porteur d'un jeton d'accès pour `email` (compte créé au passage)."""
+    registered = await client.post(
+        "/api/auth/register", json={"email": email, "password": USER_PASSWORD}
+    )
+    assert registered.status_code == 201, registered.text
+    tokens = await client.post(
+        "/api/auth/token", data={"username": email, "password": USER_PASSWORD}
+    )
+    assert tokens.status_code == 200, tokens.text
+    client.headers["Authorization"] = f"Bearer {tokens.json()['access_token']}"
+    return client
+
+
+@pytest.fixture
+async def auth_client(client: AsyncClient) -> AsyncClient:
+    """Client authentifié — l'utilisateur « principal » des tests d'API."""
+    return await _authenticated_client(client, "titulaire@exemple.fr")
+
+
+@pytest.fixture
+async def other_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """Second client authentifié, avec son propre compte.
+
+    Transport distinct de `client` : partager l'instance écraserait l'en-tête d'autorisation du
+    premier compte, et les tests de cloisonnement ne prouveraient plus rien.
+    """
+
+    async def _override_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    fastapi_app.dependency_overrides[get_session] = _override_session
+    transport = ASGITransport(app=fastapi_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield await _authenticated_client(ac, "tiers@exemple.fr")
 
 
 @pytest.fixture
