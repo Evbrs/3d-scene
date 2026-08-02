@@ -740,3 +740,77 @@ async def test_clearing_a_covering_is_possible(auth_client: AsyncClient) -> None
 
     assert cleared.status_code == 200
     assert cleared.json()["covering"] == {}
+
+
+# --- Régressions signalées à l'usage ---------------------------------------------------------
+
+
+async def test_moving_a_vertex_keeps_the_walls_and_their_elements(
+    auth_client: AsyncClient,
+) -> None:
+    """Déformer une pièce ne doit rien détruire.
+
+    Déplacer un sommet change les coordonnées de deux murs sans changer leur nombre : un
+    appariement par géométrie les croyait disparus et supprimait revêtements et meubles. C'est le
+    geste le plus courant de l'éditeur — il ne peut pas être destructeur.
+    """
+    room = await _room_with_faces(auth_client)
+    face_a = next(face for face in room["faces"] if face["label"] == "A")
+    await auth_client.patch(f"/api/faces/{face_a['id']}", json={"covering": {"color": "#ff0000"}})
+    await auth_client.post(
+        f"/api/faces/{face_a['id']}/elements",
+        json={"kind": "window", "x_offset_cm": 100, "y_offset_cm": 100,
+              "width_cm": 90, "height_cm": 110},
+    )
+
+    deforme: list[list[float]] = [[0.0, 0.0], [420.0, 0.0], [420.0, 300.0], [0.0, 300.0]]
+    updated = await auth_client.patch(f"/api/rooms/{room['id']}", json={"polygon": deforme})
+
+    assert updated.status_code == 200, updated.text
+    walls = [face for face in updated.json()["faces"] if face["kind"] == "wall"]
+    assert sorted(face["label"] for face in walls) == ["A", "B", "C", "D"]
+
+    survivor = next(face for face in walls if face["label"] == "A")
+    assert survivor["id"] == face_a["id"], "le mur A a été recréé au lieu d'être déplacé"
+    assert survivor["covering"] == {"color": "#ff0000"}
+    assert len(survivor["elements"]) == 1
+    assert (survivor["end_x_cm"], survivor["end_y_cm"]) == (420, 0)
+
+
+async def test_shrinking_a_wall_refits_its_elements(auth_client: AsyncClient) -> None:
+    """Un élément qui déborderait après déformation est ramené dans le mur.
+
+    Le laisser dehors produirait une ouverture percée hors du mur ; le supprimer ferait perdre
+    son travail à l'utilisateur pour un simple déplacement de sommet.
+    """
+    room = await _room_with_faces(auth_client)
+    face_a = next(face for face in room["faces"] if face["label"] == "A")
+    await auth_client.post(
+        f"/api/faces/{face_a['id']}/elements",
+        json={"kind": "window", "x_offset_cm": 300, "y_offset_cm": 100,
+              "width_cm": 90, "height_cm": 110},
+    )
+
+    retreci: list[list[float]] = [[0.0, 0.0], [200.0, 0.0], [200.0, 300.0], [0.0, 300.0]]
+    updated = await auth_client.patch(f"/api/rooms/{room['id']}", json={"polygon": retreci})
+
+    assert updated.status_code == 200, updated.text
+    survivor = next(f for f in updated.json()["faces"] if f["label"] == "A")
+    element = survivor["elements"][0]
+    assert element["x_offset_cm"] + element["width_cm"] <= 200, (
+        f"la fenêtre déborde toujours : x={element['x_offset_cm']} l={element['width_cm']}"
+    )
+
+
+async def test_inserting_a_vertex_still_matches_by_geometry(auth_client: AsyncClient) -> None:
+    """L'autre geste ne doit pas régresser : insérer un sommet garde chaque mur sur sa géométrie."""
+    room = await _room_with_faces(auth_client)
+    face_a = next(face for face in room["faces"] if face["label"] == "A")
+    await auth_client.patch(f"/api/faces/{face_a['id']}", json={"covering": {"color": "#00ff00"}})
+
+    decale: list[list[float]] = [[-100.0, 150.0], *CARRE]
+    updated = await auth_client.patch(f"/api/rooms/{room['id']}", json={"polygon": decale})
+
+    survivor = next(f for f in updated.json()["faces"] if f["id"] == face_a["id"])
+    assert (survivor["start_x_cm"], survivor["end_x_cm"]) == (0, 400)
+    assert survivor["covering"] == {"color": "#00ff00"}

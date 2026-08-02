@@ -5,11 +5,19 @@ lettrées automatiquement » reste valable) : les murs d'une pièce sont lettré
 l'ordre du polygone, et le sol et le plafond sont des faces à part entière (§1 : « plafond en
 face à part entière »).
 
-**Les murs sont identifiés par leur géométrie, pas par leur rang.** Un appariement par rang
-(« le mur n° 2 reste le mur n° 2 ») paraît naturel mais est faux dès qu'un sommet est inséré
-ailleurs qu'en fin de polygone : tous les murs suivants glissent d'un cran et héritent du
-revêtement et des meubles de leur voisin. Le lettrage, lui, reste bien positionnel — c'est un
-rang de lecture du plan, pas une identité.
+**L'identité d'un mur dépend de ce que l'utilisateur vient de faire.** Deux gestes produisent des
+polygones différents et exigent des appariements opposés :
+
+- **Déplacer un sommet** ne change pas le nombre de murs, mais change les coordonnées de deux
+  d'entre eux. Un appariement par géométrie les croirait disparus et les supprimerait — avec
+  leur revêtement et leurs meubles. Ici, c'est le **rang** qui fait l'identité.
+- **Insérer ou retirer un sommet** change le nombre de murs et décale tous les rangs suivants. Un
+  appariement par rang ferait alors hériter chaque mur du revêtement de son voisin. Ici, c'est la
+  **géométrie** qui fait l'identité.
+
+Le nombre de murs avant/après suffit à distinguer les deux cas, et c'est une information qu'on a
+déjà. Le lettrage, lui, reste toujours positionnel : c'est un rang de lecture du plan, pas une
+identité.
 """
 
 from string import ascii_uppercase
@@ -81,6 +89,19 @@ def wall_segments(polygon: list[list[float]]) -> list[Segment]:
     return segments
 
 
+def _label_rank(label: str) -> int:
+    """Rang d'une étiquette de mur (« A » → 0, « Z » → 25, « AA » → 26).
+
+    Trier sur la chaîne brute placerait « AA » entre « A » et « B ».
+    """
+    rank = 0
+    for character in label:
+        if not character.isalpha():
+            return 10**6  # étiquette temporaire : reléguée en fin de tri
+        rank = rank * 26 + (ord(character.upper()) - 64)
+    return rank - 1
+
+
 def _same_segment(face: Face, segment: Segment) -> bool:
     coordinates = (face.start_x_cm, face.start_y_cm, face.end_x_cm, face.end_y_cm)
     if any(value is None for value in coordinates):
@@ -121,15 +142,25 @@ async def sync_room_faces(
     existing_walls = [face for face in existing if face.kind is FaceKind.WALL]
     segments = wall_segments(room.polygon)
 
-    # --- Appariement par géométrie -----------------------------------------------------------
+    # --- Appariement ---------------------------------------------------------------------------
     matched: dict[int, Face] = {}
     unmatched_walls = list(existing_walls)
-    for index, segment in enumerate(segments):
-        for face in unmatched_walls:
-            if _same_segment(face, segment):
-                matched[index] = face
-                unmatched_walls.remove(face)
-                break
+
+    if existing_walls and len(existing_walls) == len(segments):
+        # Même nombre de murs : l'utilisateur a déformé la pièce sans en ajouter ni en retirer.
+        # Les murs gardent leur rang, donc leur identité, et se contentent de nouvelles
+        # coordonnées.
+        ordered = sorted(existing_walls, key=lambda face: _label_rank(face.label))
+        matched = dict(enumerate(ordered))
+        unmatched_walls = []
+    else:
+        # Le nombre de murs a changé : seuls ceux dont la géométrie est intacte sont conservés.
+        for index, segment in enumerate(segments):
+            for face in unmatched_walls:
+                if _same_segment(face, segment):
+                    matched[index] = face
+                    unmatched_walls.remove(face)
+                    break
 
     # --- Refus de la perte silencieuse -------------------------------------------------------
     doomed = [face for face in unmatched_walls if face.elements]
@@ -189,7 +220,35 @@ async def sync_room_faces(
             await session.delete(face)
 
     await session.flush()
-    return await _load_faces(session, room.id or 0)
+    faces = await _load_faces(session, room.id or 0)
+    _refit_elements(faces, room)
+    await session.flush()
+    return faces
+
+
+def _refit_elements(faces: list[Face], room: Room) -> None:
+    """Ramène dans leur mur les éléments qu'un raccourcissement a fait déborder.
+
+    L'alternative — les laisser tels quels — produit une ouverture percée en dehors du mur, donc
+    une géométrie 3D absurde. Les supprimer serait pire : l'utilisateur perdrait son travail pour
+    avoir déplacé un sommet. On les repousse donc à l'intérieur, ce qui reste visible et
+    corrigeable d'un coup de souris.
+    """
+    for face in faces:
+        if face.kind is not FaceKind.WALL or None in (
+            face.start_x_cm, face.start_y_cm, face.end_x_cm, face.end_y_cm
+        ):
+            continue
+        length = (
+            (float(face.end_x_cm or 0) - float(face.start_x_cm or 0)) ** 2
+            + (float(face.end_y_cm or 0) - float(face.start_y_cm or 0)) ** 2
+        ) ** 0.5
+        for element in face.elements:
+            if element.width_cm > length:
+                element.width_cm = max(1.0, length)
+            maximum = length - element.width_cm
+            if element.x_offset_cm > maximum:
+                element.x_offset_cm = max(0.0, maximum)
 
 
 def element_fits_on_face(element: Element, face: Face, room: Room) -> str | None:

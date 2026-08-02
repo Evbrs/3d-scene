@@ -41,10 +41,14 @@ function isFurniture(node: SceneNode): node is FurnitureNode {
 const walls = computed(() =>
   props.room.nodes.filter(isWall).map((node) => ({
     node,
-    geometry: new THREE.ExtrudeGeometry(buildShape(node.outline, node.holes), {
-      depth: node.extrude_depth_cm,
-      bevelEnabled: false,
-    }),
+    geometry: (() => {
+      const geometry = new THREE.ExtrudeGeometry(buildShape(node.outline, node.holes), {
+        depth: node.extrude_depth_cm,
+        bevelEnabled: false,
+      })
+      geometry.translate(0, 0, node.extrude_offset_cm)
+      return geometry
+    })(),
   })),
 )
 
@@ -76,6 +80,8 @@ const furniture = computed(() =>
       :visible="isVisible(visibility[wall.node.face_label])"
       :user-data="{ faceLabel: wall.node.face_label }"
     >
+      <!-- `extrude_offset_cm` recule l'extrusion d'une demi-épaisseur : sans lui le mur est
+           posé d'un seul côté de son axe, et les angles de la pièce ne se rejoignent pas. -->
       <TresMesh
         :position="vec3(wall.node.origin)"
         :rotation-y="wall.node.rotation_y"

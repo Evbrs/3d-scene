@@ -1,12 +1,14 @@
 <script setup lang="ts">
 /**
- * Viewer 3D (ticket P7) : caméras, isolement de face, transparence, capture d'image.
+ * Viewer 3D (ticket P7) : caméras, isolement de face, transparence, capture, partage.
  *
- * Toute la géométrie vient du scene graph calculé par le backend (spec §3.1). Cette vue ne fait
- * qu'orchestrer l'affichage.
+ * Toute la géométrie vient du scene graph calculé par le backend (spec §3.1). Cette vue
+ * n'orchestre que l'affichage.
  */
+import { OrbitControls } from '@tresjs/cientos'
 import { TresCanvas } from '@tresjs/core'
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 
 import * as api from '@/api/client'
 import type { CameraPreset, SceneGraph } from '@/api/types'
@@ -22,36 +24,90 @@ import {
 } from '@/viewer/visibility'
 
 const props = defineProps<{ projectId: string }>()
+const route = useRoute()
 
 const scene = shallowRef<SceneGraph | null>(null)
 const roomIndex = ref(0)
 const activeCamera = ref('isometrique')
 const visibility = ref<Record<string, FaceVisibility>>({})
 const error = ref<string | null>(null)
+const loading = ref(false)
 const canvasHost = ref<HTMLElement | null>(null)
+const shareUrl = ref<string | null>(null)
 
 const room = computed(() => scene.value?.rooms[roomIndex.value] ?? null)
 
 const faceLabels = computed(() => {
-  const labels = new Set<string>()
+  const labels: string[] = []
   room.value?.nodes.forEach((node) => {
-    if ('face_label' in node && node.face_label) labels.add(node.face_label)
+    if ('face_label' in node && node.face_label && !labels.includes(node.face_label)) {
+      labels.push(node.face_label)
+    }
   })
-  return [...labels]
+  // Murs d'abord, dans l'ordre alphabétique, puis sol et plafond.
+  return labels.sort((a, b) => {
+    const horizontal = (label: string): number => (label === 'SOL' || label === 'PLAFOND' ? 1 : 0)
+    if (horizontal(a) !== horizontal(b)) return horizontal(a) - horizontal(b)
+    return a.localeCompare(b)
+  })
 })
 
 const camera = computed<CameraPreset | null>(
   () => room.value?.cameras.find((preset) => preset.name === activeCamera.value) ?? null,
 )
 
-onMounted(async () => {
+const isOrbit = computed(() => activeCamera.value === 'orbite')
+
+const cameraLabels: Record<string, string> = {
+  dessus: 'Vue du dessus',
+  isometrique: 'Isométrique',
+  orbite: 'Orbite libre',
+}
+
+function labelFor(preset: CameraPreset): string {
+  return cameraLabels[preset.name] ?? `Élévation ${preset.face_label}`
+}
+
+/**
+ * Charge la scène.
+ *
+ * `preserveVisibility` garde les réglages d'affichage lors d'un rechargement : sinon, toute
+ * modification du plan remettrait à zéro l'isolement que l'utilisateur venait de composer.
+ */
+async function load(preserveVisibility = false): Promise<void> {
+  loading.value = true
+  error.value = null
   try {
+    const previous = { ...visibility.value }
     scene.value = await api.readSceneGraph(Number(props.projectId))
-    visibility.value = showEverything(faceLabels.value)
+    const labels = faceLabels.value
+    visibility.value = preserveVisibility
+      ? Object.fromEntries(labels.map((label) => [label, previous[label] ?? 'visible']))
+      : defaultVisibility(labels)
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : String(caught)
+  } finally {
+    loading.value = false
   }
-})
+}
+
+/**
+ * Le plafond est masqué au départ.
+ *
+ * Une pièce fermée par ses six faces ne montre rien de son intérieur : la vue d'ensemble
+ * ressemble à un bloc plein. Retirer le plafond est la convention des vues de plan 3D, et il
+ * reste réaffichable en un clic.
+ */
+function defaultVisibility(labels: string[]): Record<string, FaceVisibility> {
+  const state = showEverything(labels)
+  if ('PLAFOND' in state) state.PLAFOND = 'hidden'
+  return state
+}
+
+onMounted(() => load())
+
+// Revenir depuis l'éditeur doit montrer le plan à jour, pas la scène d'il y a dix minutes.
+watch(() => route.fullPath, () => load(true))
 
 function cycle(label: string): void {
   visibility.value = { ...visibility.value, [label]: nextVisibility(visibility.value[label]) }
@@ -64,48 +120,62 @@ function isolateFace(label: string): void {
 }
 
 function resetVisibility(): void {
-  visibility.value = showEverything(faceLabels.value)
+  visibility.value = defaultVisibility(faceLabels.value)
 }
 
 /**
- * Capture de la vue courante en PNG (spec §3.5).
+ * Capture PNG de la vue courante (spec §3.5).
  *
  * `preserveDrawingBuffer` est indispensable : sans lui, le canvas WebGL est vidé après chaque
  * rendu et `toDataURL` renvoie une image noire.
  */
-const shareUrl = ref<string | null>(null)
-const shareError = ref<string | null>(null)
-
-/** Crée un lien de partage figeant l'état d'affichage courant (spec §3.5). */
-async function share(): Promise<void> {
-  shareError.value = null
-  try {
-    const state = toViewState(visibility.value, activeCamera.value)
-    const created = await api.createSharedView(Number(props.projectId), {
-      ...state,
-      room_index: roomIndex.value,
-    })
-    shareUrl.value = `${window.location.origin}/partage/${created.token}`
-  } catch (caught) {
-    shareError.value = caught instanceof Error ? caught.message : String(caught)
-  }
-}
-
 function capture(): void {
   const canvas = canvasHost.value?.querySelector('canvas')
   if (!canvas) return
   const link = document.createElement('a')
-  link.download = `vue-${activeCamera.value}.png`
+  link.download = `${room.value?.name ?? 'vue'}-${activeCamera.value}.png`
   link.href = canvas.toDataURL('image/png')
   link.click()
+}
+
+async function share(): Promise<void> {
+  error.value = null
+  try {
+    const created = await api.createSharedView(Number(props.projectId), {
+      ...toViewState(visibility.value, activeCamera.value),
+      room_index: roomIndex.value,
+    })
+    shareUrl.value = `${window.location.origin}/partage/${created.token}`
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : String(caught)
+  }
 }
 </script>
 
 <template>
   <section v-if="room">
-    <header class="titre">
-      <h1>Vue 3D — {{ room.name }}</h1>
-      <p>{{ (room.floor_area_cm2 / 10000).toFixed(2) }} m² au sol</p>
+    <header class="entete">
+      <div>
+        <h1>{{ room.name }}</h1>
+        <p class="sous-titre">
+          Vue 3D · {{ (room.floor_area_cm2 / 10000).toFixed(2) }} m² au sol
+        </p>
+      </div>
+      <div class="entete-actions">
+        <button
+          type="button"
+          :disabled="loading"
+          @click="load(true)"
+        >
+          ⟳ Recharger
+        </button>
+        <RouterLink
+          class="bouton-lien"
+          :to="`/projets/${props.projectId}/plan`"
+        >
+          ← Retour au plan 2D
+        </RouterLink>
+      </div>
     </header>
 
     <div class="disposition">
@@ -115,7 +185,8 @@ function capture(): void {
       >
         <TresCanvas
           v-if="camera"
-          clear-color="#f0f2f5"
+          :key="activeCamera"
+          clear-color="#eef1f5"
           :preserve-drawing-buffer="true"
           :window-size="false"
         >
@@ -125,7 +196,7 @@ function capture(): void {
             :look-at="vec3(camera.target)"
             :fov="camera.fov_deg ?? 50"
             :near="1"
-            :far="20000"
+            :far="40000"
           />
           <TresOrthographicCamera
             v-else
@@ -136,14 +207,24 @@ function capture(): void {
             :right="camera.half_width_cm ?? 100"
             :top="camera.half_height_cm ?? 100"
             :bottom="-(camera.half_height_cm ?? 100)"
-            :near="-10000"
-            :far="20000"
+            :near="0.1"
+            :far="40000"
           />
 
-          <TresAmbientLight :intensity="1.1" />
+          <OrbitControls
+            v-if="isOrbit"
+            :target="camera.target"
+            :enable-damping="true"
+          />
+
+          <TresAmbientLight :intensity="1.4" />
           <TresDirectionalLight
-            :position="vec3([400, 800, 600])"
-            :intensity="1.4"
+            :position="vec3([600, 1200, 900])"
+            :intensity="2"
+          />
+          <TresDirectionalLight
+            :position="vec3([-600, 500, -400])"
+            :intensity="0.8"
           />
 
           <SceneRenderer
@@ -165,15 +246,21 @@ function capture(): void {
               :aria-pressed="preset.name === activeCamera"
               @click="activeCamera = preset.name"
             >
-              {{ preset.name }}
+              {{ labelFor(preset) }}
             </button>
           </li>
         </ul>
+        <p
+          v-if="isOrbit"
+          class="aide"
+        >
+          Glisser pour tourner, molette pour zoomer.
+        </p>
 
         <h2>Faces</h2>
         <p class="aide">
           Trois états : visible, transparente, masquée. La transparence garde le contexte spatial
-          au lieu de le supprimer.
+          au lieu de le supprimer. Le plafond est masqué au départ pour laisser voir l'intérieur.
         </p>
         <table>
           <thead>
@@ -185,7 +272,7 @@ function capture(): void {
                 État
               </th>
               <th scope="col">
-                Isoler
+                <span class="sr">Action</span>
               </th>
             </tr>
           </thead>
@@ -200,6 +287,8 @@ function capture(): void {
               <td>
                 <button
                   type="button"
+                  class="etat"
+                  :data-etat="visibility[label] ?? 'visible'"
                   :aria-label="`Face ${label} : ${VISIBILITY_LABELS[visibility[label] ?? 'visible']}. Changer d'état.`"
                   @click="cycle(label)"
                 >
@@ -223,20 +312,20 @@ function capture(): void {
             type="button"
             @click="resetVisibility"
           >
-            Tout afficher
+            Réinitialiser
           </button>
           <button
             type="button"
             data-variant="primary"
             @click="capture"
           >
-            Capturer cette vue
+            📷 Capturer
           </button>
           <button
             type="button"
             @click="share"
           >
-            Partager
+            🔗 Partager
           </button>
         </div>
 
@@ -244,7 +333,7 @@ function capture(): void {
           v-if="shareUrl"
           class="partage"
         >
-          <label for="lien-partage">Lien de partage (lecture seule, sans compte)</label>
+          <label for="lien-partage">Lien public (lecture seule, sans compte)</label>
           <input
             id="lien-partage"
             :value="shareUrl"
@@ -253,11 +342,11 @@ function capture(): void {
           >
         </p>
         <p
-          v-if="shareError"
+          v-if="error"
           class="erreur"
           role="alert"
         >
-          {{ shareError }}
+          {{ error }}
         </p>
       </aside>
     </div>
@@ -276,35 +365,62 @@ function capture(): void {
 </template>
 
 <style scoped>
-.titre {
+.entete {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.entete h1 {
+  margin: 0;
+}
+
+.entete-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.sous-titre {
+  margin: 0;
+  color: var(--texte-doux);
+}
+
+.bouton-lien {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--bordure);
+  border-radius: 0.35rem;
+  text-decoration: none;
 }
 
 .disposition {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 22rem;
+  grid-template-columns: minmax(0, 1fr) 23rem;
   gap: 1.5rem;
   align-items: start;
 }
 
-@media (max-width: 60rem) {
+@media (max-width: 68rem) {
   .disposition {
     grid-template-columns: 1fr;
   }
 }
 
 .scene {
-  height: 32rem;
+  height: 38rem;
   border: 1px solid var(--bordure);
   border-radius: 0.5rem;
   overflow: hidden;
+  background: #eef1f5;
 }
 
 .cameras {
   list-style: none;
   padding: 0;
+  margin: 0 0 0.5rem;
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
@@ -328,6 +444,21 @@ td {
   text-align: left;
 }
 
+.etat[data-etat='visible'] {
+  border-color: #0a5c2c;
+  color: #0a5c2c;
+}
+
+.etat[data-etat='transparent'] {
+  border-color: #8a6d0f;
+  color: #8a6d0f;
+}
+
+.etat[data-etat='hidden'] {
+  border-color: var(--bordure);
+  color: var(--texte-doux);
+}
+
 .aide {
   color: var(--texte-doux);
   font-size: 0.9rem;
@@ -336,11 +467,19 @@ td {
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.6rem;
   margin-top: 1rem;
 }
 
 .partage {
   margin-top: 0.75rem;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 </style>

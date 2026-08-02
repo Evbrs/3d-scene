@@ -1,9 +1,9 @@
-import { BoxGeometry, CylinderGeometry, Shape } from 'three'
+import { BoxGeometry, CylinderGeometry, ExtrudeGeometry, Shape } from 'three'
 import { describe, expect, it } from 'vitest'
 
 import { buildShape, primitiveGeometry } from '@/viewer/geometry'
 
-const OUTLINE = [
+const OUTLINE: number[][] = [
   [0, 0],
   [400, 0],
   [400, 250],
@@ -82,5 +82,65 @@ describe('primitives de mobilier', () => {
 
   it('retombe sur une boîte pour un type inconnu', () => {
     expect(primitiveGeometry([10, 10, 10], 'inconnu')).toBeInstanceOf(BoxGeometry)
+  })
+})
+
+
+describe('extrusion réelle du mur', () => {
+  const options = { depth: 15, bevelEnabled: false }
+
+  it('perce vraiment la géométrie : un mur troué a plus de faces qu’un mur plein', () => {
+    // Un trou n'ajoute pas seulement un contour : il crée le tableau (les faces intérieures du
+    // percement). Si le nombre de sommets ne bouge pas, c'est que le trou a été ignoré.
+    const plein = new ExtrudeGeometry(buildShape(OUTLINE, []), options)
+    const perce = new ExtrudeGeometry(
+      buildShape(OUTLINE, [[[80, 95], [230, 95], [230, 215], [80, 215]]]),
+      options,
+    )
+
+    expect(perce.attributes.position!.count).toBeGreaterThan(plein.attributes.position!.count)
+  })
+
+  it('retire de la matière plutôt que d’en ajouter', () => {
+    // La surface triangulée de la face avant doit diminuer de l'aire du trou.
+    const aire = (geometry: ExtrudeGeometry): number => {
+      const position = geometry.attributes.position!
+      let total = 0
+      for (let index = 0; index < position.count; index += 3) {
+        const ax = position.getX(index), ay = position.getY(index), az = position.getZ(index)
+        const bx = position.getX(index + 1), by = position.getY(index + 1), bz = position.getZ(index + 1)
+        const cx = position.getX(index + 2), cy = position.getY(index + 2), cz = position.getZ(index + 2)
+        // Seules les faces planes en z = 0 (face avant du mur) nous intéressent.
+        if (az !== 0 || bz !== 0 || cz !== 0) continue
+        total += Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2
+      }
+      return total
+    }
+
+    const plein = aire(new ExtrudeGeometry(buildShape(OUTLINE, []), options))
+    const perce = aire(
+      new ExtrudeGeometry(
+        buildShape(OUTLINE, [[[80, 95], [230, 95], [230, 215], [80, 215]]]),
+        options,
+      ),
+    )
+
+    // Trou de 150 x 120 = 18 000 cm².
+    expect(plein - perce).toBeCloseTo(18000, 0)
+  })
+
+  it('cumule plusieurs ouvertures sur le même mur', () => {
+    const geometry = new ExtrudeGeometry(
+      buildShape(OUTLINE, [
+        [[80, 95], [230, 95], [230, 215], [80, 215]],
+        [[420, 0], [510, 0], [510, 204], [420, 204]],
+      ]),
+      options,
+    )
+    const plein = new ExtrudeGeometry(buildShape(OUTLINE, []), options)
+
+    expect(geometry.attributes.position!.count).toBeGreaterThan(
+      plein.attributes.position!.count,
+    )
   })
 })

@@ -62,6 +62,10 @@ Avec [uv](https://docs.astral.sh/uv/) : `uv venv --python 3.12 && uv pip install
 
 Node **22 LTS** recommandé (la CI et l'image Docker utilisent Node 22).
 
+> **Après avoir ajouté une dépendance npm**, la stack Docker ne la voit pas : `node_modules` est
+> un volume anonyme qui survit à `--build`. Il faut le renouveler :
+> `docker compose up -d --force-recreate --renew-anon-volumes frontend`.
+
 ```bash
 cd frontend
 npm install
