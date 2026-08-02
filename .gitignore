@@ -1,7 +1,7 @@
-# Secrets — jamais commités (CLAUDE.md global)
+# Secrets — jamais commités (CLAUDE.md global).
+# Le modèle versionné est `env.example` (sans point) : il n'est pas matché par ces règles.
 .env
 .env.*
-!.env.example
 
 # Python
 .venv/

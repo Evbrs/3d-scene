@@ -61,5 +61,9 @@ Tous les critères verts + `README.md` avec instructions de démarrage local + `
 - **Docker daemon indisponible sur la machine de dev** : A1 se vérifie alors uniquement par
   `docker compose config -q` (validation statique) ; le démarrage réel reste à valider par
   l'humain ou par la CI. À signaler explicitement, jamais à déclarer vert par défaut.
-- **`three-bvh-csg` / TresJS** : installés en dépendance dès P0 pour figer la stack, mais non
-  utilisés avant P6/P7 (non-objectif).
+- **TresJS / `three` / `vue-konva`** : installés en dépendance dès P0 pour figer la stack (§6),
+  mais non utilisés avant P4/P7 (non-objectif).
+- **`three-bvh-csg`** : *décision prise en cours de ticket* — volontairement **non installé**
+  en P0. Il n'est requis qu'à partir de P6/P7 et son statut expérimental (spec §3.2) justifie
+  d'en choisir la version au moment de l'utiliser, plutôt que de figer dès maintenant une
+  version d'une librairie mouvante.

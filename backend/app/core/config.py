@@ -1,6 +1,6 @@
 """Configuration applicative, lue depuis l'environnement.
 
-Aucun secret en dur : tout vient de variables d'environnement (voir `.env.example`).
+Aucun secret en dur : tout vient de variables d'environnement (voir `env.example` à la racine).
 """
 
 from functools import lru_cache

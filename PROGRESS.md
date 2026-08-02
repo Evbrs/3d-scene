@@ -65,5 +65,22 @@ stack Docker (Postgres, Redis, backend, frontend), CI GitHub Actions.
 - `three-bvh-csg` n'est volontairement pas installé : il n'est requis qu'en P6/P7 et son statut
   expérimental (spec §3.2) justifie de choisir sa version au moment de l'utiliser.
 
-**Reste à faire hors ticket** : dépôt distant GitHub + CLI `gh` (`plan-generation-ia.md` §2.1),
-à créer côté humain.
+**Revue adversariale (`spec-reviewer`)** : verdict initial **À CORRIGER** (4 écarts, tous de
+niveau documentation/fiabilité, aucun critère d'acceptation en défaut). Corrigés dans le commit
+de suivi :
+
+1. `PLAN.md` annonçait `three-bvh-csg` installé dès P0 alors que la décision inverse avait été
+   prise en cours de ticket → plan amendé explicitement plutôt que divergence silencieuse.
+2. `backend/app/core/config.py` référençait `.env.example` (fichier renommé `env.example`).
+3. `.gitignore` contenait une négation morte `!.env.example`.
+4. Le service `frontend` n'avait pas de `healthcheck` : `docker compose up --wait` ne
+   l'attendait qu'à l'état *running*, rendant l'étape `curl :5173` de la CI verte par effet de
+   bord. Healthcheck ajouté.
+
+**Point latent signalé, à traiter avant P12** : `cors_origins: list[str]` dans
+`backend/app/core/config.py` — `pydantic-settings` parse les champs `list` depuis
+l'environnement en JSON. Un futur `CORS_ORIGINS=http://exemple.com` (non-JSON) ferait planter
+le démarrage. Aucun impact aujourd'hui (variable non définie), hors périmètre P0.
+
+**Reste à faire hors ticket** : dépôt distant GitHub + CLI `gh` (`plan-generation-ia.md` §2),
+à créer côté humain (`gh` n'est pas installé sur la machine).
