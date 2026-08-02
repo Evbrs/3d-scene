@@ -1,64 +1,59 @@
-# PLAN.md — Ticket P10 : passe performance
+# PLAN.md — Tickets P11 et P12 : tests d'intégration et durcissement
 
 > Plan du ticket **en cours**. Plans des tickets clos : `docs/plans/`.
-> Source : `docs/plan-generation-ia.md` §5 (P10), `docs/spec-complete.md` §8 cas 4 et 6.
+> Source : `docs/plan-generation-ia.md` §5 (P11, P12).
 
 ## Objectif
 
-Mesurer puis traiter les deux points de performance que la spec désigne : le N+1 sur le
-chargement des relations, et le recalcul du scene graph à chaque requête.
-
-## Référence spec
-
-- **§8 cas 4** : « **Mesurer** le N+1 en activant le logging SQL (`echo=True`) **avant**
-  d'optimiser — sinon l'optimisation n'a pas de sens concret. »
-- **§8 cas 6** : « Cache Redis, invalidé à la modification du plan. […] Bon terrain pour
-  pratiquer l'invalidation de cache — un des rares vrais problèmes difficiles de l'informatique. »
+P11 : couvrir les parcours complets et les cas limites, là où se logent les défauts d'assemblage.
+P12 : durcir le déploiement — configuration qui échoue plutôt que de démarrer mal, en-têtes de
+sécurité, image de production.
 
 ## Fichiers autorisés
 
-`backend/app/core/cache.py`, `backend/tests/test_performance.py`,
-`backend/alembic/versions/` (index).
+`backend/tests/test_integration.py`, `backend/tests/test_hardening.py`,
+`backend/app/core/security_headers.py`, `frontend/Dockerfile.prod`, `frontend/nginx.conf`,
+`docker-compose.prod.yml`.
 
-**Extensions signalées** : `backend/app/api/scene.py` et `backend/app/api/plan.py` (branchement
-du cache), `backend/app/core/config.py`, `backend/app/models/plan.py` (index composite),
-`backend/tests/conftest.py`.
+**Extensions signalées** : `backend/app/main.py` (middlewares, fermeture de `/docs`),
+`backend/app/core/config.py` (analyse de `CORS_ORIGINS`), `.github/workflows/ci.yml`, `README.md`.
 
 ## Non-objectifs
 
-- Aucune optimisation non mesurée : c'est le sens même de l'arbitrage §8 cas 4
-- Aucune dénormalisation de la géométrie (§8 cas 1 : rester en JSON tant qu'aucun besoin de
-  requête n'apparaît — il n'en est apparu aucun)
+- Aucune nouvelle fonctionnalité
+- Aucune infrastructure hors dépôt (TLS, sauvegardes, supervision) : listée dans le README comme
+  reste-à-faire explicite plutôt que passée sous silence
 
 ## Décisions
 
-- **Le N+1 est d'abord reproduit, puis corrigé.** Un test compte les requêtes du chargement naïf
-  et démontre qu'il croît avec la taille du plan ; un autre démontre que le chargement anticipé
-  le rend constant. Un compteur de requêtes remplace la lecture de logs à l'œil : la mesure
-  devient une assertion.
-- **La clé de cache porte la version du projet.** C'est le cœur de la conception : au lieu de
-  supprimer une entrée à chaque écriture — ce qui suppose de n'oublier aucun chemin d'écriture —
-  une modification *change la clé*. Comme toute écriture du plan incrémente `Project.version`
-  (garanti depuis P3), l'invalidation devient structurelle plutôt que déclarative.
-- **Un cache indisponible dégrade, il ne casse pas** : une panne Redis fait recalculer la scène,
-  jamais échouer la requête. Sans ça, une optimisation devient un point de défaillance unique.
-- **Purge explicite à la suppression d'un projet** : c'est le seul cas où aucune version future
-  ne viendra rendre les anciennes clés inatteignables.
-- **Un seul index ajouté**, calqué sur la requête réelle de la liste des projets. Indexer « au
-  cas où » coûte à chaque écriture pour un gain hypothétique.
+- **La configuration échoue plutôt que de démarrer mal** : en production, `SECRET_KEY`,
+  `CORS_ORIGINS` et les identifiants de base sont obligatoires, et la substitution
+  `${VAR:?message}` de Docker Compose refuse le démarrage s'ils manquent.
+- **`/docs`, `/redoc` et `/openapi.json` fermés en production** : ils décrivent l'intégralité de
+  la surface d'attaque. Le frontend s'appuie sur l'instantané versionné, pas sur l'endpoint.
+- **HSTS uniquement hors développement** : en local le service est en clair, et HSTS y bloquerait
+  le navigateur pour un an.
+- **Deux politiques CSP** : stricte pour l'API (`default-src 'none'`), plus permissive pour le
+  back-office qui sert ses propres feuilles et scripts. Une seule politique casserait l'un ou
+  affaiblirait l'autre.
+- **`CORS_ORIGINS` accepte la liste séparée par des virgules** en plus du JSON : c'est la forme
+  qu'on écrit spontanément, et `pydantic-settings` seul la rejetterait au démarrage.
+- **Frontend de production servi par nginx en non-root**, port 8080, `index.html` non mis en
+  cache pour qu'un déploiement soit immédiatement visible.
 
 ## Critères d'acceptation (exécutables)
 
 | # | Critère | Vérification |
 |---|---|---|
-| A1 | Le N+1 est reproduit et mesuré | `test_the_naive_loading_really_produces_an_n_plus_one` |
-| A2 | Le chargement anticipé rend le nombre de requêtes constant | `test_eager_loading_keeps_the_query_count_constant` |
-| A3 | Le nombre de requêtes de l'API ne dépend pas de la taille du plan | 2 tests (projet, scène) |
-| A4 | La clé de cache porte la version | `test_the_cache_key_carries_the_project_version` |
-| A5 | Une édition rend immédiatement la nouvelle scène | `test_the_scene_reflects_an_edit_immediately` |
-| A6 | Une panne Redis ne casse rien | `test_the_cache_degrades_gracefully_when_redis_fails` |
+| A1 | Un parcours complet inscription → export fonctionne | `test_a_full_journey_from_signup_to_export` |
+| A2 | Pièce en L, >26 murs, coordonnées négatives, pièce éloignée | 4 tests |
+| A3 | La suppression d'un compte efface tout ce qu'il possède | `test_deleting_a_user_removes_everything_they_own` |
+| A4 | Projet vide et pièce sans contour traversent tout le pipeline | 2 tests |
+| A5 | Lectures simultanées cohérentes, écritures concurrentes arbitrées | 2 tests |
+| A6 | Le plan et la scène décrivent toujours les mêmes faces | `test_the_scene_always_matches_the_plan` |
+| A7 | La production refuse de démarrer sans secret fort | tests + job CI dédié |
+| A8 | Les en-têtes de sécurité sont présents | 6 tests + vérification sur la stack |
 
 ## Definition of done
 
-Critères verts + mesure relevée sur la stack réelle avec Redis + revue `spec-reviewer` +
-`PROGRESS.md` à jour.
+Critères verts + vérification sur la stack + revue `spec-reviewer` + `PROGRESS.md` à jour.

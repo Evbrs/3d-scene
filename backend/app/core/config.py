@@ -5,7 +5,7 @@ Aucun secret en dur : tout vient de variables d'environnement (voir `env.example
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Valeur sentinelle : sa présence hors développement fait échouer le démarrage.
@@ -55,8 +55,24 @@ class Settings(BaseSettings):
     # Redis / Celery (spec §6, utilisés à partir de P9)
     redis_url: str = "redis://localhost:6379/0"
 
-    # Origines autorisées pour le frontend Vite en dev
+    # Origines autorisées. Acceptées en JSON (`["https://a", "https://b"]`) **ou** en liste
+    # séparée par des virgules : `pydantic-settings` n'accepte nativement que le JSON, et
+    # `CORS_ORIGINS=https://exemple.fr` — la forme qu'on écrit spontanément — ferait échouer le
+    # démarrage.
     cors_origins: list[str] = ["http://localhost:5173"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            import json
+
+            parsed: object = json.loads(text)
+            return parsed
+        return [origin.strip() for origin in text.split(",") if origin.strip()]
 
     @property
     def is_development(self) -> bool:

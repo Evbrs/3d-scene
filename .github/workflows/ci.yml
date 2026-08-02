@@ -121,6 +121,32 @@ jobs:
             exit 1
           fi
 
+  compose-prod:
+    name: Stack de production (validation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: La surcouche de production est valide
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+          SECRET_KEY: cle-de-ci-suffisamment-longue-pour-passer-le-controle
+          CORS_ORIGINS: https://exemple.test
+          PUBLIC_API_URL: https://api.exemple.test
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+
+      - name: Le démarrage échoue si un secret manque
+        run: |
+          if POSTGRES_USER=ci POSTGRES_PASSWORD=ci POSTGRES_DB=ci \
+             CORS_ORIGINS=https://exemple.test PUBLIC_API_URL=https://api.exemple.test \
+             docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q 2>/dev/null; then
+            echo "::error::La configuration de production accepte de démarrer sans SECRET_KEY."
+            exit 1
+          fi
+          echo "Absence de SECRET_KEY correctement refusée."
+
   compose:
     name: Stack Docker (docker compose up)
     runs-on: ubuntu-latest

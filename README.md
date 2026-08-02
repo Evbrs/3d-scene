@@ -35,6 +35,7 @@ docker compose up
 | Health check | http://localhost:8000/health |
 | PostgreSQL | `localhost:5433` (décalé : une installation locale occupe souvent 5432) |
 | Redis | `localhost:6380` |
+| Worker Celery | exports PDF en tâche de fond |
 
 Le conteneur `backend` applique `alembic upgrade head` au démarrage. Le volume PostgreSQL crée
 deux bases : `app` (développement) et `app_test` (suite de tests).
@@ -105,6 +106,41 @@ Ce sont exactement les checks exécutés par la CI (`.github/workflows/ci.yml`).
 ├── .claude/agents/   # sous-agent de revue adversariale (spec-reviewer)
 └── docker-compose.yml
 ```
+
+## Déploiement en production
+
+```bash
+export POSTGRES_USER=... POSTGRES_PASSWORD=... POSTGRES_DB=...
+export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export CORS_ORIGINS=https://plan.exemple.fr
+export PUBLIC_API_URL=https://api.plan.exemple.fr
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Différences volontaires avec le développement :
+
+| Point | Développement | Production |
+|---|---|---|
+| Frontend | Vite avec rechargement à chaud | build statique servi par nginx (non-root, port 8080) |
+| Code source | monté depuis le disque | figé dans l'image |
+| Base et Redis | ports exposés sur l'hôte | aucun port publié |
+| `/docs`, `/redoc`, `/openapi.json` | exposés | **fermés** — ils décrivent toute la surface d'attaque |
+| `SECRET_KEY`, `CORS_ORIGINS` | valeurs de développement | **obligatoires**, le démarrage échoue sinon |
+| HSTS | absent (service en clair) | `max-age=31536000; includeSubDomains` |
+
+Le schéma OpenAPI reste disponible pour le frontend sous forme de fichier versionné
+(`frontend/src/api/openapi-snapshot.json`), régénéré et vérifié par la CI.
+
+### Ce qui reste à faire côté infrastructure
+
+Ces points sortent du périmètre du dépôt et dépendent de l'hébergeur :
+
+- **Terminaison TLS** devant nginx (l'en-tête HSTS est déjà posé par l'API).
+- **Sauvegardes PostgreSQL** et test de restauration.
+- **Limitation de débit partagée** : celle en place vit dans la mémoire de chaque processus, donc
+  se dilue avec plusieurs workers. À porter sur Redis.
+- **Supervision** : Sentry est prévu par les conventions du projet, pas encore branché.
 
 ## Contribution
 

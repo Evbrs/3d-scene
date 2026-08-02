@@ -24,8 +24,8 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P8 | Partage de vue (`SharedView`) | P7 | **fait** |
 | P9 | Export PDF/image + Celery | P4, P7 | **fait** |
 | P10 | Passe performance (cache, eager loading, indexation) | P3–P9 | **fait** |
-| P11 | Passe tests d'intégration / cas limites | P0–P10 | à faire |
-| P12 | Durcissement déploiement | P0–P11 | à faire |
+| P11 | Passe tests d'intégration / cas limites | P0–P10 | **fait** |
+| P12 | Durcissement déploiement | P0–P11 | **fait** |
 
 P5 peut démarrer en parallèle de P2–P4 (aucune dépendance).
 
@@ -586,3 +586,47 @@ des projets. Indexer « au cas où » coûte à chaque écriture pour un gain hy
 reste appliqué (géométrie en JSON, aucun besoin de requête n'ayant émergé).
 
 Suite : **224 tests backend**, `ruff` et `mypy --strict` verts.
+
+### P11 — Tests d'intégration et cas limites · **fait**
+
+14 tests suivant des **parcours complets** plutôt que des couches isolées, plus les coins du
+système.
+
+| Famille | Couverture |
+|---|---|
+| Parcours nominal | inscription → connexion → projet → pièce en L → revêtement → fenêtre → meuble → scène 3D → partage public → export PDF |
+| Géométrie limite | pièce en L, polygone de 30 sommets (lettrage au-delà de Z : « AA » vérifié), coordonnées négatives, pièce à 5 000 cm de l'origine, polygone trop grand refusé |
+| Cycles de vie | suppression de compte effaçant projets, pièces, faces et éléments (RGPD) ; projet vide et pièce sans contour traversant scène et export sans casser |
+| Concurrence | 10 lectures simultanées renvoyant exactement la même scène ; deux écritures parties de la même version, la seconde refusée |
+| Cohérence inter-couches | plan et scène décrivant toujours les mêmes faces ; les 3 types d'ouverture devenant des trous et jamais des objets |
+
+### P12 — Durcissement du déploiement · **fait**
+
+**Principe directeur : la configuration échoue plutôt que de démarrer mal.**
+
+| Point | Développement | Production |
+|---|---|---|
+| `SECRET_KEY`, `CORS_ORIGINS`, identifiants DB | valeurs de développement | **obligatoires** — `${VAR:?}` refuse le démarrage |
+| `/docs`, `/redoc`, `/openapi.json` | exposés | **fermés** |
+| Frontend | Vite avec rechargement à chaud | build statique, nginx non-root sur 8080 |
+| Base et Redis | ports publiés | **aucun port publié** |
+| Code source | monté depuis le disque | figé dans l'image |
+| HSTS | absent (service en clair) | un an, sous-domaines inclus |
+
+En-têtes vérifiés sur la stack réelle : `X-Content-Type-Options`, `X-Frame-Options`,
+`Referrer-Policy`, `Permissions-Policy`, et une CSP `default-src 'none'` pour l'API — avec une
+politique distincte pour le back-office, qui sert ses propres feuilles et scripts.
+
+Un job CI dédié vérifie **les deux sens** : que la configuration de production est valide, et
+qu'elle **refuse** de démarrer quand `SECRET_KEY` manque.
+
+`CORS_ORIGINS` accepte désormais `https://a.fr,https://b.fr` en plus du JSON : c'est la forme
+qu'on écrit spontanément, et `pydantic-settings` seul l'aurait rejetée au démarrage — un échec
+qui ne se serait manifesté qu'en production.
+
+**Reste-à-faire d'infrastructure, listé explicitement dans le README** plutôt que passé sous
+silence : terminaison TLS, sauvegardes PostgreSQL et test de restauration, limitation de débit
+partagée via Redis (celle en place vit dans la mémoire de chaque processus, donc se dilue avec
+plusieurs workers), et supervision Sentry.
+
+Suite : **254 tests backend**, 44 tests frontend, `ruff` et `mypy --strict` verts.
