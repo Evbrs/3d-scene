@@ -6,7 +6,6 @@ comparative des deux chemins.
 """
 
 import re
-import time
 from datetime import UTC, datetime
 
 import pytest
@@ -139,7 +138,7 @@ async def test_the_asynchronous_export_returns_immediately_and_produces_a_file(
     assert accepted.status_code == 202, accepted.text
     body = accepted.json()
     assert body["status"] == "queued"
-    assert body["poll_url"] == f"/api/exports/{body['task_id']}"
+    assert body["poll_url"] == f"/api/projects/{project_id}/exports/tasks/{body['task_id']}"
 
     status_response = await auth_client.get(body["poll_url"])
     assert status_response.status_code == 200
@@ -190,34 +189,48 @@ async def test_the_download_refuses_path_traversal(
 # --- Mesure exigée par la spec §8 (cas 2) -------------------------------------------------------
 
 
-async def test_celery_shortens_the_perceived_latency(auth_client: AsyncClient) -> None:
-    """Mesure avant/après, comme l'exige l'arbitrage §8 (cas 2).
+async def test_the_synchronous_path_exposes_its_generation_time(
+    auth_client: AsyncClient,
+) -> None:
+    """Le chemin synchrone doit rester mesurable : c'est le point de comparaison de §8 cas 2."""
+    project_id = await _project_with_plan(auth_client, rooms=2)
 
-    En mode `task_always_eager`, Celery exécute la tâche dans le processus appelant : la
-    *latence perçue* mesurée ici est donc une borne **pessimiste** du gain réel. Le test ne
-    vérifie pas un seuil chiffré — il serait dépendant de la machine — mais que la mesure existe
-    et que le chemin synchrone reste disponible pour la comparer.
-    """
-    project_id = await _project_with_plan(auth_client, rooms=8)
-
-    started = time.perf_counter()
-    synchronous = await auth_client.get(
+    response = await auth_client.get(
         f"/api/projects/{project_id}/exports/pdf/direct", params={"measure": "true"}
     )
-    synchronous_ms = (time.perf_counter() - started) * 1000
 
-    started = time.perf_counter()
-    asynchronous = await auth_client.post(f"/api/projects/{project_id}/exports/pdf")
-    asynchronous_ms = (time.perf_counter() - started) * 1000
+    assert response.status_code == 200
+    assert re.fullmatch(r"\d+\.\d", response.headers["X-Generation-Ms"])
+    assert float(response.headers["X-Generation-Ms"]) > 0
 
-    assert synchronous.status_code == 200
-    assert asynchronous.status_code == 202
-    # L'en-tête de mesure est présent et exploitable.
-    assert re.fullmatch(r"\d+\.\d", synchronous.headers["X-Generation-Ms"])
-    assert synchronous_ms > 0 and asynchronous_ms > 0
 
-    print(
-        f"\n[mesure §8 cas 2] synchrone={synchronous_ms:.1f} ms "
-        f"(dont génération {synchronous.headers['X-Generation-Ms']} ms) · "
-        f"asynchrone (eager, borne pessimiste)={asynchronous_ms:.1f} ms"
+async def test_the_generation_time_grows_with_the_plan(auth_client: AsyncClient) -> None:
+    """Ce qui justifie de déporter le travail : la durée suit la taille du plan.
+
+    C'est la propriété qui rend Celery utile, et elle est vérifiable **sans** dépendre de la
+    vitesse de la machine — contrairement à un seuil en millisecondes. Une comparaison de
+    latences perçues en mode `task_always_eager` ne prouverait rien non plus : la tâche s'y
+    exécute dans le processus appelant. La mesure de bout en bout est faite sur la stack réelle
+    et consignée dans `PROGRESS.md`.
+    """
+    small = await _project_with_plan(auth_client, rooms=1)
+    large = await _project_with_plan(auth_client, rooms=10)
+
+    def duration(response: object) -> float:
+        return float(response.headers["X-Generation-Ms"])  # type: ignore[attr-defined]
+
+    small_ms = duration(
+        await auth_client.get(
+            f"/api/projects/{small}/exports/pdf/direct", params={"measure": "true"}
+        )
+    )
+    large_ms = duration(
+        await auth_client.get(
+            f"/api/projects/{large}/exports/pdf/direct", params={"measure": "true"}
+        )
+    )
+
+    assert large_ms > small_ms, (
+        f"génération de {large_ms:.1f} ms pour 10 pièces contre {small_ms:.1f} ms pour 1 : "
+        "la durée ne suit pas la taille du plan, la mesure est douteuse"
     )

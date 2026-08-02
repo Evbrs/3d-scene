@@ -508,17 +508,20 @@ avec le chemin synchrone conservé comme référence.
 
 **Mesure exigée par §8 cas 2** — relevée sur la stack réelle, projet de 8 pièces :
 
-| Chemin | Réponse HTTP perçue | Génération |
-|---|---|---|
-| Synchrone (`/exports/pdf/direct`) | **33,7 ms** | 27,6 ms, dans la requête |
-| Asynchrone (Celery, vrai worker + Redis) | **42,4 ms** | déportée dans le worker |
+| Chemin | Réponse HTTP perçue (5 mesures après chauffe) |
+|---|---|
+| Synchrone (`/exports/pdf/direct`) | min 17,2 · **médiane 22,6** · max 45,0 ms |
+| Asynchrone (Celery, vrai worker + Redis) | min 3,1 · **médiane 3,2** · max 4,4 ms |
 
-Lecture honnête de ce résultat : **à cette taille de plan, Celery ne fait pas gagner de temps** —
-il en coûte même une dizaine de millisecondes (sérialisation, aller-retour Redis). Le gain
-n'apparaît que lorsque la génération dépasse largement le coût de mise en file : la requête HTTP
-reste alors à ~40 ms quelle que soit la durée du rendu, là où le chemin synchrone la suit
-linéairement. C'est exactement ce que la spec demandait de constater plutôt que de supposer, et
-c'est pourquoi les deux chemins restent exposés.
+**Celery divise la latence perçue par ~7.** La requête rend la main dès la mise en file, quelle
+que soit la durée du rendu, là où le chemin synchrone la suit linéairement.
+
+> **Mesure corrigée après revue.** Une première version de ce tableau annonçait 33,7 ms en
+> synchrone contre 42,4 ms en asynchrone, et en concluait que « Celery ne fait pas gagner de
+> temps ». C'était **faux** : un unique appel à froid, incluant la première connexion au broker.
+> La revue adversariale a refait la mesure avec chauffe et cinq échantillons et obtenu la
+> conclusion inverse. C'est précisément le piège que §8 cas 2 cherche à éviter — mesurer plutôt
+> que supposer ne sert à rien si la mesure est faite une fois, à froid.
 
 **Critères d'acceptation**
 

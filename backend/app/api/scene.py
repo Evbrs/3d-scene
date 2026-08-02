@@ -13,7 +13,7 @@ from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
-from app.core.cache import scene_cache
+from app.core.cache import catalog_fingerprint, scene_cache
 from app.geometry.scene import build_scene_graph
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 
@@ -145,13 +145,31 @@ async def read_scene_graph(
     """
     owned = await get_owned_project(session, project_id, current_user)
 
-    cached = await scene_cache.get(project_id, owned.version)
-    if cached is not None:
-        response.headers["X-Cache"] = "hit"
-        return cached
-
-    project, catalog = await load_scene_inputs(session, project_id)
-    scene = build_scene_graph(project_to_plain_dict(project), catalog)
-    await scene_cache.set(project_id, owned.version, scene)
-    response.headers["X-Cache"] = "miss"
+    scene, from_cache = await scene_for_project(session, project_id, owned.version)
+    response.headers["X-Cache"] = "hit" if from_cache else "miss"
     return scene
+
+
+async def scene_for_project(
+    session: SessionDep, project_id: int, version: int
+) -> tuple[dict[str, Any], bool]:
+    """Scène du projet, servie depuis le cache si possible.
+
+    Point de passage unique, partagé avec la lecture publique (P8) : deux chemins calculant la
+    scène séparément finiraient par en servir deux versions différentes — c'est exactement ce
+    qui se produisait quand seul l'endpoint authentifié utilisait le cache.
+
+    Le catalogue est chargé avant toute lecture de cache : c'est lui qui donne l'empreinte
+    entrant dans la clé, sans laquelle une recette modifiée resterait servie depuis l'ancienne
+    entrée.
+    """
+    project, catalog = await load_scene_inputs(session, project_id)
+    fingerprint = catalog_fingerprint(catalog)
+
+    cached = await scene_cache.get(project_id, version, fingerprint)
+    if cached is not None:
+        return cached, True
+
+    scene = build_scene_graph(project_to_plain_dict(project), catalog)
+    await scene_cache.set(project_id, version, scene, fingerprint)
+    return scene, False

@@ -4,9 +4,10 @@ Aucun secret en dur : tout vient de variables d'environnement (voir `env.example
 """
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Valeur sentinelle : sa présence hors développement fait échouer le démarrage.
 DEV_SECRET_KEY = "cle-de-developpement-a-remplacer-absolument-32+"
@@ -59,7 +60,11 @@ class Settings(BaseSettings):
     # séparée par des virgules : `pydantic-settings` n'accepte nativement que le JSON, et
     # `CORS_ORIGINS=https://exemple.fr` — la forme qu'on écrit spontanément — ferait échouer le
     # démarrage.
-    cors_origins: list[str] = ["http://localhost:5173"]
+    # `NoDecode` est indispensable : sans lui, `pydantic-settings` tente un `json.loads` sur la
+    # valeur d'environnement **avant** d'appeler le validateur, et lève `SettingsError` sur
+    # `CORS_ORIGINS=https://exemple.fr`. Le validateur ci-dessous ne s'exécutait donc jamais
+    # depuis l'environnement — c'est-à-dire dans le seul cas qui compte en production.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     @field_validator("cors_origins", mode="before")
     @classmethod

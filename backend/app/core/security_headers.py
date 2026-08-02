@@ -79,6 +79,18 @@ class SecurityHeadersMiddleware:
         return headers
 
 
+async def unhandled_error_handler(request: Request, exc: Exception) -> Response:
+    """Réponse 500 générique, passant par la pile de middlewares.
+
+    Sans ce gestionnaire, `ServerErrorMiddleware` répond depuis l'extérieur de la pile : la
+    réponse d'erreur sort alors **sans aucun en-tête de sécurité**. Le corps reste volontairement
+    muet : un détail d'exception peut contenir un chemin, une requête SQL ou une valeur métier.
+    """
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(status_code=500, content={"detail": "Erreur interne du serveur"})
+
+
 async def add_cache_control(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:

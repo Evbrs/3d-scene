@@ -166,6 +166,43 @@ async def other_client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield await _authenticated_client(ac, "tiers@exemple.fr")
 
 
+class InMemoryRedis:
+    """Substitut minimal de Redis pour exercer réellement le cache.
+
+    Sans lui, `CACHE_ENABLED=false` faisait que *aucun* test ne traversait `SceneCache` : les
+    tests d'invalidation ne vérifiaient que la forme d'une chaîne de caractères, et restaient
+    verts même en cassant complètement l'invalidation. Un cache non exercé n'est pas testé.
+    """
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.store[key] = value
+
+    async def delete(self, key: str) -> int:
+        return 1 if self.store.pop(key, None) is not None else 0
+
+    async def scan_iter(self, match: str = "*") -> AsyncIterator[str]:
+        prefix = match.rstrip("*")
+        for key in list(self.store):
+            if key.startswith(prefix):
+                yield key
+
+
+@pytest.fixture
+def memory_cache(monkeypatch: pytest.MonkeyPatch) -> InMemoryRedis:
+    """Active le cache de scène sur un Redis en mémoire, propre à chaque test."""
+    from app.core import cache as cache_module
+
+    fake = InMemoryRedis()
+    monkeypatch.setattr(cache_module, "get_client", lambda: fake)
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def reset_login_rate_limiter() -> None:
     """Le limiteur de débit est un état de processus, partagé par tous les tests.

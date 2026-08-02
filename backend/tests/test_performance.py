@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, select
 
-from app.core.cache import SceneCache, scene_key
+from app.core.cache import SceneCache, catalog_fingerprint, scene_key
 from app.models.plan import Face, Project, Room
+from tests.conftest import InMemoryRedis as InMemoryRedisType
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
 
@@ -165,10 +166,140 @@ async def test_the_scene_endpoint_has_a_bounded_query_count(
 # --- §8 cas 6 : cache du scene graph et son invalidation ------------------------------------
 
 
-def test_the_cache_key_carries_the_project_version() -> None:
+def test_the_cache_key_carries_the_project_version_and_the_catalog() -> None:
     """C'est ce qui rend l'invalidation structurelle plutôt que déclarative."""
     assert scene_key(7, 1) != scene_key(7, 2)
-    assert scene_key(7, 3) == "scene:7:v3"
+    # Le catalogue entre aussi dans la clé : modifier une recette change toutes les scènes qui
+    # l'utilisent, sans toucher à aucun projet.
+    assert scene_key(7, 3, "aaaa") != scene_key(7, 3, "bbbb")
+
+
+def test_the_catalog_fingerprint_only_changes_with_the_catalog() -> None:
+    recipe = {"slug": "commode", "parts": [{"type": "box"}], "color_slots": ["corps"]}
+    other = {"slug": "commode", "parts": [{"type": "cylinder"}], "color_slots": ["corps"]}
+
+    assert catalog_fingerprint({1: recipe}) == catalog_fingerprint({1: dict(recipe)})
+    assert catalog_fingerprint({1: recipe}) != catalog_fingerprint({1: other})
+    assert catalog_fingerprint({}) == "0"
+
+
+# --- Invalidation réellement exercée, sur un cache actif ------------------------------------
+
+
+async def test_the_cache_actually_serves_a_second_read(
+    auth_client: AsyncClient, memory_cache: object
+) -> None:
+    project_id = await _build_plan(auth_client, 1)
+
+    first = await auth_client.get(f"/api/projects/{project_id}/scene")
+    second = await auth_client.get(f"/api/projects/{project_id}/scene")
+
+    assert first.headers["X-Cache"] == "miss"
+    assert second.headers["X-Cache"] == "hit"
+    assert first.json() == second.json()
+
+
+async def test_an_edit_really_invalidates_the_cached_scene(
+    auth_client: AsyncClient, memory_cache: object
+) -> None:
+    """Le test que la revue a montré vacuous : il tourne désormais sur un cache actif.
+
+    Avec l'invalidation cassée, il échoue — ce qui est tout l'intérêt.
+    """
+    project_id = await _build_plan(auth_client, 1)
+    assert (await auth_client.get(f"/api/projects/{project_id}/scene")).headers["X-Cache"] == "miss"
+    assert (await auth_client.get(f"/api/projects/{project_id}/scene")).headers["X-Cache"] == "hit"
+
+    project = (await auth_client.get(f"/api/projects/{project_id}")).json()
+    pentagone = [*project["rooms"][0]["polygon"], [-100.0, 150.0]]
+    await auth_client.patch(
+        f"/api/rooms/{project['rooms'][0]['id']}", json={"polygon": pentagone, "force": True}
+    )
+
+    after = await auth_client.get(f"/api/projects/{project_id}/scene")
+
+    assert after.headers["X-Cache"] == "miss", "l'ancienne entrée est toujours servie"
+    assert len(after.json()["rooms"][0]["nodes"]) == 7
+
+
+async def test_changing_a_recipe_invalidates_the_scenes_that_use_it(
+    superuser_client: AsyncClient, session: AsyncSession, memory_cache: object
+) -> None:
+    """Régression : modifier une recette laissait servir l'ancienne géométrie.
+
+    Le catalogue est partagé par tous les projets et n'appartient à aucun : aucune version de
+    projet ne bouge quand il change.
+    """
+    from app.services.seed import seed_catalog
+
+    await seed_catalog(session)
+    commode = (await superuser_client.get("/api/furniture-types/commode")).json()
+
+    project = (await superuser_client.post("/api/projects", json={"name": "Meublé"})).json()
+    room = (
+        await superuser_client.post(
+            f"/api/projects/{project['id']}/rooms", json={"name": "P", "polygon": CARRE}
+        )
+    ).json()
+    await superuser_client.post(
+        f"/api/faces/{room['faces'][0]['id']}/elements",
+        json={"kind": "furniture", "furniture_type_id": commode["id"],
+              "x_offset_cm": 0, "y_offset_cm": 0,
+              "width_cm": 100, "height_cm": 85, "depth_cm": 45},
+    )
+
+    before = (await superuser_client.get(f"/api/projects/{project['id']}/scene")).json()
+    furniture_before = next(n for n in before["rooms"][0]["nodes"] if n["kind"] == "furniture")
+    assert len(furniture_before["primitives"]) == 9
+
+    # La recette perd ses tiroirs : 9 primitives -> 1.
+    await superuser_client.patch(
+        "/api/furniture-types/commode",
+        json={"color_slots": ["corps"], "parts": [
+            {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1],
+             "color_slot": "corps"}
+        ]},
+    )
+
+    after = await superuser_client.get(f"/api/projects/{project['id']}/scene")
+    furniture_after = next(
+        n for n in after.json()["rooms"][0]["nodes"] if n["kind"] == "furniture"
+    )
+
+    assert after.headers["X-Cache"] == "miss", "la scène est servie depuis une entrée périmée"
+    assert len(furniture_after["primitives"]) == 1
+
+
+async def test_the_public_view_and_the_owner_see_the_same_geometry(
+    auth_client: AsyncClient, client: AsyncClient, memory_cache: object
+) -> None:
+    """Régression : seul le chemin authentifié utilisait le cache, d'où deux géométries."""
+    project_id = await _build_plan(auth_client, 1)
+    shared = (
+        await auth_client.post(
+            f"/api/projects/{project_id}/shared-views",
+            json={"state": {"camera_preset": "dessus"}},
+        )
+    ).json()
+
+    private = (await auth_client.get(f"/api/projects/{project_id}/scene")).json()
+    public = (await client.get(f"/api/public/views/{shared['token']}")).json()["scene"]
+
+    private.pop("project_id", None)
+    assert private == public
+
+
+async def test_deleting_a_project_purges_its_cache(
+    auth_client: AsyncClient, memory_cache: InMemoryRedisType
+) -> None:
+    """Seul cas où aucune version future ne rendra les clés inatteignables."""
+    project_id = await _build_plan(auth_client, 1)
+    await auth_client.get(f"/api/projects/{project_id}/scene")
+    assert any(key.startswith(f"scene:{project_id}:") for key in memory_cache.store)
+
+    await auth_client.delete(f"/api/projects/{project_id}")
+
+    assert not any(key.startswith(f"scene:{project_id}:") for key in memory_cache.store)
 
 
 async def test_a_disabled_cache_never_breaks_the_endpoint(

@@ -31,7 +31,14 @@ class SharedViewCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state: ViewState
-    label: str | None = Field(default=None, max_length=100)
+    # Même durcissement que `camera_preset` : `label` est écrit par un client, stocké dans
+    # `state`, et restitué par un endpoint public sans authentification. Sans motif, ce sont
+    # 100 octets de contenu arbitraire servis à des tiers.
+    # Liste **noire** plutôt que blanche : un libellé français normal contient accents, tirets
+    # cadratins et apostrophes typographiques, qu'une liste blanche finirait toujours par
+    # refuser à tort. Ce qui est interdit, ce sont les caractères de balisage et de contrôle —
+    # les seuls qui posent problème dans une valeur restituée par un endpoint public.
+    label: str | None = Field(default=None, max_length=100, pattern=r"^[^<>&\"`\x00-\x1f]*$")
     # Durée de vie optionnelle : un lien de partage éternel est un risque qui ne se referme
     # jamais. Absent = pas d'expiration (comportement par défaut de la spec).
     expires_in_days: Annotated[int, Field(ge=1, le=365)] | None = None

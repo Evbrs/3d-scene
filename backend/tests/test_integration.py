@@ -12,7 +12,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
-from app.models.plan import Element, Face, Project, Room
+from app.models.plan import Element, Face, Project, Room, SharedView
 from app.services.seed import seed_catalog
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
@@ -210,7 +210,9 @@ async def test_deleting_a_user_removes_everything_they_own(
     await session.delete(user)
     await session.commit()
 
-    for model in (Project, Room, Face, Element):
+    # `SharedView` est inclus volontairement : c'est un jeton d'accès **public** encore vivant,
+    # la ligne la plus sensible à laisser derrière soi.
+    for model in (Project, Room, Face, Element, SharedView):
         remaining = (await session.execute(select(model))).scalars().all()
         assert remaining == [], f"{model.__name__} survit à la suppression du compte"
 
@@ -246,7 +248,13 @@ async def test_a_room_without_polygon_survives_the_whole_pipeline(
 
 
 async def test_concurrent_reads_are_consistent(auth_client: AsyncClient) -> None:
-    """Dix lectures simultanées doivent renvoyer exactement la même scène."""
+    """Dix lectures lancées ensemble doivent renvoyer exactement la même scène.
+
+    Limite connue et assumée : la suite partage une seule `AsyncSession`, donc les requêtes se
+    sérialisent côté base. Ce test vérifie donc le **déterminisme de la sortie**, pas la
+    concurrence réelle d'accès à PostgreSQL — laquelle est couverte par le test de verrouillage
+    optimiste, qui utilise bien deux sessions distinctes.
+    """
     project = (await auth_client.post("/api/projects", json={"name": "Concurrent"})).json()
     await auth_client.post(
         f"/api/projects/{project['id']}/rooms", json={"name": "P", "polygon": CARRE}

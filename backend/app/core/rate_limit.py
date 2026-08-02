@@ -36,10 +36,16 @@ class SlidingWindowRateLimiter:
         while events and events[0] <= horizon:
             events.popleft()
 
+        if not events:
+            # Une clé vidée est retirée : sinon le dictionnaire grossit d'une entrée par IP vue,
+            # indéfiniment et sans plafond — sur un endpoint public, c'est un levier de
+            # saturation mémoire offert à qui n'a même pas de compte.
+            self._events.pop(key, None)
+
         if len(events) >= self.max_attempts:
             return False
 
-        events.append(now)
+        self._events[key].append(now)
         return True
 
     def reset(self, key: str) -> None:
@@ -48,6 +54,11 @@ class SlidingWindowRateLimiter:
 
     def clear(self) -> None:
         self._events.clear()
+
+    @property
+    def tracked_keys(self) -> int:
+        """Nombre de clés encore suivies (sert à vérifier l'absence de fuite mémoire)."""
+        return len(self._events)
 
 
 @dataclass

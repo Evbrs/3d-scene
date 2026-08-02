@@ -201,6 +201,37 @@ async def test_the_public_endpoint_is_rate_limited(
 
 
 @pytest.mark.parametrize(
+    "label",
+    ["<img src=x onerror=alert(1)>", 'guillemet"', "et&commercial", "retour\nligne"],
+)
+async def test_a_label_with_markup_is_refused(auth_client: AsyncClient, label: str) -> None:
+    """Régression : `label` échappait au durcissement appliqué au reste de `state`.
+
+    Il est écrit par un client, stocké, puis restitué par un endpoint public sans
+    authentification : c'est exactement ce que le plan interdit pour `state`.
+    """
+    project = (await auth_client.post("/api/projects", json={"name": "Libellé"})).json()
+
+    response = await auth_client.post(
+        f"/api/projects/{project['id']}/shared-views", json={"state": STATE, "label": label}
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize(
+    "label", ["Vue d'ensemble — salon", "Étage 1 (rénové)", "Salle de bain"]
+)
+async def test_a_normal_french_label_is_accepted(auth_client: AsyncClient, label: str) -> None:
+    """Le durcissement ne doit pas refuser un libellé légitime : accents, tirets, apostrophes."""
+    project = (await auth_client.post("/api/projects", json={"name": "Libellé"})).json()
+
+    response = await auth_client.post(
+        f"/api/projects/{project['id']}/shared-views", json={"state": STATE, "label": label}
+    )
+    assert response.status_code == 201, response.text
+
+
+@pytest.mark.parametrize(
     "state",
     [
         {"camera_preset": "face-A", "champ_inconnu": 1},

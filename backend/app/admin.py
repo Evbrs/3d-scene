@@ -17,9 +17,59 @@ from sqlalchemy.orm import Session
 from sqlmodel import col, select
 from starlette.requests import Request
 
+from app.core.cache import scene_cache
 from app.core.config import get_settings
 from app.core.security import DUMMY_PASSWORD_HASH, verify_password
 from app.models import Element, Face, FurnitureType, Project, Room, SharedView, User
+
+
+class PlanAwareModelView(ModelView):
+    """Vue d'administration qui purge le cache de scène après écriture.
+
+    Le back-office modifie les lignes `room`, `face` et `element` **sans** passer par l'API, donc
+    sans incrémenter `Project.version` : l'invalidation par version ne le couvre pas. Prétendre
+    l'inverse laisserait servir une scène périmée pendant une heure après toute correction faite
+    ici.
+
+    La purge est volontairement large — toutes les versions de tous les projets touchés — parce
+    qu'une purge trop fine serait plus facile à se tromper qu'à maintenir.
+    """
+
+    async def after_model_change(
+        self, data: dict[str, Any], model: Any, is_created: bool, request: Request
+    ) -> None:
+        await purge_scene_cache_for(model)
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        await purge_scene_cache_for(model)
+
+
+async def purge_scene_cache_for(model: Any) -> None:
+    """Retrouve le projet concerné par une ligne modifiée, et purge son cache."""
+    project_id = _project_id_of(model)
+    if project_id is not None:
+        await scene_cache.forget_project(project_id)
+
+
+def _project_id_of(model: Any) -> int | None:
+    """Remonte de n'importe quelle ligne du plan jusqu'à son projet."""
+    if isinstance(model, Project):
+        return model.id
+    if isinstance(model, Room):
+        return model.project_id
+    engine = _sync_engine()
+    try:
+        with Session(engine) as session:
+            if isinstance(model, Face):
+                room = session.get(Room, model.room_id)
+                return room.project_id if room else None
+            if isinstance(model, Element):
+                face = session.get(Face, model.face_id)
+                room = session.get(Room, face.room_id) if face else None
+                return room.project_id if room else None
+    finally:
+        engine.dispose()
+    return None
 
 
 class UserAdmin(ModelView, model=User):
@@ -34,7 +84,7 @@ class UserAdmin(ModelView, model=User):
     form_excluded_columns: ClassVar[list[Any]] = [User.hashed_password]
 
 
-class ProjectAdmin(ModelView, model=Project):
+class ProjectAdmin(PlanAwareModelView, model=Project):
     name = "Projet"
     name_plural = "Projets"
     icon = "fa-solid fa-folder"
@@ -49,7 +99,7 @@ class ProjectAdmin(ModelView, model=Project):
     column_sortable_list: ClassVar[list[Any]] = [Project.id, Project.name, Project.created_at]
 
 
-class RoomAdmin(ModelView, model=Room):
+class RoomAdmin(PlanAwareModelView, model=Room):
     name = "Pièce"
     name_plural = "Pièces"
     icon = "fa-solid fa-door-open"
@@ -57,14 +107,14 @@ class RoomAdmin(ModelView, model=Room):
     column_searchable_list: ClassVar[list[Any]] = [Room.name]
 
 
-class FaceAdmin(ModelView, model=Face):
+class FaceAdmin(PlanAwareModelView, model=Face):
     name = "Face"
     name_plural = "Faces"
     icon = "fa-solid fa-square"
     column_list: ClassVar[list[Any]] = [Face.id, Face.room_id, Face.label, Face.kind]
 
 
-class ElementAdmin(ModelView, model=Element):
+class ElementAdmin(PlanAwareModelView, model=Element):
     name = "Élément"
     name_plural = "Éléments"
     icon = "fa-solid fa-cube"
@@ -89,7 +139,7 @@ class FurnitureTypeAdmin(ModelView, model=FurnitureType):
     column_searchable_list: ClassVar[list[Any]] = [FurnitureType.slug, FurnitureType.name]
 
 
-class SharedViewAdmin(ModelView, model=SharedView):
+class SharedViewAdmin(PlanAwareModelView, model=SharedView):
     name = "Vue partagée"
     name_plural = "Vues partagées"
     icon = "fa-solid fa-share-nodes"

@@ -4,17 +4,30 @@ L'arbitrage de la spec : « Cache Redis, invalidé à la modification du plan »
 c'est « un bon terrain pour pratiquer l'invalidation de cache, un des rares vrais problèmes
 difficiles de l'informatique ».
 
-**La clé porte la version du projet.** C'est le cœur de la conception : au lieu de supprimer une
-entrée à chaque écriture — ce qui suppose de n'oublier aucun chemin d'écriture, et échoue
-silencieusement dès qu'on en ajoute un — une modification change la clé. L'ancienne entrée
-devient inatteignable et expire d'elle-même. Comme *toute* écriture du plan incrémente
-`Project.version` (garanti par `_claim_project`, P3), l'invalidation est structurelle et non
-déclarative.
+**La clé porte tout ce dont la scène dépend**, et pas seulement l'identifiant du projet :
+
+- `Project.version`, incrémentée par toute écriture du plan passant par l'API (`_claim_project`,
+  P3) ;
+- une **empreinte du catalogue de mobilier**, parce que le scene graph développe les recettes :
+  modifier une recette change toutes les scènes qui l'utilisent, sans toucher à aucun projet.
+
+Une modification change donc la clé, l'ancienne entrée devient inatteignable et expire d'elle-
+même. C'est plus robuste qu'un `delete` posé sur chaque chemin d'écriture, qu'on finit par
+oublier d'ajouter en même temps qu'un nouveau chemin.
+
+**Ce que cette approche ne couvre pas, et qui exige donc une purge explicite** :
+
+- la suppression d'un projet — aucune version future ne viendra rendre les clés inatteignables ;
+- les écritures du back-office SQLAdmin, qui modifient les lignes `room`, `face` et `element`
+  sans passer par l'API. `app/admin.py` déclenche donc une purge après chaque écriture. Prétendre
+  que l'invalidation par version suffit ici serait faux : le back-office ne touche pas
+  `Project.version`.
 
 Corollaire assumé : les entrées périmées occupent de la mémoire jusqu'à leur expiration. C'est le
 prix d'une invalidation qu'on ne peut pas oublier de faire.
 """
 
+import hashlib
 import json
 from typing import Any
 
@@ -46,8 +59,30 @@ def reset_client() -> None:
     _client = None
 
 
-def scene_key(project_id: int, version: int) -> str:
-    return f"scene:{project_id}:v{version}"
+def scene_key(project_id: int, version: int, catalog_fingerprint: str = "0") -> str:
+    """Clé de cache d'une scène.
+
+    `catalog_fingerprint` résume l'état des recettes de mobilier utilisées : sans lui, modifier
+    une recette laisserait servir l'ancienne géométrie à tous les projets qui l'emploient,
+    jusqu'à expiration.
+    """
+    return f"scene:{project_id}:v{version}:c{catalog_fingerprint}"
+
+
+def catalog_fingerprint(furniture_types: dict[int, dict[str, Any]]) -> str:
+    """Empreinte courte et stable des recettes qui participent à une scène.
+
+    Une empreinte plutôt qu'un compteur global : elle ne dépend que des recettes réellement
+    utilisées par ce projet, donc modifier une recette n'invalide que les scènes concernées.
+    """
+    if not furniture_types:
+        return "0"
+    payload = json.dumps(
+        {str(key): value for key, value in sorted(furniture_types.items())},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.blake2s(payload.encode("utf-8"), digest_size=8).hexdigest()
 
 
 class SceneCache:
@@ -63,12 +98,14 @@ class SceneCache:
         self.misses = 0
         self.errors = 0
 
-    async def get(self, project_id: int, version: int) -> dict[str, Any] | None:
+    async def get(
+        self, project_id: int, version: int, fingerprint: str = "0"
+    ) -> dict[str, Any] | None:
         client = get_client()
         if client is None:
             return None
         try:
-            raw = await client.get(scene_key(project_id, version))
+            raw = await client.get(scene_key(project_id, version, fingerprint))
         except RedisError:
             self.errors += 1
             return None
@@ -79,13 +116,17 @@ class SceneCache:
         parsed: dict[str, Any] = json.loads(raw)
         return parsed
 
-    async def set(self, project_id: int, version: int, scene: dict[str, Any]) -> None:
+    async def set(
+        self, project_id: int, version: int, scene: dict[str, Any], fingerprint: str = "0"
+    ) -> None:
         client = get_client()
         if client is None:
             return
         try:
             await client.set(
-                scene_key(project_id, version), json.dumps(scene), ex=SCENE_TTL_SECONDS
+                scene_key(project_id, version, fingerprint),
+                json.dumps(scene),
+                ex=SCENE_TTL_SECONDS,
             )
         except RedisError:
             self.errors += 1

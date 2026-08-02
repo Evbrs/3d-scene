@@ -22,9 +22,8 @@ from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
-from app.api.scene import load_scene_inputs, project_to_plain_dict
+from app.api.scene import scene_for_project
 from app.core.rate_limit import SlidingWindowRateLimiter
-from app.geometry.scene import build_scene_graph
 from app.models.base import utcnow
 from app.models.plan import Project, SharedView
 from app.schemas.share import PublicSceneResponse, SharedViewCreate, SharedViewRead
@@ -157,8 +156,10 @@ async def read_public_view(
     if project is None:
         raise not_found
 
-    _project, catalog = await load_scene_inputs(session, shared.project_id)
-    scene = build_scene_graph(project_to_plain_dict(_project), catalog)
+    # Même point d'entrée que la lecture authentifiée : sans ça, le propriétaire et le visiteur
+    # public voient deux géométries différentes du même projet, et le calcul public — non
+    # authentifié — n'est jamais amorti.
+    scene, _from_cache = await scene_for_project(session, shared.project_id, project.version)
 
     # L'identifiant interne du projet n'a rien à faire dans une réponse publique.
     scene.pop("project_id", None)

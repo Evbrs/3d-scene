@@ -54,25 +54,42 @@ async def request_pdf_export(
     await get_owned_project(session, project_id, current_user)
 
     task = export_project_pdf.delay(project_id)
-    return ExportAccepted(task_id=task.id, poll_url=f"/api/exports/{task.id}")
+    return ExportAccepted(
+        task_id=task.id, poll_url=f"/api/projects/{project_id}/exports/tasks/{task.id}"
+    )
 
 
-@router.get("/exports/{task_id}", response_model=ExportStatus)
+@router.get("/projects/{project_id}/exports/tasks/{task_id}", response_model=ExportStatus)
 async def read_export_status(
+    project_id: int,
     task_id: Annotated[str, Path(min_length=8, max_length=64)],
+    session: SessionDep,
     current_user: CurrentUser,
 ) -> ExportStatus:
     """État d'un export.
 
-    Le contenu du résultat n'expose aucun chemin absolu : seul le nom de fichier est renvoyé, et
-    le téléchargement repasse par une route qui revérifie la propriété du projet.
+    La route porte l'identifiant du projet et le vérifie : être authentifié ne suffit pas. Sans
+    ce cloisonnement, n'importe quel compte connaissant un identifiant de tâche lirait le
+    descriptif de l'export d'autrui — nom de fichier, taille, identifiant de projet.
+
+    Le résultat n'expose aucun chemin absolu, et le téléchargement repasse par une route qui
+    revérifie elle aussi la propriété.
     """
+    await get_owned_project(session, project_id, current_user)
+
     result = celery_app.AsyncResult(task_id)
     payload = ExportStatus(task_id=task_id, state=result.state, ready=result.ready())
 
     if result.ready():
         if result.successful():
-            payload.result = result.result
+            produced = result.result
+            # Une tâche appartenant à un autre projet ne doit rien révéler, même à un compte
+            # légitime sur *ce* projet-ci.
+            if isinstance(produced, dict) and produced.get("project_id") != project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Export introuvable"
+                )
+            payload.result = produced
         else:
             # Le détail de l'exception n'est pas renvoyé au client : il peut contenir des
             # informations internes (chemins, requêtes SQL).

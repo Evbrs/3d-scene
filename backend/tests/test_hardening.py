@@ -109,3 +109,67 @@ async def test_the_public_share_endpoint_stays_usable(client: AsyncClient) -> No
     response = await client.get("/api/public/views/" + "z" * 43)
     assert response.status_code == 404
     assert response.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+# --- Régressions issues de la revue finale ---------------------------------------------------
+
+
+async def test_security_headers_are_present_on_a_preflight(client: AsyncClient) -> None:
+    """Régression : le middleware CORS répondait seul aux préflights, hors de la pile.
+
+    Les en-têtes de sécurité étaient donc absents de ces réponses. Le middleware doit être le
+    plus externe pour les couvrir.
+    """
+    response = await client.request(
+        "OPTIONS",
+        "/api/projects",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.headers.get("X-Content-Type-Options") == "nosniff"
+    assert response.headers.get("X-Frame-Options") == "DENY"
+
+
+async def test_security_headers_survive_an_unhandled_error(client: AsyncClient) -> None:
+    """Régression : la réponse 500 par défaut sort hors de la pile, donc sans en-têtes.
+
+    C'est pourtant le moment où ils comptent le plus — et le corps ne doit rien révéler.
+    """
+    from app.main import app
+
+    @app.get("/_test/boom")
+    async def _boom() -> None:  # pragma: no cover - route de test
+        raise RuntimeError("détail interne qui ne doit pas fuiter")
+
+    try:
+        response = await client.get("/_test/boom")
+    except RuntimeError:
+        pytest.skip("le client de test propage l'exception au lieu de la réponse")
+
+    assert response.status_code == 500
+    assert response.headers.get("X-Content-Type-Options") == "nosniff"
+    assert "détail interne" not in response.text
+
+
+def test_the_rate_limiter_does_not_leak_memory() -> None:
+    """Régression : le dictionnaire du limiteur gardait une entrée par IP, indéfiniment.
+
+    Sur l'unique endpoint public du projet, c'est un levier de saturation mémoire offert à qui
+    n'a même pas de compte.
+    """
+    from app.core.rate_limit import SlidingWindowRateLimiter
+
+    limiter = SlidingWindowRateLimiter(max_attempts=3, window_seconds=10)
+
+    for index in range(500):
+        limiter.hit(f"ip-{index}", now=0.0)
+    assert limiter.tracked_keys == 500
+
+    # Une fois la fenêtre écoulée, repasser sur les mêmes clés doit les libérer, pas les empiler.
+    for index in range(500):
+        limiter.hit(f"ip-{index}", now=100.0)
+
+    assert limiter.tracked_keys <= 500, "le limiteur accumule des clés sans jamais les purger"

@@ -1665,6 +1665,7 @@
             "anyOf": [
               {
                 "maxLength": 100,
+                "pattern": "^[\\w \\-'’().]+$",
                 "type": "string"
               },
               {
@@ -2172,56 +2173,6 @@
         "summary": "Update Element",
         "tags": [
           "plan"
-        ]
-      }
-    },
-    "/api/exports/{task_id}": {
-      "get": {
-        "description": "État d'un export.\n\nLe contenu du résultat n'expose aucun chemin absolu : seul le nom de fichier est renvoyé, et\nle téléchargement repasse par une route qui revérifie la propriété du projet.",
-        "operationId": "read_export_status_api_exports__task_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "maxLength": 64,
-              "minLength": 8,
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExportStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "OAuth2PasswordBearer": []
-          }
-        ],
-        "summary": "Read Export Status",
-        "tags": [
-          "export"
         ]
       }
     },
@@ -2996,6 +2947,65 @@
           }
         ],
         "summary": "Export Pdf Synchronously",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/exports/tasks/{task_id}": {
+      "get": {
+        "description": "État d'un export.\n\nLa route porte l'identifiant du projet et le vérifie : être authentifié ne suffit pas. Sans\nce cloisonnement, n'importe quel compte connaissant un identifiant de tâche lirait le\ndescriptif de l'export d'autrui — nom de fichier, taille, identifiant de projet.\n\nLe résultat n'expose aucun chemin absolu, et le téléchargement repasse par une route qui\nrevérifie elle aussi la propriété.",
+        "operationId": "read_export_status_api_projects__project_id__exports_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 8,
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Export Status",
         "tags": [
           "export"
         ]

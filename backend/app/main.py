@@ -15,7 +15,11 @@ from app.api.plan import router as plan_router
 from app.api.scene import router as scene_router
 from app.api.share import router as share_router
 from app.core.config import get_settings
-from app.core.security_headers import SecurityHeadersMiddleware, add_cache_control
+from app.core.security_headers import (
+    SecurityHeadersMiddleware,
+    add_cache_control,
+    unhandled_error_handler,
+)
 
 
 def create_app() -> FastAPI:
@@ -35,7 +39,6 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if expose_docs else None,
     )
 
-    app.add_middleware(SecurityHeadersMiddleware, https_only=not settings.is_development)
     app.middleware("http")(add_cache_control)
 
     app.add_middleware(
@@ -49,6 +52,16 @@ def create_app() -> FastAPI:
         expose_headers=["X-Current-Version", "X-Cache", "X-Generation-Ms"],
         max_age=600,
     )
+
+    # Ajouté en dernier, donc **le plus externe** : c'est la seule position qui couvre aussi les
+    # réponses produites par le middleware CORS lui-même (préflights `OPTIONS`), lesquelles ne
+    # traversent jamais la pile applicative.
+    app.add_middleware(SecurityHeadersMiddleware, https_only=not settings.is_development)
+
+    # Une erreur non gérée est justement le moment où les en-têtes comptent le plus : la réponse
+    # d'erreur par défaut de Starlette est produite hors de la pile de middlewares, ce
+    # gestionnaire la ramène dedans.
+    app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(health_router)
     app.include_router(auth_router)
