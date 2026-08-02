@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # Postgres (spec §6)
     database_url: str = "postgresql+psycopg://app:app@localhost:5432/app"
 
+    # Répertoire des exports générés (P9). Monté en volume dans docker-compose.
+    export_dir: str = "/tmp/renovation-exports"
+
+    # Bascule Celery en exécution immédiate : les tests tournent ainsi sans broker.
+    celery_eager: bool = False
+
     # Journalisation SQL — sert à mesurer les N+1 avant de les optimiser (spec §8, cas 4).
     sql_echo: bool = False
 

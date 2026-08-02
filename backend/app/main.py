@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.admin import mount_admin
 from app.api.auth import router as auth_router
+from app.api.exports import router as exports_router
 from app.api.furniture import router as furniture_router
 from app.api.health import router as health_router
 from app.api.plan import router as plan_router
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(furniture_router)
     app.include_router(scene_router)
     app.include_router(share_router)
+    app.include_router(exports_router)
     mount_admin(app)
     return app
 

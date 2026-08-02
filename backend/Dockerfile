@@ -16,6 +16,14 @@ COPY . .
 
 # Utilisateur non-root (durcissement de base ; la passe complète est en P12).
 RUN useradd --create-home --uid 1000 appuser && chown -R appuser:appuser /app
+
+# Le répertoire d'export doit exister ET appartenir à l'utilisateur applicatif AVANT le montage :
+# un volume nommé Docker hérite des droits du répertoire de l'image. Sans ça, le worker Celery
+# tourne en non-root sur un volume appartenant à root et échoue en `Permission denied` — un
+# défaut que les tests en mode `task_always_eager` ne peuvent pas voir, puisqu'ils écrivent
+# ailleurs et sous une autre identité.
+RUN mkdir -p /exports && chown appuser:appuser /exports
+
 USER appuser
 
 EXPOSE 8000

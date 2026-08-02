@@ -23,6 +23,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # La configuration refuse volontairement de démarrer hors développement avec la clé par défaut
 # (garde-fou anti-« oubli de SECRET_KEY en production »). Les tests s'annoncent donc comme tels.
 os.environ.setdefault("ENVIRONMENT", "development")
+# Celery en exécution immédiate : la suite tourne sans broker (P9).
+os.environ.setdefault("CELERY_EAGER", "true")
+os.environ.setdefault("EXPORT_DIR", str(_TMP_DIR / "exports"))
 
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402

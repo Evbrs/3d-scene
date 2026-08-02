@@ -22,7 +22,7 @@ Le plan du ticket en cours vit dans `PLAN.md` ; ceux des tickets clos sont archi
 | P6 | Scene graph 3D backend (`numpy`) — fixtures de référence obligatoires | P3, P5 | **fait** |
 | P7 | Viewer 3D (TresJS) : caméras, isolement de face, transparence | P6 | **fait** |
 | P8 | Partage de vue (`SharedView`) | P7 | **fait** |
-| P9 | Export PDF/image + Celery | P4, P7 | à faire |
+| P9 | Export PDF/image + Celery | P4, P7 | **fait** |
 | P10 | Passe performance (cache, eager loading, indexation) | P3–P9 | à faire |
 | P11 | Passe tests d'intégration / cas limites | P0–P10 | à faire |
 | P12 | Durcissement déploiement | P0–P11 | à faire |
@@ -500,3 +500,40 @@ Suite : **197 tests backend**, 44 tests frontend, `ruff` / `mypy --strict` / bui
 **Les trois contraintes de la spec §3.5 sont traitées comme la fonctionnalité elle-même** — un
 endpoint public sans jeton imprévisible, sans limitation de débit et sans filtrage des données
 serait une régression de sécurité déguisée en fonctionnalité.
+
+### P9 — Export PDF et tâches Celery · **fait**
+
+PDF vectoriel (une page par pièce : plan coté + détail par face), généré par un worker Celery,
+avec le chemin synchrone conservé comme référence.
+
+**Mesure exigée par §8 cas 2** — relevée sur la stack réelle, projet de 8 pièces :
+
+| Chemin | Réponse HTTP perçue | Génération |
+|---|---|---|
+| Synchrone (`/exports/pdf/direct`) | **33,7 ms** | 27,6 ms, dans la requête |
+| Asynchrone (Celery, vrai worker + Redis) | **42,4 ms** | déportée dans le worker |
+
+Lecture honnête de ce résultat : **à cette taille de plan, Celery ne fait pas gagner de temps** —
+il en coûte même une dizaine de millisecondes (sérialisation, aller-retour Redis). Le gain
+n'apparaît que lorsque la génération dépasse largement le coût de mise en file : la requête HTTP
+reste alors à ~40 ms quelle que soit la durée du rendu, là où le chemin synchrone la suit
+linéairement. C'est exactement ce que la spec demandait de constater plutôt que de supposer, et
+c'est pourquoi les deux chemins restent exposés.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| PDF valide et reproductible | ✅ | en-tête `%PDF-`, fin `%%EOF`, taille croissant avec le plan |
+| Export asynchrone immédiat produisant un fichier | ✅ | 202 en 42 ms, puis `SUCCESS`, 8148 octets téléchargés |
+| Téléchargement cloisonné et résistant à la traversée de chemin | ✅ | 4 cas paramétrés + test inter-comptes |
+| Gain mesuré | ✅ | tableau ci-dessus, en-tête `X-Generation-Ms` |
+| Routes authentifiées et cloisonnées | ✅ | tests dédiés |
+
+Suite : **211 tests backend**, `ruff` et `mypy --strict` verts.
+
+**Défaut trouvé uniquement en exécutant la vraie stack** : le worker tourne en non-root, et un
+volume Docker nommé hérite des droits du répertoire de l'image — `/exports` appartenait à root,
+donc `PermissionError` à la première écriture. Les tests en mode `task_always_eager` ne pouvaient
+pas le voir : ils écrivent ailleurs, sous une autre identité. Corrigé dans le `Dockerfile`. C'est
+l'illustration de la règle du `CLAUDE.md` : un ticket n'est pas fini sur la seule foi des tests.

@@ -46,11 +46,14 @@ services:
       # Explicite : la valeur par défaut du code est « production », qui refuse de démarrer sans
       # SECRET_KEY forte. C'est voulu — voir app/core/config.py.
       SECRET_KEY: ${SECRET_KEY:-cle-de-developpement-a-remplacer-absolument-32+}
+      EXPORT_DIR: /exports
       DEBUG: "true"
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      # Le volume est partagé avec le worker : c'est lui qui écrit les PDF, le backend les sert.
+      - exports:/exports
     depends_on:
       db:
         condition: service_healthy
@@ -63,6 +66,34 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  worker:
+    # Worker Celery : c'est lui qui exécute les exports PDF (spec §7, phase P9). Il partage
+    # l'image et le code du backend, mais tourne dans son propre processus — d'où un moteur de
+    # base créé chez lui, jamais hérité d'un fork.
+    build:
+      context: ./backend
+    command: celery -A app.core.celery_app.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+      SECRET_KEY: ${SECRET_KEY:-cle-de-developpement-a-remplacer-absolument-32+}
+      EXPORT_DIR: /exports
+    volumes:
+      - ./backend:/app
+      - exports:/exports
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build:
@@ -88,3 +119,4 @@ services:
 
 volumes:
   postgres_data:
+  exports:
