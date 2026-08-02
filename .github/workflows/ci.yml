@@ -16,6 +16,20 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
 
@@ -34,8 +48,23 @@ jobs:
       - name: Types (mypy)
         run: mypy .
 
-      - name: Tests (pytest)
+      - name: Tests (pytest, SQLite)
         run: pytest
+
+      - name: Tests (pytest, PostgreSQL)
+        # La même suite rejouée sur le moteur de production : c'est ce qui valide que les types
+        # portables choisis (JSON plutôt que JSONB) se comportent identiquement sur les deux.
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app_test
+        run: pytest
+
+      - name: Migrations Alembic sur une base vierge
+        env:
+          DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app_test
+        run: |
+          alembic upgrade head
+          # Aucune dérive entre les modèles et la migration : autogenerate ne doit rien trouver.
+          alembic check
 
   frontend:
     name: Frontend (build, tests, lint)

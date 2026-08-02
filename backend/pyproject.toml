@@ -29,6 +29,8 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "factory-boy>=3.3",
+    "aiosqlite>=0.20",
+    "greenlet>=3.1",
     "types-factory-boy>=0.4",
 ]
 
@@ -45,6 +47,10 @@ packages = ["app"]
 target-version = "py312"
 line-length = 100
 src = ["."]
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["alembic"]
 
 [tool.ruff.lint]
 select = [

@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # Postgres (spec §6)
     database_url: str = "postgresql+psycopg://app:app@localhost:5432/app"
 
+    # Journalisation SQL — sert à mesurer les N+1 avant de les optimiser (spec §8, cas 4).
+    sql_echo: bool = False
+
+    # Clé de signature des sessions SQLAdmin. Valeur de développement uniquement : en production
+    # la variable d'environnement est obligatoire (vérifié au démarrage, voir `main.py`).
+    secret_key: str = "dev-secret-key-change-me"
+
     # Redis / Celery (spec §6, utilisés à partir de P9)
     redis_url: str = "redis://localhost:6379/0"
 

@@ -31,9 +31,13 @@ docker compose up
 | Frontend (Vite) | http://localhost:5173 |
 | Backend (FastAPI) | http://localhost:8000 |
 | Doc API interactive | http://localhost:8000/docs |
+| Back-office (SQLAdmin) | http://localhost:8000/admin |
 | Health check | http://localhost:8000/health |
-| PostgreSQL | `localhost:5432` |
-| Redis | `localhost:6379` |
+| PostgreSQL | `localhost:5433` (décalé : une installation locale occupe souvent 5432) |
+| Redis | `localhost:6380` |
+
+Le conteneur `backend` applique `alembic upgrade head` au démarrage. Le volume PostgreSQL crée
+deux bases : `app` (développement) et `app_test` (suite de tests).
 
 Le schéma OpenAPI (`http://localhost:8000/openapi.json`) est la **source de vérité** des routes
 et formats de réponse pour le frontend — aucune route ne doit être devinée.
@@ -69,7 +73,10 @@ Ce sont exactement les checks exécutés par la CI (`.github/workflows/ci.yml`).
 
 | But | Commande |
 |---|---|
-| Tests backend | `cd backend && pytest` |
+| Tests backend (SQLite temporaire, sans Docker) | `cd backend && pytest` |
+| Tests backend sur PostgreSQL | `cd backend && TEST_DATABASE_URL=postgresql+psycopg://app:<mdp>@localhost:5433/app_test pytest` |
+| Migrations | `cd backend && alembic upgrade head` |
+| Vérifier l'absence de dérive modèles/migrations | `cd backend && alembic check` |
 | Lint + types backend | `cd backend && ruff check . && mypy .` |
 | Tests frontend | `cd frontend && npm run test` |
 | Lint frontend | `cd frontend && npm run lint` |
@@ -84,7 +91,11 @@ Ce sont exactement les checks exécutés par la CI (`.github/workflows/ci.yml`).
 │   ├── app/
 │   │   ├── api/      # routers HTTP
 │   │   ├── core/     # configuration
+│   │   ├── models/   # modèles SQLModel
+│   │   ├── admin.py  # back-office SQLAdmin
+│   │   ├── db.py     # moteur + session
 │   │   └── main.py
+│   ├── alembic/      # migrations
 │   └── tests/
 ├── frontend/         # SPA Vue 3
 │   └── src/

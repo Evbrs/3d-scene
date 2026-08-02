@@ -11,7 +11,7 @@ Statuts : `à faire` · `en cours` · `en revue` · `fait`
 | Ticket | Contenu | Dépend de | Statut |
 |---|---|---|---|
 | P0 | Scaffolding + CI | — | **fait** |
-| P1 | Modèles SQLModel + migrations Alembic + admin SQLAdmin | P0 | à faire |
+| P1 | Modèles SQLModel + migrations Alembic + admin SQLAdmin | P0 | **fait** |
 | P2 | Auth JWT, permissions objet | P1 | à faire |
 | P3 | API CRUD du plan 2D (schémas Pydantic) | P2 | à faire |
 | P4 | Éditeur 2D (Vue + Konva) | P3 | à faire |
@@ -84,3 +84,46 @@ le démarrage. Aucun impact aujourd'hui (variable non définie), hors périmètr
 
 **Reste à faire hors ticket** : dépôt distant GitHub + CLI `gh` (`plan-generation-ia.md` §2),
 à créer côté humain (`gh` n'est pas installé sur la machine).
+
+### P1 — Modèle de données · **fait**
+
+Modèles `Project`/`Room`/`Face`/`Element`/`FurnitureType`/`SharedView`, migration Alembic
+initiale, back-office SQLAdmin sur `/admin`.
+
+**Critères d'acceptation**
+
+| Critère | État | Vérification |
+|---|---|---|
+| `alembic upgrade head` sur une base vide crée toutes les tables | ✅ | `tests/test_migrations.py` (+ aller-retour `downgrade base`) et application réelle sur la stack Docker : 6 tables + `alembic_version` |
+| Un test crée `Project → Room → Face → Element` et relit les relations | ✅ | `test_creates_and_reads_back_project_room_face_element` |
+| Un test vérifie qu'une FK bloque un `Element` sur une `Face` inexistante | ✅ | `test_foreign_key_blocks_element_on_missing_face`, avec garde `foreign_keys_enforced` |
+| L'admin liste et permet d'éditer chaque modèle sur `/admin` | ✅ | 6 vues en 200 sur la stack réelle + `POST /admin/project/create` → 302 et ligne créée en base |
+
+Suite complète : **23 tests verts sur SQLite *et* sur PostgreSQL**, `ruff` et `mypy --strict` verts.
+
+**Décisions prises pendant le ticket**
+
+- `TimestampedModel` utilise `DateTime(timezone=True)` : la migration autogénérée produisait des
+  colonnes naïves alors que le code produit des datetimes *aware*, ce qui aurait fait perdre le
+  fuseau à l'écriture. Migration régénérée.
+- Pas de `from __future__ import annotations` dans `app/models/plan.py` : SQLAlchemy refuse une
+  annotation de relation devenue chaîne. `FurnitureType` est défini avant `Element` pour la même
+  raison (une union en chaîne, `"FurnitureType | None"`, n'est pas résoluble).
+- Verrouillage optimiste (spec §8, cas 3) implémenté via `version_id_col` sur `Project`, couvert
+  par un test qui simule deux sessions concurrentes.
+- Base de test : fichier SQLite temporaire par défaut (pour que `pytest` reste exécutable sans
+  Docker), la CI rejouant la même suite sur PostgreSQL. Un fichier et non `:memory:` parce que
+  SQLAdmin ouvre son propre moteur synchrone.
+- Le conteneur `backend` applique les migrations au démarrage (sinon la stack sert une API sur
+  une base sans tables).
+
+**Hors périmètre annoncé, signalé** : `backend/app/db.py`, `backend/alembic.ini`,
+`backend/app/main.py` (montage de l'admin), `backend/tests/conftest.py`, `docker-compose.yml`,
+`.github/workflows/ci.yml` et `README.md` ont été touchés — aucun n'est listé dans les fichiers
+autorisés du ticket P1, mais chacun est nécessaire à un critère d'acceptation.
+
+**Pièges rencontrés, corrigés** :
+- Une installation PostgreSQL locale occupait `5432` et masquait le conteneur (« role "app" does
+  not exist » alors que la base est saine). Ports hôte décalés par défaut : `5433` et `6380`.
+- Pointer `TEST_DATABASE_URL` sur la base de développement la vidait (la suite fait `drop_all`
+  en fin de test). Le volume PostgreSQL crée maintenant une base `app_test` dédiée.

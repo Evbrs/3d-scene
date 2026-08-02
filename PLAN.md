@@ -1,69 +1,55 @@
-# PLAN.md — Ticket P0 : Scaffolding
+# PLAN.md — Ticket P1 : Modèle de données
 
-> Plan du ticket en cours. Régénéré à chaque ticket, jamais accumulé.
-> Source : `docs/plan-generation-ia.md` §8 (ticket P0), `docs/spec-complete.md` §6 (stack).
+> Source : `docs/plan-generation-ia.md` §8 (ticket P1), `docs/spec-complete.md` §5 et §6.
 
 ## Objectif
 
-Poser un squelette de repo déployable, avant tout code métier.
+Modèles SQLModel `Project`/`Room`/`Face`/`Element`/`FurnitureType`/`SharedView` + migration
+Alembic initiale + configuration SQLAdmin.
 
 ## Référence spec
 
-`docs/spec-complete.md` §6 (stack technique).
+`docs/spec-complete.md` §5 (ajouts au modèle de données), §6 (ORM/migrations/admin),
+§8 (géométrie stockée en JSON ; verrouillage optimiste par champ `version`).
 
 ## Fichiers autorisés
 
-L'ensemble du repo — seul ticket avec un périmètre aussi large, puisque rien n'existe encore
-(`docs/plan-generation-ia.md` §8).
+`backend/app/models/`, `backend/alembic/`, `backend/app/admin.py`,
+`backend/tests/test_models.py`.
+
+**Extension signalée** : `backend/app/db.py` (moteur + session) et `backend/alembic.ini` sont
+nécessaires pour que les modèles et la migration existent — l'énoncé du ticket ne les liste pas
+mais aucune migration n'est possible sans eux. `backend/app/main.py` et `backend/tests/conftest.py`
+sont touchés au minimum pour monter l'admin et fournir une session de test.
 
 ## Non-objectifs
 
-- Aucun modèle de données (→ P1)
-- Aucune route métier (→ P3)
-- Aucun composant Vue au-delà d'un écran de test (→ P4)
-- Aucune auth (→ P2), aucun catalogue de mobilier (→ P5), aucune géométrie (→ P6)
+- Aucune route API (→ P3)
+- Aucune logique d'auth (→ P2) — le modèle `User` et le champ `Project.owner_id` arrivent en P2
+- Aucun seed du catalogue `FurnitureType` (→ P5)
+- Aucun calcul géométrique (→ P6)
 
-## Découpage
+## Décisions
 
-1. **Mise en place §2** : dépôt Git, `CLAUDE.md` à la racine, `spec-reviewer.md` dans
-   `.claude/agents/`, specs déplacées dans `docs/` (le `CLAUDE.md` fourni les référence sous
-   `docs/spec-complete.md`), `PROGRESS.md` créé.
-2. **Backend** : projet FastAPI Python 3.12, `pyproject.toml` (deps de la stack §6),
-   configuration par variables d'environnement (`pydantic-settings`), route `GET /health`,
-   config `ruff` + `mypy` stricts, un test pytest du health check.
-3. **Frontend** : projet Vue 3 + TypeScript + Vite, dépendances de la stack (`vue-konva`,
-   `@tresjs/core`, `three`), un unique écran de test qui appelle `/health`, `vitest` avec un
-   test de fumée.
-4. **Docker** : `Dockerfile` backend et frontend, `docker-compose.yml` avec Postgres + Redis +
-   backend + frontend, healthchecks et dépendances de démarrage.
-5. **CI** : workflow GitHub Actions exécutant exactement les mêmes checks que les critères
-   d'acceptation.
-6. **Docs** : `README.md` (démarrage local), `PROGRESS.md` (phases §5 + statuts).
+- **Géométrie en JSON** (`docs/spec-complete.md` §8, cas 1) : polygone de pièce, revêtement,
+  couleurs et paramètres de variante sont des colonnes JSON, pas des tables normalisées.
+- **Verrouillage optimiste** (§8, cas 3) : `Project.version`, incrémenté à chaque écriture,
+  via `__mapper_args__ = {"version_id_col": ...}` de SQLAlchemy.
+- **Type `JSON` portable** plutôt que `JSONB` : la suite de tests tourne sur SQLite en mémoire
+  (`cd backend && pytest` doit rester exécutable sans Docker, cf. `CLAUDE.md`), et la CI la
+  rejoue contre un vrai PostgreSQL.
+- **Labels de face** : la colonne `label` existe en P1 ; l'attribution automatique (A, B, C…)
+  est une règle métier qui vit dans l'API, donc en P3.
 
 ## Critères d'acceptation (exécutables)
 
-| # | Critère | Commande de vérification |
+| # | Critère | Vérification |
 |---|---|---|
-| A1 | `docker compose up` démarre Postgres + Redis + backend + frontend sans erreur | `docker compose config -q` puis `docker compose up` |
-| A2 | `GET /health` retourne `200 {"status": "ok"}` | `pytest tests/test_health.py` + `curl` sur l'app lancée |
-| A3 | `cd backend && pytest` passe | `pytest` |
-| A4 | `cd backend && ruff check . && mypy .` sans erreur | idem |
-| A5 | `cd frontend && npm run build` réussit | idem |
-| A6 | La CI exécute ces mêmes checks à chaque push | `.github/workflows/ci.yml` |
+| A1 | `alembic upgrade head` sur une base vide crée toutes les tables sans erreur | test `test_migrations.py` + commande manuelle sur la stack Docker |
+| A2 | Un test crée `Project → Room → Face → Element` et relit les relations | `tests/test_models.py` |
+| A3 | Un test vérifie qu'une FK bloque un `Element` référençant une `Face` inexistante | `tests/test_models.py` |
+| A4 | L'admin SQLAdmin liste et permet d'éditer chaque modèle sur `/admin` | `tests/test_models.py` (requêtes HTTP sur `/admin/...`) |
 
 ## Definition of done
 
-Tous les critères verts + `README.md` avec instructions de démarrage local + `PROGRESS.md` créé
-+ revue `spec-reviewer` + commit descriptif.
-
-## Risques identifiés
-
-- **Docker daemon indisponible sur la machine de dev** : A1 se vérifie alors uniquement par
-  `docker compose config -q` (validation statique) ; le démarrage réel reste à valider par
-  l'humain ou par la CI. À signaler explicitement, jamais à déclarer vert par défaut.
-- **TresJS / `three` / `vue-konva`** : installés en dépendance dès P0 pour figer la stack (§6),
-  mais non utilisés avant P4/P7 (non-objectif).
-- **`three-bvh-csg`** : *décision prise en cours de ticket* — volontairement **non installé**
-  en P0. Il n'est requis qu'à partir de P6/P7 et son statut expérimental (spec §3.2) justifie
-  d'en choisir la version au moment de l'utiliser, plutôt que de figer dès maintenant une
-  version d'une librairie mouvante.
+Critères verts + `pytest`/`ruff`/`mypy` verts + revue `spec-reviewer` + `PROGRESS.md` à jour.

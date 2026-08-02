@@ -8,9 +8,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: ${POSTGRES_DB:-app}
     ports:
-      - "5432:5432"
+      # Port hôte décalé par défaut : une installation PostgreSQL locale occupe très souvent
+      # 5432, et elle gagne sur `localhost` face au mapping Docker — d'où des « role does not
+      # exist » très trompeurs. Surchargeable via POSTGRES_HOST_PORT.
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Scripts exécutés une seule fois, à l'initialisation du volume.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
       interval: 5s
@@ -20,7 +25,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -30,7 +35,10 @@ services:
   backend:
     build:
       context: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Les migrations sont appliquées au démarrage : sans ça, une stack fraîchement montée sert
+    # une API sur une base sans tables. En production ce sera une étape de déploiement distincte
+    # (P12), pas un effet de bord du lancement de l'application.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
       REDIS_URL: redis://redis:6379/0
