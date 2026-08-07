@@ -4,8 +4,10 @@ Les fixtures de `tests/geometry/` vérifient le *calcul* ; ici on vérifie le *c
 depuis les modèles en base jusqu'au JSON, avec les permissions.
 """
 
+import threading
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,6 +125,33 @@ async def test_another_account_cannot_read_the_scene(
     project, _room = await _plan(auth_client)
 
     assert (await other_client.get(f"/api/projects/{project['id']}/scene")).status_code == 404
+
+
+async def test_the_scene_graph_is_never_built_on_the_event_loop(
+    auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Le calcul est du numpy pur, donc bloquant.
+
+    Sur la boucle d'événements il gèle *toutes* les requêtes en cours le temps du calcul — et le
+    même point d'entrée sert la lecture publique (P8), atteignable sans authentification.
+    """
+    from app.geometry import scene as geometry_scene
+
+    project, _room = await _plan(auth_client)
+    seen: list[str] = []
+    original = geometry_scene.build_scene_graph
+
+    def spy(plan: dict[str, Any], catalog: dict[int, dict[str, Any]]) -> dict[str, Any]:
+        seen.append(threading.current_thread().name)
+        return original(plan, catalog)
+
+    monkeypatch.setattr("app.api.scene.build_scene_graph", spy)
+    response = await auth_client.get(f"/api/projects/{project['id']}/scene")
+
+    assert response.status_code == 200
+    assert seen and threading.main_thread().name not in seen, (
+        f"le scene graph est calculé sur {seen}, donc sur la boucle d'événements"
+    )
 
 
 async def test_the_scene_graph_is_stable_between_two_calls(auth_client: AsyncClient) -> None:

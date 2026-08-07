@@ -11,7 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.api.auth import login_rate_limiter
+from app.api.auth import REFRESH_COOKIE_NAME, login_rate_limiter
 from app.core.config import get_settings
 from app.core.security import (
     ALGORITHM,
@@ -385,6 +385,140 @@ async def test_refresh_rejects_an_access_token(client: AsyncClient) -> None:
         "/api/auth/refresh", json={"refresh_token": tokens["access_token"]}
     )
     assert response.status_code == 401
+
+
+# --- Le jeton de rafraîchissement vit dans un cookie -------------------------------------------
+
+
+def _refresh_cookie(response: object) -> str:
+    """En-tête `Set-Cookie` portant le jeton de rafraîchissement.
+
+    Lu sur l'en-tête brut et non sur le pot de cookies : c'est le seul moyen de vérifier les
+    attributs (`HttpOnly`, `Path`, `SameSite`), que `httpx` n'expose pas.
+    """
+    headers = getattr(response, "headers", None)
+    assert headers is not None
+    return next(
+        str(value)
+        for key, value in headers.multi_items()
+        if key.lower() == "set-cookie" and str(value).startswith(f"{REFRESH_COOKIE_NAME}=")
+    )
+
+
+async def test_logging_in_stores_the_refresh_token_in_an_http_only_cookie(
+    client: AsyncClient,
+) -> None:
+    """Un jeton long lisible par du JavaScript est un jeton exfiltrable par une injection."""
+    await _register(client, "cookie@exemple.fr")
+
+    response = await client.post(
+        "/api/auth/token", data={"username": "cookie@exemple.fr", "password": VALID_PASSWORD}
+    )
+
+    cookie = _refresh_cookie(response)
+    assert "HttpOnly" in cookie
+    assert "SameSite=lax" in cookie.replace("SameSite=Lax", "SameSite=lax")
+    # Restreint aux routes d'authentification : le jeton n'accompagne aucun autre appel de l'API.
+    assert "Path=/api/auth" in cookie
+    assert client.cookies.get(REFRESH_COOKIE_NAME) is not None
+
+
+async def test_refresh_works_from_the_cookie_alone(client: AsyncClient) -> None:
+    """Le contrat que le frontend implémente : `POST /refresh` sans corps."""
+    await _register(client, "sans-corps@exemple.fr")
+    await _login(client, "sans-corps@exemple.fr")
+
+    response = await client.post("/api/auth/refresh")
+
+    assert response.status_code == 200, response.text
+    renewed = response.json()
+    assert (
+        await client.get("/api/auth/me", headers=_auth(renewed["access_token"]))
+    ).status_code == 200
+    # Rotation : le cookie est reposé à chaque rafraîchissement.
+    assert _refresh_cookie(response).startswith(f"{REFRESH_COOKIE_NAME}=")
+
+
+async def test_refresh_without_a_cookie_nor_a_body_is_refused(client: AsyncClient) -> None:
+    response = await client.post("/api/auth/refresh")
+    assert response.status_code == 401
+
+
+async def test_logging_out_clears_the_cookie(client: AsyncClient) -> None:
+    """Le cookie est `httpOnly` : sans cette route, le client ne peut pas se déconnecter."""
+    await _register(client, "sortie@exemple.fr")
+    await _login(client, "sortie@exemple.fr")
+    assert client.cookies.get(REFRESH_COOKIE_NAME) is not None
+
+    response = await client.post("/api/auth/logout")
+
+    assert response.status_code == 204
+    assert client.cookies.get(REFRESH_COOKIE_NAME) is None
+    assert (await client.post("/api/auth/refresh")).status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("route", "spied", "payload"),
+    [
+        ("/api/auth/register", "hash_password", {"json": {"email": "argon@exemple.fr",
+                                                          "password": VALID_PASSWORD}}),
+        ("/api/auth/token", "verify_password", {"data": {"username": "argon@exemple.fr",
+                                                         "password": VALID_PASSWORD}}),
+    ],
+)
+async def test_argon2_never_runs_on_the_event_loop(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    spied: str,
+    payload: dict[str, object],
+) -> None:
+    """Argon2id est *conçu* pour être lent — c'est ce qui le rend sûr.
+
+    Exécuté sur la boucle d'événements, il fige toutes les requêtes en cours pendant plusieurs
+    dizaines de millisecondes. Inscription et connexion sont atteignables sans authentification,
+    donc en volume : c'est un déni de service à coût nul pour l'attaquant.
+    """
+    import threading
+
+    from app.core import security
+
+    if spied == "verify_password":
+        # La connexion a besoin d'un compte : on l'inscrit **avant** de poser l'espion, pour ne
+        # mesurer que le fil sur lequel tourne la vérification.
+        await _register(client, "argon@exemple.fr")
+
+    original = getattr(security, spied)
+    seen: list[str] = []
+
+    def spy(*args: object, **kwargs: object) -> object:
+        seen.append(threading.current_thread().name)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(f"app.api.auth.{spied}", spy)
+    response = await client.post(route, **payload)  # type: ignore[arg-type]
+
+    assert response.status_code in (200, 202), response.text
+    assert seen and threading.main_thread().name not in seen, (
+        f"{spied} s'exécute sur {seen}, donc sur la boucle d'événements"
+    )
+
+
+async def test_outside_development_the_refresh_token_never_reaches_the_body(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """En production, seul le cookie porte le jeton — et il est marqué `Secure`."""
+    await _register(client, "prod@exemple.fr")
+
+    production = get_settings().model_copy(update={"environment": "production"})
+    monkeypatch.setattr("app.api.auth.get_settings", lambda: production)
+    response = await client.post(
+        "/api/auth/token", data={"username": "prod@exemple.fr", "password": VALID_PASSWORD}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["refresh_token"] is None
+    assert "Secure" in _refresh_cookie(response)
 
 
 # --- Permissions objet ------------------------------------------------------------------------

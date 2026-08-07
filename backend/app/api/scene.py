@@ -7,17 +7,19 @@ asynchrone contredirait la décision et priverait P9 de sa mesure de référence
 
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, select
 
+from app.api.conflicts import ConflictAwareRoute
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
 from app.core.cache import catalog_fingerprint, scene_cache
-from app.geometry.scene import build_scene_graph
+from app.geometry.scene import OPENING_SLUGS, build_scene_graph
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 
-router = APIRouter(prefix="/api", tags=["scene"])
+router = APIRouter(prefix="/api", tags=["scene"], route_class=ConflictAwareRoute)
 
 
 def _element_to_dict(element: Element) -> dict[str, Any]:
@@ -92,7 +94,12 @@ async def load_scene_inputs(
                 .selectinload(Face.elements)  # type: ignore[arg-type]
             )
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    # `scalar_one` remontait en 500 quand le projet disparaissait entre la vérification de
+    # propriété et le calcul — et sur le chemin **public** (P8), où l'identifiant vient d'un
+    # partage qui peut survivre à son projet, la 500 était le cas nominal.
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projet introuvable")
 
     referenced = {
         element.furniture_type_id
@@ -102,26 +109,32 @@ async def load_scene_inputs(
         if element.furniture_type_id is not None
     }
 
-    catalog: dict[int, dict[str, Any]] = {}
-    if referenced:
-        rows = (
-            (
-                await session.execute(
-                    select(FurnitureType).where(col(FurnitureType.id).in_(referenced))
+    # Les recettes de menuiserie sont chargées d'office : une ouverture n'a pas de
+    # `furniture_type_id` (spec §5, ce champ n'est renseigné que pour `kind == FURNITURE`), c'est
+    # sa nature qui désigne sa recette. Sans ce chargement, aucune porte ni fenêtre n'est jamais
+    # rendue — le percement resterait un rectangle traversant.
+    rows = (
+        (
+            await session.execute(
+                select(FurnitureType).where(
+                    col(FurnitureType.id).in_(referenced)
+                    | col(FurnitureType.slug).in_(OPENING_SLUGS.values())
                 )
             )
-            .scalars()
-            .all()
         )
-        catalog = {
-            row.id or 0: {
-                "id": row.id,
-                "slug": row.slug,
-                "parts": list(row.parts),
-                "color_slots": list(row.color_slots),
-            }
-            for row in rows
+        .scalars()
+        .all()
+    )
+    catalog: dict[int, dict[str, Any]] = {
+        row.id or 0: {
+            "id": row.id,
+            "slug": row.slug,
+            "parts": list(row.parts),
+            "color_slots": list(row.color_slots),
+            "variants": list(row.variants),
         }
+        for row in rows
+    }
 
     return project, catalog
 
@@ -170,6 +183,12 @@ async def scene_for_project(
     if cached is not None:
         return cached, True
 
-    scene = build_scene_graph(project_to_plain_dict(project), catalog)
+    # `build_scene_graph` est du calcul numpy pur, donc bloquant : sur un plan un peu fourni il
+    # gèle la boucle d'événements — et donc *toutes* les requêtes en cours — pendant des centaines
+    # de millisecondes. Le chemin public (P8) est atteignable sans authentification, ce qui en
+    # ferait un levier de déni de service à un appel par seconde.
+    scene = await run_in_threadpool(
+        build_scene_graph, project_to_plain_dict(project), catalog
+    )
     await scene_cache.set(project_id, version, scene, fingerprint)
     return scene, False

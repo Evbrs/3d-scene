@@ -13,8 +13,9 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
+from app.api.conflicts import ConflictAwareRoute
 from app.api.deps import CurrentUser, SessionDep, get_current_user
-from app.models.base import FurnitureCategory, utcnow
+from app.models.base import FurnitureCategory
 from app.models.plan import FurnitureType
 from app.models.user import User
 from app.schemas.furniture import (
@@ -24,7 +25,13 @@ from app.schemas.furniture import (
     FurnitureTypeUpdate,
 )
 
-router = APIRouter(prefix="/api/furniture-types", tags=["catalogue"])
+router = APIRouter(
+    prefix="/api/furniture-types", tags=["catalogue"], route_class=ConflictAwareRoute
+)
+
+# Caractère d'échappement du `LIKE`. Le choix d'un caractère qui n'est ni `%` ni `_` est le seul
+# qui compte ; l'antislash est celui qu'attendent PostgreSQL comme SQLite par défaut.
+LIKE_ESCAPE = "\\"
 
 
 async def require_superuser(
@@ -40,6 +47,15 @@ async def require_superuser(
 
 
 SuperUser = Annotated[User, Depends(require_superuser)]
+
+
+def _escape_wildcards(pattern: str) -> str:
+    """Neutralise les jokers `LIKE` d'un motif saisi par l'utilisateur.
+
+    L'antislash est échappé en premier, sinon on ré-échapperait ceux qu'on vient d'introduire.
+    """
+    escaped = pattern.replace(LIKE_ESCAPE, LIKE_ESCAPE * 2)
+    return escaped.replace("%", f"{LIKE_ESCAPE}%").replace("_", f"{LIKE_ESCAPE}_")
 
 
 @router.get("", response_model=FurnitureTypePage)
@@ -60,8 +76,12 @@ async def list_furniture_types(
         statement = statement.where(condition)
         count_statement = count_statement.where(condition)
     if search:
-        # `ilike` sur un paramètre lié : aucune concaténation de chaîne SQL.
-        condition = col(FurnitureType.name).ilike(f"%{search}%")
+        # `ilike` sur un paramètre lié : aucune concaténation de chaîne SQL. Les jokers du motif
+        # sont échappés : sans ça, chercher `_` ramenait tout le catalogue et `%` en faisait un
+        # scan complet déguisé en recherche.
+        condition = col(FurnitureType.name).ilike(
+            f"%{_escape_wildcards(search)}%", escape=LIKE_ESCAPE
+        )
         statement = statement.where(condition)
         count_statement = count_statement.where(condition)
 
@@ -145,7 +165,6 @@ async def update_furniture_type(
 
     for field, value in changes.items():
         setattr(furniture_type, field, value)
-    furniture_type.updated_at = utcnow()
     await session.commit()
     await session.refresh(furniture_type)
     return furniture_type

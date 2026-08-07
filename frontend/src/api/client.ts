@@ -7,8 +7,11 @@
  */
 
 import type {
+  Covering,
+  Face,
   FurnitureType,
   Page,
+  PlanElement,
   Project,
   ProjectSummary,
   Room,
@@ -20,7 +23,42 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000
 /** Clé de stockage du jeton. `sessionStorage` : le jeton disparaît à la fermeture de l'onglet. */
 const TOKEN_KEY = 'renovation.access_token'
 
+/**
+ * Nature d'un conflit d'écriture, lue dans le champ `code` du 409.
+ *
+ * Deux situations sans rapport partagent ce statut : le plan a bougé sous les pieds du client
+ * (`stale`), ou le serveur refuse une modification qui détruirait des éléments tant qu'elle
+ * n'est pas confirmée (`destructive`). L'interface ne propose pas la même chose dans les deux
+ * cas. Les distinguer sur une sous-chaîne du message français cassait à la première
+ * reformulation côté serveur.
+ */
+export type ConflictKind = 'stale' | 'destructive'
+
+/** Un code inconnu retombe sur `stale`, le seul des deux qui ne détruit rien s'il est proposé à tort. */
+function conflictKindOf(body: unknown): ConflictKind | null {
+  const code = readString(body, 'code')
+  if (code === null) return null
+  return /destruct|force|lose|perte/i.test(code) ? 'destructive' : 'stale'
+}
+
+function readString(body: unknown, key: string): string | null {
+  if (!body || typeof body !== 'object') return null
+  const value = (body as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : null
+}
+
+function readNumber(body: unknown, key: string): number | null {
+  if (!body || typeof body !== 'object') return null
+  const value = (body as Record<string, unknown>)[key]
+  return typeof value === 'number' ? value : null
+}
+
 export class ApiError extends Error {
+  /** Renseigné seulement sur un 409, et seulement si le serveur a nommé le conflit. */
+  readonly conflictKind: ConflictKind | null
+  /** Version du projet côté serveur au moment du refus, quand le serveur la joint. */
+  readonly currentVersion: number | null
+
   constructor(
     readonly status: number,
     readonly detail: string,
@@ -28,6 +66,8 @@ export class ApiError extends Error {
   ) {
     super(detail)
     this.name = 'ApiError'
+    this.conflictKind = status === 409 ? conflictKindOf(body) : null
+    this.currentVersion = readNumber(body, 'current_version')
   }
 
   /** Conflit d'édition : le plan a changé depuis la dernière lecture (spec §8, cas 3). */
@@ -50,6 +90,79 @@ export function storeToken(token: string): void {
 
 export function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY)
+  fallbackRefreshToken = null
+}
+
+// --- Session : rafraîchissement silencieux ------------------------------------------------------
+
+/**
+ * Jeton de rafraîchissement de repli.
+ *
+ * En production le backend le pose dans un cookie `httpOnly; Secure; SameSite=Lax` de chemin
+ * `/api/auth` : il est alors invisible d'ici, et c'est précisément le but — un XSS ne peut pas
+ * le voler. Certains déploiements de développement servent l'API sans cookie et le renvoient
+ * dans le corps ; on le garde alors **en mémoire seulement**, jamais dans un stockage, pour que
+ * la session tienne quand même la journée sans créer de secret persistant lisible en JavaScript.
+ */
+let fallbackRefreshToken: string | null = null
+
+/** Rafraîchissement en cours. Voir `refreshSession` : une seule requête pour tous les appelants. */
+let refreshInFlight: Promise<boolean> | null = null
+
+let sessionLostHandler: (() => void) | null = null
+
+/**
+ * Branche ce qui doit arriver quand la session est définitivement perdue.
+ *
+ * Le client HTTP n'a pas à connaître le routeur : `main.ts` y accroche la déconnexion propre et
+ * la redirection vers l'écran de connexion.
+ */
+export function onSessionLost(handler: (() => void) | null): void {
+  sessionLostHandler = handler
+}
+
+/**
+ * Renouvelle l'access token, une seule fois pour tous les appels concurrents.
+ *
+ * Sans cette mutualisation, les dix requêtes que l'éditeur émet en rafale se heurtent au même
+ * 401 et déclenchent dix rafraîchissements. Le backend fait tourner le jeton à chaque appel :
+ * les neuf réponses en retard porteraient des jetons déjà révoqués, et l'utilisateur serait
+ * déconnecté au milieu de son travail.
+ */
+function refreshSession(): Promise<boolean> {
+  refreshInFlight ??= performRefresh().finally(() => {
+    refreshInFlight = null
+  })
+  return refreshInFlight
+}
+
+async function performRefresh(): Promise<boolean> {
+  // Appelé sans corps quand le cookie fait foi ; le repli développement renvoie le jeton reçu.
+  const carried = fallbackRefreshToken
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+      method: 'POST',
+      // Sans ce drapeau, le cookie `httpOnly` n'est pas joint sur une requête cross-origine —
+      // et le frontend de développement tourne bien sur une autre origine que l'API.
+      credentials: 'include',
+      ...(carried
+        ? {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: carried }),
+          }
+        : {}),
+    })
+    if (!response.ok) return false
+    const body: unknown = await response.json()
+    const token = readString(body, 'access_token')
+    if (!token) return false
+    storeToken(token)
+    fallbackRefreshToken = readString(body, 'refresh_token')
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -68,7 +181,14 @@ function withQuery(path: string, params: Record<string, string | number | undefi
   return query ? `${path}?${query}` : path
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * Requête authentifiée, avec un unique rejeu après renouvellement du jeton.
+ *
+ * `allowRetry` est le garde-fou anti-boucle : la requête rejouée ne peut plus en déclencher une
+ * autre. Un backend qui répondrait 401 même avec un jeton frais ferait sinon boucler le client
+ * indéfiniment au lieu de rendre la main.
+ */
+async function request<T>(path: string, init: RequestInit = {}, allowRetry = true): Promise<T> {
   const headers = new Headers(init.headers)
   const token = storedToken()
   if (token) {
@@ -79,6 +199,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+
+  // Un 401 sur une session que l'on croyait valide, c'est un access token expiré : au bout de
+  // trente minutes d'édition, l'utilisateur perdait chaque enregistrement sans rien y pouvoir.
+  if (response.status === 401 && token) {
+    if (allowRetry && (await refreshSession())) {
+      return request<T>(path, init, false)
+    }
+    // Rejeu déjà tenté, ou rafraîchissement refusé : la session est perdue pour de bon.
+    clearToken()
+    sessionLostHandler?.()
+  }
 
   if (response.status === 204) {
     return undefined as T
@@ -110,11 +241,17 @@ function extractDetail(body: unknown, status: number): string {
 
 // --- Authentification -------------------------------------------------------------------------
 
-export async function register(email: string, password: string): Promise<void> {
-  await request<{ detail: string }>('/api/auth/register', {
+/**
+ * Inscription. Renvoie le message du serveur, volontairement identique que l'adresse soit libre
+ * ou déjà prise (anti-énumération) : c'est ce message-là qu'il faut afficher, pas une réussite
+ * inventée par le frontend.
+ */
+export async function register(email: string, password: string): Promise<string> {
+  const body = await request<{ detail: string }>('/api/auth/register', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   })
+  return body.detail
 }
 
 export async function login(email: string, password: string): Promise<string> {
@@ -124,6 +261,8 @@ export async function login(email: string, password: string): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form,
+    // Laisse le backend poser le cookie de rafraîchissement (voir `performRefresh`).
+    credentials: 'include',
   })
   const body: unknown = await response.json()
   if (!response.ok) {
@@ -131,6 +270,7 @@ export async function login(email: string, password: string): Promise<string> {
   }
   const token = (body as { access_token: string }).access_token
   storeToken(token)
+  fallbackRefreshToken = readString(body, 'refresh_token')
   return token
 }
 
@@ -195,12 +335,17 @@ export function deleteRoom(roomId: number): Promise<void> {
   return request<void>(`/api/rooms/${roomId}`, { method: 'DELETE' })
 }
 
+/**
+ * Le serveur **remplace** le dictionnaire de revêtement, il ne le fusionne pas : n'envoyer que
+ * la couleur effacerait la matière, les dimensions d'unité et le motif de pose. L'appelant est
+ * donc tenu de passer le revêtement complet.
+ */
 export function updateFaceCovering(
   faceId: number,
-  covering: Record<string, unknown> | null,
+  covering: Covering | null,
   version?: number,
-): Promise<unknown> {
-  return request(`/api/faces/${faceId}`, {
+): Promise<Face> {
+  return request<Face>(`/api/faces/${faceId}`, {
     method: 'PATCH',
     body: JSON.stringify({ covering, version }),
   })
@@ -220,8 +365,8 @@ export interface ElementPayload {
   version?: number
 }
 
-export function createElement(faceId: number, payload: ElementPayload): Promise<unknown> {
-  return request(`/api/faces/${faceId}/elements`, {
+export function createElement(faceId: number, payload: ElementPayload): Promise<PlanElement> {
+  return request<PlanElement>(`/api/faces/${faceId}/elements`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -230,8 +375,8 @@ export function createElement(faceId: number, payload: ElementPayload): Promise<
 export function updateElement(
   elementId: number,
   payload: Partial<ElementPayload>,
-): Promise<unknown> {
-  return request(`/api/elements/${elementId}`, {
+): Promise<PlanElement> {
+  return request<PlanElement>(`/api/elements/${elementId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   })

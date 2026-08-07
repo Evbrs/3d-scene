@@ -1,0 +1,51 @@
+# Mises à jour automatiques des dépendances.
+#
+# Sans ce fichier, le job `securite` de la CI signalerait des CVE que personne ne corrigerait :
+# un scanner sans mécanisme de correction ne produit que du bruit, puis de l'accoutumance.
+#
+# Les dépendances Python sont lues dans `backend/requirements.txt` (le verrou) autant que dans
+# `pyproject.toml` : c'est le verrou qui décide de ce qui est réellement installé.
+
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Un lot par semaine plutôt qu'une demande de fusion par paquet : les mises à jour
+      # correctives arrivent par grappes et se relisent mieux ensemble.
+      backend-mineur:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend-mineur:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"
+
+  # Images de base : `python:3.12-slim`, `node:22-slim` et `nginxinc/nginx-unprivileged` reçoivent
+  # les correctifs du système d'exploitation, que rien d'autre ici ne surveille.
+  - package-ecosystem: "docker"
+    directories:
+      - "/backend"
+      - "/frontend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"

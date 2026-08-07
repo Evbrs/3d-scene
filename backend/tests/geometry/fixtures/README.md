@@ -38,3 +38,18 @@ sous **250 cm** de plafond, murs de **10 cm**, polygone `[[0,0], [400,0], [400,3
 
 La normale sortante vaut `Y_up × direction = (dz, 0, −dx)`. Vérification sur le mur A :
 `(0,1,0) × (1,0,0) = (0,0,−1)`, et l'intérieur de la pièce est bien en `z > 0`.
+
+## Pièces des fixtures 05 et 06
+
+Ce rectangle a un défaut : **trois composantes sur quatre y sont nulles**. Aucune erreur de
+quadrant d'`atan2`, aucune erreur d'orientation qui ne se voit que hors des axes, et aucun
+polygone concave n'y sont détectables. Deux pièces s'y ajoutent donc.
+
+| Fixture | Pièce | Ce qu'elle attrape |
+|---|---|---|
+| `05_mur_oblique.json` | Octogone : rectangle 600 × 400 aux quatre coins coupés à 45° | Les quatre murs obliques donnent un `rotation_y` par quadrant (`±π/4`, `±3π/4`) : une permutation ou une erreur de signe dans `atan2` n'y passe plus par accident. |
+| `06_piece_en_L.json` | L : `(0,0) (600,0) (600,200) (200,200) (200,500) (0,500)` | Sommet **rentrant** : onglet d'angle concave, caméras d'élévation par lancer de rayon (la boîte englobante les posait hors de la pièce), et aire nette d'un contour non convexe. |
+
+Les champs `axis` (primitives) et `net_floor_area_cm2` (pièce) ont été ajoutés au contrat après
+l'écriture des fixtures 01 à 04. Ils sont figés **ici**, par 05 et 06, plutôt qu'en réécrivant les
+fixtures d'origine.

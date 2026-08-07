@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+/**
+ * Connexion et inscription.
+ *
+ * Les deux modes sont réellement distincts. Enchaîner `register` puis `signIn` faisait afficher
+ * « Identifiants invalides » sur un écran « Créer un compte » à qui se réinscrivait avec une
+ * adresse déjà prise : une impasse, sans même un lien « mot de passe oublié » pour en sortir.
+ */
+import { ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
 
@@ -10,18 +17,40 @@ const route = useRoute()
 
 const email = ref('')
 const password = ref('')
+const consent = ref(false)
 const mode = ref<'connexion' | 'inscription'>('connexion')
 
-async function submit(): Promise<void> {
-  const ok =
-    mode.value === 'connexion'
-      ? await auth.signIn(email.value, password.value)
-      : await auth.signUp(email.value, password.value)
+// Un message d'erreur qui survit au changement de mode se lit comme un reproche adressé au
+// formulaire qu'on vient d'ouvrir.
+watch(mode, () => {
+  auth.error = null
+  auth.notice = null
+})
 
-  if (ok) {
-    const next = typeof route.query.suivant === 'string' ? route.query.suivant : '/projets'
-    await router.push(next)
+async function submit(): Promise<void> {
+  if (mode.value === 'connexion') {
+    if (await auth.signIn(email.value, password.value)) await goToNext()
+    return
   }
+
+  const outcome = await auth.signUp(email.value, password.value)
+  if (outcome === 'connecte') {
+    await goToNext()
+  } else if (outcome === 'a-confirmer') {
+    // Le compte existe peut-être déjà : on bascule sur la connexion, adresse conservée, plutôt
+    // que de laisser l'utilisateur devant un formulaire d'inscription qui ne mènera nulle part.
+    mode.value = 'connexion'
+    password.value = ''
+  }
+}
+
+async function goToNext(): Promise<void> {
+  const next = typeof route.query.suivant === 'string' ? route.query.suivant : '/projets'
+  await router.push(next)
+}
+
+function toggleMode(): void {
+  mode.value = mode.value === 'connexion' ? 'inscription' : 'connexion'
 }
 </script>
 
@@ -60,6 +89,29 @@ async function submit(): Promise<void> {
         </p>
       </div>
 
+      <div
+        v-if="mode === 'inscription'"
+        class="champ consentement"
+      >
+        <input
+          id="consentement"
+          v-model="consent"
+          type="checkbox"
+          required
+        >
+        <label for="consentement">
+          J'accepte les
+          <RouterLink to="/conditions">conditions générales d'utilisation</RouterLink>.
+        </label>
+      </div>
+
+      <p
+        v-if="auth.notice"
+        class="message"
+        role="status"
+      >
+        {{ auth.notice }}
+      </p>
       <p
         v-if="auth.error"
         class="erreur"
@@ -78,12 +130,21 @@ async function submit(): Promise<void> {
         </button>
         <button
           type="button"
-          @click="mode = mode === 'connexion' ? 'inscription' : 'connexion'"
+          @click="toggleMode"
         >
           {{ mode === 'connexion' ? 'Créer un compte' : "J'ai déjà un compte" }}
         </button>
       </div>
     </form>
+
+    <p
+      v-if="mode === 'connexion'"
+      class="aide"
+    >
+      <RouterLink to="/mot-de-passe-oublie">
+        Mot de passe oublié ?
+      </RouterLink>
+    </p>
   </section>
 </template>
 
@@ -97,14 +158,39 @@ async function submit(): Promise<void> {
   margin-bottom: 1rem;
 }
 
+.consentement {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.consentement input {
+  width: auto;
+  margin-top: 0.35rem;
+}
+
+.consentement label {
+  font-weight: 400;
+}
+
 .aide {
   margin: 0.25rem 0 0;
   color: var(--texte-doux);
   font-size: 0.9rem;
 }
 
+.message {
+  margin: 1rem 0 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.35rem;
+  background: #eaf2ff;
+  color: #0a3690;
+  font-weight: 600;
+}
+
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1.25rem;
 }

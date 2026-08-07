@@ -4,6 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Éditeur de plan de rénovation</title>
+    <meta
+      name="description"
+      content="Éditeur de plan de rénovation : dessin du plan en 2D (pièces, ouvertures, revêtements) et visualisation 3D du résultat."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+
+    <!-- Aperçu des liens partagés : sans ces balises, un plan envoyé par SMS ou messagerie
+         s'affiche comme une carte vide. Le titre et la description restent génériques — les
+         renseigner par projet exposerait le nom du chantier d'un client à quiconque reçoit le
+         lien, et relève de toute façon du rendu côté application. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Éditeur de plan de rénovation" />
+    <meta property="og:locale" content="fr_FR" />
+    <meta property="og:title" content="Éditeur de plan de rénovation" />
+    <meta
+      property="og:description"
+      content="Plan 2D et visualisation 3D d'un projet de rénovation."
+    />
+    <meta name="twitter:card" content="summary" />
+
+    <!-- Ni `og:url` ni `<link rel="canonical">` ici : les deux exigent une URL absolue, donc le
+         domaine public, inconnu à la compilation. Une canonique statique pointée sur la racine
+         casse par ailleurs le build (Vite résout tout `link[href]` comme un asset, et `/` est un
+         répertoire). Ce qu'elles protégeraient — l'indexation d'une URL portant un jeton de
+         partage — est déjà couvert par l'en-tête X-Robots-Tag et par robots.txt. -->
   </head>
   <body>
     <div id="app"></div>

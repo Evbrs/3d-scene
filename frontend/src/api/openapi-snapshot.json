@@ -61,11 +61,27 @@
         "type": "object"
       },
       "ConflictDetail": {
-        "description": "Corps de réponse d'un 409 sur conflit d'édition.\n\nDéclaré dans les `responses` des routes d'écriture : le schéma OpenAPI est la source de\nvérité du frontend (`docs/plan-generation-ia.md` §6), un 409 non documenté y serait\ninvisible. `current_version` est aussi renvoyé dans l'en-tête `X-Current-Version`.",
+        "description": "Corps de réponse d'un 409 sur conflit d'édition.\n\nDéclaré dans les `responses` des routes d'écriture : le schéma OpenAPI est la source de\nvérité du frontend (`docs/plan-generation-ia.md` §6), un 409 non documenté y serait\ninvisible. `current_version` est aussi renvoyé dans l'en-tête `X-Current-Version`.\n\n`code` est le champ sur lequel le client aiguille, et c'est la raison d'être de ce modèle :\nun test de sous-chaîne sur `detail` — ce que faisait le frontend — casse à la première\nreformulation d'un message. Deux natures de conflit seulement :\n\n- `stale_version` : quelqu'un a écrit entre-temps, il faut recharger puis rejouer ;\n- `destructive_change` : la requête est cohérente mais détruirait du travail déjà posé, et\n  n'aboutira qu'avec une confirmation explicite (`force: true`).\n\n`current_version` est nul dans le seul cas où la collision est détectée par la base sans\nqu'on sache encore de quel projet il s'agit (filet de sécurité, voir `app/api/conflicts.py`).",
         "properties": {
+          "code": {
+            "default": "stale_version",
+            "enum": [
+              "stale_version",
+              "destructive_change"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
           "current_version": {
-            "title": "Current Version",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version"
           },
           "detail": {
             "title": "Detail",
@@ -73,8 +89,7 @@
           }
         },
         "required": [
-          "detail",
-          "current_version"
+          "detail"
         ],
         "title": "ConflictDetail",
         "type": "object"
@@ -156,6 +171,9 @@
               "type": "string"
             },
             "maxProperties": 24,
+            "propertyNames": {
+              "maxLength": 50
+            },
             "title": "Colors",
             "type": "object"
           },
@@ -199,16 +217,21 @@
             "additionalProperties": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "boolean"
                 },
                 {
+                  "maximum": 1000000.0,
+                  "minimum": -1000000.0,
                   "type": "integer"
                 },
                 {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
                   "type": "number"
                 },
                 {
-                  "type": "boolean"
+                  "maxLength": 100,
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -216,6 +239,9 @@
               ]
             },
             "maxProperties": 32,
+            "propertyNames": {
+              "maxLength": 50
+            },
             "title": "Variant Params",
             "type": "object"
           },
@@ -276,6 +302,9 @@
               "type": "string"
             },
             "maxProperties": 24,
+            "propertyNames": {
+              "maxLength": 50
+            },
             "title": "Colors",
             "type": "object"
           },
@@ -327,16 +356,21 @@
             "additionalProperties": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "boolean"
                 },
                 {
+                  "maximum": 1000000.0,
+                  "minimum": -1000000.0,
                   "type": "integer"
                 },
                 {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
                   "type": "number"
                 },
                 {
-                  "type": "boolean"
+                  "maxLength": 100,
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -344,6 +378,9 @@
               ]
             },
             "maxProperties": 32,
+            "propertyNames": {
+              "maxLength": 50
+            },
             "title": "Variant Params",
             "type": "object"
           },
@@ -387,6 +424,9 @@
                   "type": "string"
                 },
                 "maxProperties": 24,
+                "propertyNames": {
+                  "maxLength": 50
+                },
                 "type": "object"
               },
               {
@@ -461,16 +501,21 @@
                 "additionalProperties": {
                   "anyOf": [
                     {
-                      "type": "string"
+                      "type": "boolean"
                     },
                     {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
                       "type": "integer"
                     },
                     {
+                      "maximum": 1000000000.0,
+                      "minimum": -1000000000.0,
                       "type": "number"
                     },
                     {
-                      "type": "boolean"
+                      "maxLength": 100,
+                      "type": "string"
                     },
                     {
                       "type": "null"
@@ -478,6 +523,9 @@
                   ]
                 },
                 "maxProperties": 32,
+                "propertyNames": {
+                  "maxLength": 50
+                },
                 "type": "object"
               },
               {
@@ -1398,7 +1446,7 @@
         "type": "object"
       },
       "PublicSceneResponse": {
-        "description": "Réponse de l'endpoint public.\n\nNe contient **aucune** information sur le propriétaire : ni identifiant, ni adresse e-mail,\nni date de modification du projet. Un lien de partage ne doit rien révéler de plus que la\nvue elle-même.",
+        "description": "Réponse de l'endpoint public.\n\nNe contient **aucune** information sur le propriétaire : ni identifiant, ni adresse e-mail,\nni date de modification du projet. Un lien de partage ne doit rien révéler de plus que la\nvue elle-même.\n\n`project_name` est le titre à afficher, et non le nom brut du projet : il vaut `public_label`\ndès que le propriétaire en a posé un. Le champ garde ce nom parce que c'est celui que le\nviewer public lit déjà.",
         "properties": {
           "kind": {
             "const": "shared-view",
@@ -1409,6 +1457,17 @@
           "project_name": {
             "title": "Project Name",
             "type": "string"
+          },
+          "public_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Label"
           },
           "scene": {
             "additionalProperties": true,
@@ -1665,7 +1724,7 @@
             "anyOf": [
               {
                 "maxLength": 100,
-                "pattern": "^[\\w \\-'’().]+$",
+                "pattern": "^[^<>&\\\"`\\x00-\\x1f]*$",
                 "type": "string"
               },
               {
@@ -1673,6 +1732,19 @@
               }
             ],
             "title": "Label"
+          },
+          "public_label": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "pattern": "^[^<>&\\\"`\\x00-\\x1f]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Label"
           },
           "state": {
             "$ref": "#/components/schemas/ViewState"
@@ -1685,20 +1757,66 @@
         "type": "object"
       },
       "SharedViewRead": {
-        "description": "Vue destinée au **propriétaire** : contient le jeton, donc jamais exposée publiquement.",
+        "description": "Vue destinée au **propriétaire** : contient le jeton, donc jamais exposée publiquement.\n\nLe cycle de vie du lien y figure explicitement : sans `expires_at` ni `revoked_at`, le\npropriétaire n'a aucun moyen de distinguer, dans sa liste, un lien vivant d'un lien fermé.",
         "properties": {
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
           },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "id": {
             "title": "Id",
             "type": "integer"
           },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
           "project_id": {
             "title": "Project Id",
             "type": "integer"
+          },
+          "public_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Label"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
           },
           "state": {
             "additionalProperties": true,
@@ -1721,14 +1839,22 @@
         "type": "object"
       },
       "TokenPair": {
+        "description": "Réponse d'une connexion ou d'un rafraîchissement.\n\n`refresh_token` n'est renvoyé dans le corps **qu'en développement** : la source de vérité est\nle cookie `httpOnly`, et un jeton long présent dans le corps est un jeton que du JavaScript\npeut lire, donc exfiltrer. Le repli existe pour les clients sans gestion de cookies — la\nsuite de tests, `curl`, un script d'intégration — qui tournent tous en développement.",
         "properties": {
           "access_token": {
             "title": "Access Token",
             "type": "string"
           },
           "refresh_token": {
-            "title": "Refresh Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
           },
           "token_type": {
             "default": "bearer",
@@ -1737,8 +1863,7 @@
           }
         },
         "required": [
-          "access_token",
-          "refresh_token"
+          "access_token"
         ],
         "title": "TokenPair",
         "type": "object"
@@ -1919,6 +2044,21 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/auth/logout": {
+      "post": {
+        "description": "Ferme la session en effaçant le cookie de rafraîchissement.\n\nSans cette route, un client ne peut **pas** se déconnecter : le cookie est `httpOnly`, donc\nhors de portée du JavaScript qui a posé le bouton « Se déconnecter ». Les attributs répétés\nici ne sont pas décoratifs — un navigateur n'efface un cookie que si le `Path` correspond.\n\nLa réponse est construite ici plutôt qu'injectée : FastAPI ne reporte les en-têtes du\nparamètre `Response` que sur les retours sérialisés, et le `Set-Cookie` d'effacement serait\nsilencieusement perdu.",
+        "operationId": "logout_api_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/auth/me": {
       "get": {
         "operationId": "read_current_user_api_auth_me_get",
@@ -1947,17 +2087,42 @@
     },
     "/api/auth/refresh": {
       "post": {
-        "description": "Échange un jeton de rafraîchissement contre une nouvelle paire (rotation).",
+        "description": "Échange un jeton de rafraîchissement contre une nouvelle paire (rotation).\n\nLe cookie est la source de vérité du navigateur, mais un jeton **explicitement** fourni dans\nle corps l'emporte : un client qui en présente un demande à valider celui-là, et se replier\nen silence sur le cookie ferait passer un jeton invalide pour bon.",
         "operationId": "refresh_api_auth_refresh_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "refresh_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refresh Token"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RefreshRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RefreshRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -2083,11 +2248,38 @@
               "title": "Element Id",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
           },
           "422": {
             "content": {
@@ -2699,6 +2891,7 @@
     },
     "/api/projects/{project_id}": {
       "delete": {
+        "description": "Supprime un projet et tout son arbre.\n\nLa `version` est optionnelle comme sur les autres écritures, mais c'est ici qu'elle compte le\nplus : sans elle, la route la plus destructrice de l'API était la seule à rester en « dernière\nécriture gagne » — l'option que la spec §8 (cas 3) écarte explicitement.\n\nElle transite par la chaîne de requête et non par un corps : `DELETE` avec corps n'est pas\nrelayé de façon fiable par les intermédiaires, et plusieurs clients HTTP le refusent.",
         "operationId": "delete_project_api_projects__project_id__delete",
         "parameters": [
           {
@@ -2709,11 +2902,38 @@
               "title": "Project Id",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
           },
           "422": {
             "content": {
@@ -3294,7 +3514,7 @@
     },
     "/api/public/views/{token}": {
       "get": {
-        "description": "Lecture publique d'une vue partagée. **Aucune authentification.**\n\nLe message d'erreur est le même pour un jeton inexistant et pour un jeton expiré : les\ndistinguer permettrait de confirmer qu'un lien a existé.",
+        "description": "Lecture publique d'une vue partagée. **Aucune authentification.**\n\nLe message d'erreur est le même pour un jeton inexistant, révoqué ou expiré : les distinguer\npermettrait de confirmer qu'un lien a existé.",
         "operationId": "read_public_view_api_public_views__token__get",
         "parameters": [
           {
@@ -3349,11 +3569,38 @@
               "title": "Room Id",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
           },
           "422": {
             "content": {
@@ -3541,7 +3788,7 @@
     },
     "/api/shared-views/{shared_view_id}": {
       "delete": {
-        "description": "Révoque un lien. Un partage qu'on ne peut pas retirer n'est pas un partage maîtrisé.",
+        "description": "Révoque un lien. Un partage qu'on ne peut pas retirer n'est pas un partage maîtrisé.\n\nLa ligne est **conservée**, `revoked_at` renseigné : elle garde la trace du partage et empêche\nla réattribution du jeton, là où un `DELETE` effaçait aussi la preuve qu'il avait existé.\nRejouer la révocation ne déplace pas la date : c'est la première qui fait foi.",
         "operationId": "revoke_shared_view_api_shared_views__shared_view_id__delete",
         "parameters": [
           {

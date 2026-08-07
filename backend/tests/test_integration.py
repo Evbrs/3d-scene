@@ -94,7 +94,10 @@ async def test_a_full_journey_from_signup_to_export(
         f"/api/public/views/{shared['token']}"
     )
     assert public.status_code == 200
-    assert public.json()["project_name"] == "Studio"
+    # Le lien public ne porte pas le nom du projet tant que le propriétaire n'a pas choisi un
+    # libellé public : « Studio » ici, mais « Rénovation Dupont, 12 rue des Lilas » en vrai.
+    assert public.json()["project_name"] == "Vue partagée"
+    assert "Studio" not in public.text
 
     # 6. Export PDF.
     export = (await client.post(f"/api/projects/{project['id']}/exports/pdf")).json()

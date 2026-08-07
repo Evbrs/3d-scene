@@ -2,9 +2,11 @@
 import { onMounted } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 
+import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const application = useAppStore()
 const router = useRouter()
 
 onMounted(() => auth.restore())
@@ -45,6 +47,19 @@ function signOut(): void {
   </header>
 
   <main id="contenu">
+    <p
+      v-if="application.fatalError"
+      class="erreur-globale"
+      role="alert"
+    >
+      Une erreur inattendue s'est produite : {{ application.fatalError }}
+      <button
+        type="button"
+        @click="application.dismiss()"
+      >
+        Masquer
+      </button>
+    </p>
     <RouterView />
   </main>
 </template>
@@ -168,5 +183,35 @@ select {
 .erreur {
   color: var(--erreur);
   font-weight: 600;
+}
+
+.erreur-globale {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.35rem;
+  background: #fdecea;
+  color: #7a1010;
+  font-weight: 600;
+}
+
+/* Téléphone : l'en-tête à deux colonnes déborde dès que l'adresse e-mail est un peu longue. */
+@media (max-width: 40rem) {
+  main {
+    padding: 1rem 0.75rem;
+  }
+
+  .app-header {
+    flex-wrap: wrap;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .app-header nav {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
 }
 </style>

@@ -1,4 +1,4 @@
-import { BoxGeometry, CylinderGeometry, ExtrudeGeometry, Shape } from 'three'
+import { BoxGeometry, type BufferGeometry, ExtrudeGeometry, Shape } from 'three'
 import { describe, expect, it } from 'vitest'
 
 import { buildShape, primitiveGeometry } from '@/viewer/geometry'
@@ -9,6 +9,35 @@ const OUTLINE: number[][] = [
   [400, 250],
   [0, 250],
 ]
+
+type Axis = 'x' | 'y' | 'z'
+
+const along = (geometry: BufferGeometry, axis: Axis, index: number): number => {
+  const position = geometry.attributes.position!
+  if (axis === 'x') return position.getX(index)
+  if (axis === 'y') return position.getY(index)
+  return position.getZ(index)
+}
+
+/** Dimensions de la boîte englobante, arrondies : une rotation laisse des résidus à 1e-17. */
+function boxOf(geometry: BufferGeometry): number[] {
+  geometry.computeBoundingBox()
+  const box = geometry.boundingBox!
+  return [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z].map((value) =>
+    Number(value.toFixed(6)),
+  )
+}
+
+/** Demi-étendue, mesurée sur `measure`, des seuls sommets posés sur un plan donné. */
+function spreadAt(geometry: BufferGeometry, slice: Axis, at: number, measure: Axis): number {
+  const position = geometry.attributes.position!
+  let widest = 0
+  for (let index = 0; index < position.count; index += 1) {
+    if (Math.abs(along(geometry, slice, index) - at) > 1e-6) continue
+    widest = Math.max(widest, Math.abs(along(geometry, measure, index)))
+  }
+  return widest
+}
 
 describe('construction des formes murales', () => {
   it('reproduit le contour reçu du backend', () => {
@@ -63,12 +92,36 @@ describe('primitives de mobilier', () => {
     expect(geometry.parameters.depth).toBe(45)
   })
 
-  it('déduit les rayons du cylindre de sa boîte englobante', () => {
-    const geometry = primitiveGeometry([20, 60, 20], 'cylinder') as CylinderGeometry
+  it('donne au cylindre une section elliptique quand la boîte n’est pas carrée', () => {
+    // Volontairement 40 x 20 : la version précédente de ce test utilisait 20 x 20, où l'erreur
+    // corrigée ici — demi-largeur en haut, demi-profondeur en bas — était invisible.
+    const geometry = primitiveGeometry([40, 60, 20], 'cylinder')
 
-    expect(geometry.parameters.radiusTop).toBe(10)
-    expect(geometry.parameters.radiusBottom).toBe(10)
-    expect(geometry.parameters.height).toBe(60)
+    expect(boxOf(geometry)).toEqual([40, 60, 20])
+  })
+
+  it('reste un cylindre et ne dégénère pas en cône', () => {
+    // `CylinderGeometry(largeur/2, profondeur/2, ...)` donne un tronc de cône : le disque du haut
+    // fait 40 de large et celui du bas 20. Cinq recettes du catalogue livré sont dans ce cas.
+    const geometry = primitiveGeometry([40, 60, 20], 'cylinder')
+
+    expect(spreadAt(geometry, 'y', 30, 'x')).toBeCloseTo(20, 6)
+    expect(spreadAt(geometry, 'y', -30, 'x')).toBeCloseTo(20, 6)
+  })
+
+  it('couche le cylindre sur l’axe déclaré par la primitive', () => {
+    // Une poignée de porte, une barre d'appui ou une tringle sont des cylindres couchés : sans
+    // `axis`, ils sont dressés à la verticale au milieu du meuble.
+    // La boîte englobante seule ne prouve rien — elle vaut 60 x 20 x 40 dans les trois cas. Ce
+    // qui distingue l'orientation, c'est le disque de fermeture : sur l'extrémité de l'axe de
+    // révolution, la section est pleine ; sur celle d'un autre axe, elle est réduite à une arête.
+    expect(boxOf(primitiveGeometry([60, 20, 40], 'cylinder', 'x'))).toEqual([60, 20, 40])
+    expect(spreadAt(primitiveGeometry([60, 20, 40], 'cylinder', 'x'), 'x', 30, 'z')).toBeCloseTo(20)
+    expect(spreadAt(primitiveGeometry([60, 20, 40], 'cylinder', 'y'), 'x', 30, 'z')).toBeCloseTo(0)
+
+    expect(boxOf(primitiveGeometry([60, 20, 40], 'cylinder', 'z'))).toEqual([60, 20, 40])
+    expect(spreadAt(primitiveGeometry([60, 20, 40], 'cylinder', 'z'), 'z', 20, 'x')).toBeCloseTo(30)
+    expect(spreadAt(primitiveGeometry([60, 20, 40], 'cylinder', 'y'), 'z', 20, 'x')).toBeCloseTo(0)
   })
 
   it('met la sphère à l’échelle pour suivre une boîte non cubique', () => {

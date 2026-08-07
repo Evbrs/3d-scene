@@ -10,6 +10,32 @@ const routes: RouteRecordRaw[] = [
     name: 'connexion',
     component: () => import('@/views/SignInView.vue'),
   },
+  // Ces deux pages n'ont pas encore de fonctionnalité derrière elles, mais elles existent :
+  // laisser les liens du formulaire de connexion tomber sur une 404 est pire que de dire
+  // franchement que la procédure n'est pas encore en ligne.
+  {
+    path: '/mot-de-passe-oublie',
+    name: 'mot-de-passe-oublie',
+    component: () => import('@/views/NoticeView.vue'),
+    meta: {
+      titre: 'Mot de passe oublié',
+      texte:
+        "La réinitialisation en libre-service n'est pas encore en ligne. Contactez l'administrateur "
+        + 'de votre espace pour faire réinitialiser votre mot de passe.',
+    },
+  },
+  {
+    path: '/conditions',
+    name: 'conditions',
+    component: () => import('@/views/NoticeView.vue'),
+    meta: {
+      titre: "Conditions générales d'utilisation",
+      texte:
+        'Les conditions générales définitives sont en cours de rédaction. Vos plans et les données '
+        + 'de votre compte ne sont utilisés que pour faire fonctionner le service, et sont '
+        + 'supprimés avec votre compte.',
+    },
+  },
   {
     path: '/projets',
     name: 'projets',

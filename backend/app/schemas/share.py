@@ -39,13 +39,24 @@ class SharedViewCreate(BaseModel):
     # refuser à tort. Ce qui est interdit, ce sont les caractères de balisage et de contrôle —
     # les seuls qui posent problème dans une valeur restituée par un endpoint public.
     label: str | None = Field(default=None, max_length=100, pattern=r"^[^<>&\"`\x00-\x1f]*$")
+    # Titre montré au visiteur, distinct du nom du projet. Le nom d'un projet de rénovation est
+    # rarement neutre — « Rénovation Dupont, 12 rue des Lilas » — et il partait jusqu'ici tel quel
+    # dans une réponse servie sans authentification. Même durcissement que `label`, pour la même
+    # raison : la valeur est écrite par un client et restituée à des tiers.
+    public_label: str | None = Field(
+        default=None, max_length=100, pattern=r"^[^<>&\"`\x00-\x1f]*$"
+    )
     # Durée de vie optionnelle : un lien de partage éternel est un risque qui ne se referme
     # jamais. Absent = pas d'expiration (comportement par défaut de la spec).
     expires_in_days: Annotated[int, Field(ge=1, le=365)] | None = None
 
 
 class SharedViewRead(BaseModel):
-    """Vue destinée au **propriétaire** : contient le jeton, donc jamais exposée publiquement."""
+    """Vue destinée au **propriétaire** : contient le jeton, donc jamais exposée publiquement.
+
+    Le cycle de vie du lien y figure explicitement : sans `expires_at` ni `revoked_at`, le
+    propriétaire n'a aucun moyen de distinguer, dans sa liste, un lien vivant d'un lien fermé.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -54,6 +65,10 @@ class SharedViewRead(BaseModel):
     token: str
     state: dict[str, Any]
     created_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    label: str | None = None
+    public_label: str | None = None
 
 
 class PublicSceneResponse(BaseModel):
@@ -62,9 +77,17 @@ class PublicSceneResponse(BaseModel):
     Ne contient **aucune** information sur le propriétaire : ni identifiant, ni adresse e-mail,
     ni date de modification du projet. Un lien de partage ne doit rien révéler de plus que la
     vue elle-même.
+
+    `project_name` est le titre à afficher, et **jamais** le nom brut du projet : il vaut
+    `public_label` quand le propriétaire en a posé un, et un libellé neutre sinon. La spec §3.5
+    exige « pas d'info sensible exposée » d'un lien public, or le nom d'un projet de rénovation
+    porte couramment le nom et l'adresse du client — et un lien de partage se transfère par SMS.
+    Un défaut ouvert obligerait chaque propriétaire à penser à se protéger. Le champ garde ce nom
+    parce que c'est celui que le viewer public lit déjà.
     """
 
     kind: Literal["shared-view"] = "shared-view"
     project_name: str
+    public_label: str | None = None
     state: dict[str, Any]
     scene: dict[str, Any]

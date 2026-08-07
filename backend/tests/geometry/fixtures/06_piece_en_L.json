@@ -1,0 +1,210 @@
+{
+  "description": "Pièce en L : polygone concave, une porte qui produit son trou ET sa menuiserie, et une bibliothèque dont le nombre d'étagères vient de `variant_params`.",
+  "reasoning": [
+    "Forme : polygone (0,0) (600,0) (600,200) (200,200) (200,500) (0,500). Aire du lacet = +180000, donc déjà en sens trigonométrique. Le sommet (200,200) est rentrant : on y tourne à droite alors que le contour tourne à gauche partout ailleurs.",
+    "Aire au sol : barre basse 600 x 200 = 120000, plus l'aile haute 200 x 300 = 60000. Total 180000 cm².",
+    "Murs, avec d = (dx, 0, dz), n = Yup x d = (dz, 0, -dx) et rotation_y = atan2(-dz, dx) :",
+    "  - A : (0,0) -> (600,0), longueur 600, d = (1,0,0), n = (0,0,-1), rotation_y = 0, origine (0,0,0).",
+    "  - B : (600,0) -> (600,200), longueur 200, d = (0,0,1), n = (1,0,0), rotation_y = -pi/2 = -1.570796327, origine (600,0,0).",
+    "  - C : (600,200) -> (200,200), longueur 400, d = (-1,0,0), n = (0,0,1), rotation_y = pi = 3.141592654, origine (600,0,200).",
+    "  - D : (200,200) -> (200,500), longueur 300, d = (0,0,1), n = (1,0,0), rotation_y = -1.570796327, origine (200,0,200).",
+    "  - E : (200,500) -> (0,500), longueur 200, d = (-1,0,0), n = (0,0,1), rotation_y = 3.141592654, origine (200,0,500).",
+    "  - F : (0,500) -> (0,0), longueur 500, d = (0,0,-1), n = (-1,0,0), rotation_y = pi/2 = 1.570796327, origine (0,0,500).",
+    "Onglet : les six sommets tournent de 90° en valeur absolue, donc la rallonge vaut |(t/2) tan(45°)| = 5 partout. Au sommet rentrant (200,200), entre C et D, on tourne de -90° : une formule signée donnerait -5 et raccourcirait le mur au lieu de combler la fente, qui est là aussi bien réelle (le carré x de 195 à 200, y de 195 à 200 n'est couvert par aucun des deux murs).",
+    "Aire nette : chaque côté est ramené de t/2 = 5 vers l'intérieur. Les six droites deviennent y = 5, x = 595, y = 195, x = 195, y = 495, x = 5, et les sommets sont leurs intersections : (5,5) (595,5) (595,195) (195,195) (195,495) (5,495). Le sommet rentrant part donc vers l'extérieur, de (200,200) à (195,195), ce qui est le comportement attendu d'un angle rentrant.",
+    "Aire nette = barre basse 590 x 190 = 112100, plus aile haute 190 x 300 = 57000, total 169100. L'aire de la ligne médiane (180000) la surévalue de 6.4 %.",
+    "Caméra du dessus : boîte englobante 600 x 500. Centroïde du L par pondération des deux rectangles : Cx = (120000 x 300 + 60000 x 100) / 180000 = 233.3333, Cy = (120000 x 100 + 60000 x 350) / 180000 = 183.3333. Altitude = 250 + max(600,500) = 850. Demi-cadre = (300, 250) x 1.05 = (315, 262.5).",
+    "Caméra isométrique : distance = 2 x max(600,500,250) = 1200, direction (1,1,1)/racine(3), soit 692.8203230 sur chaque axe. Centre visé (233.3333, 125, 183.3333), position (926.1537, 817.8203, 876.1537).",
+    "Caméras par face, par lancer de rayon depuis le milieu du mur vers l'intérieur, 80 % de la première arête touchée :",
+    "  - A, milieu (300,0), rentrante (0,0,1) : le rayon coupe le mur C (y = 200, x de 200 à 600) en x = 300. Profondeur 200, recul 160, position (300,125,160). La projection des sommets, elle, aurait donné 500 (l'étendue de l'aile haute) et posé la caméra en (300,125,400), qui est hors de la pièce : à y = 400 la pièce s'arrête à x = 200.",
+    "  - B, milieu (600,100), rentrante (-1,0,0) : coupe le mur F (x = 0, y de 0 à 500) en y = 100. Profondeur 600, recul 480, position (120,125,100).",
+    "  - C, milieu (400,200), rentrante (0,0,-1) : coupe le mur A (y = 0) en x = 400. Profondeur 200, recul 160, position (400,125,40).",
+    "  - D, milieu (200,350), rentrante (-1,0,0) : coupe le mur F (x = 0) en y = 350. Profondeur 200, recul 160, position (40,125,350).",
+    "  - E, milieu (100,500), rentrante (0,0,-1) : le rayon descend en x = 100, où le mur C (qui va de x = 200 à x = 600) ne l'arrête pas ; il coupe le mur A (y = 0). Profondeur 500, recul 400, position (100,125,100).",
+    "  - F, milieu (0,250), rentrante (1,0,0) : coupe le mur D (x = 200, y de 200 à 500) en y = 250. Profondeur 200, recul 160, position (160,125,250). La projection des sommets aurait donné 600 et posé la caméra en (480,125,250), franchement hors de la pièce.",
+    "Porte battante sur le mur A : x_offset 100, y_offset 0, 90 de large, 204 de haut. Trou de u = 100 à u = 190 et de v = 0 à v = 204.",
+    "Menuiserie de cette porte : elle occupe le percement, donc elle est centrée sur l'AXE du mur (aucun décalage vers l'intérieur, contrairement à un meuble posé) et sa profondeur est celle du mur, 10, et non les 5 saisis sur l'élément.",
+    "  - position = départ du mur (0,0,0) + direction (1,0,0) x (100 + 90/2) + (0, 0 + 204/2, 0) = (145, 102, 0). rotation_y = 0, celle du mur.",
+    "  - panneau : rel_size (1,1,1) x (90, 204, 10) = (90, 204, 10), décalage (0,0,0), couleur choisie #f0efe9.",
+    "  - poignée : rel_size (0.06, 0.06, 0.3) x (90, 204, 10) = (5.4, 12.24, 3.0) ; décalage = (rel_position - 0.5) x dimensions = ((0.9-0.5) x 90, (0.45-0.5) x 204, (1.2-0.5) x 10) = (36.0, -10.2, 7.0). C'est un cylindre COUCHÉ : sa révolution est sur z, d'où axis = \"z\". Sans ce champ, une poignée de 5.4 de large et 3.0 de profond devient un cône.",
+    "Bibliothèque sur le mur D : x_offset 50, y_offset 0, 80 x 180 x 30, murs de 10.",
+    "  - le long du mur : 50 + 40 = 90, contribution (0,0,90) car d = (0,0,1) ; en hauteur : 0 + 90 ; en profondeur : 10/2 + 30/2 = 20 vers l'intérieur, soit (-20,0,0) car la rentrante du mur D est (-1,0,0). Position = (200,0,200) + (0,0,90) + (0,90,0) + (-20,0,0) = (180, 90, 290). rotation_y = -1.570796327.",
+    "  - la recette déclare repeat_y = 5 pour l'étagère et une variation `nb_etageres` bornée à [2,6] ; l'instance demande 3, donc 3 étagères et non 5. C'est le seul chemin par lequel `variant_params` change quoi que ce soit.",
+    "  - corps : (1,1,1) x (80,180,30) = (80,180,30), décalage (0,0,0), couleur #4a4a4a.",
+    "  - étagère : (0.94, 0.03, 0.94) x (80,180,30) = (75.2, 5.4, 28.2). Pas = 0.03 + 0.02 = 0.05, groupe centré sur 0.5 : centres = 0.5 + (i - 1) x 0.05 = 0.45, 0.50, 0.55, donc décalages y = (centre - 0.5) x 180 = -9.0, 0.0, +9.0.",
+    "  - total 1 + 3 = 4 primitives.",
+    "Sol et plafond sont volontairement absents de l'entrée : cette fixture porte sur les murs, les aires et les éléments, et l'orientation attendue du plafond est contestée (voir le rapport du lot)."
+  ],
+  "input": {
+    "furniture_types": {
+      "600": {
+        "id": 600,
+        "slug": "porte-battante",
+        "name": "Porte battante",
+        "color_slots": ["panneau", "poignee"],
+        "parts": [
+          {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "panneau"},
+          {"type": "cylinder", "rel_position": [0.9, 0.45, 1.2], "rel_size": [0.06, 0.06, 0.3], "color_slot": "poignee", "axis": "z"}
+        ]
+      },
+      "601": {
+        "id": 601,
+        "slug": "bibliotheque",
+        "name": "Bibliothèque",
+        "color_slots": ["corps", "etagere"],
+        "parts": [
+          {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "corps"},
+          {"type": "box", "rel_position": [0.5, "auto", 0.5], "rel_size": [0.94, 0.03, 0.94], "color_slot": "etagere", "repeat_y": 5, "gap": 0.02}
+        ],
+        "variants": [
+          {"name": "nb_etageres", "axis": "y", "applies_to": ["etagere"], "min": 2, "max": 6}
+        ]
+      }
+    },
+    "project_id": 6,
+    "rooms": [
+      {
+        "id": 60,
+        "name": "Séjour en L",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [600, 0], [600, 200], [200, 200], [200, 500], [0, 500]],
+        "faces": [
+          {
+            "id": 600, "label": "A", "kind": "wall",
+            "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 600, "end_y_cm": 0,
+            "covering": {},
+            "elements": [
+              {"id": 6000, "kind": "door_hinged", "x_offset_cm": 100, "y_offset_cm": 0, "width_cm": 90, "height_cm": 204, "depth_cm": 5, "rotation_deg": 0, "furniture_type_id": null, "colors": {"panneau": "#f0efe9"}, "variant_params": {}}
+            ]
+          },
+          {"id": 601, "label": "B", "kind": "wall", "start_x_cm": 600, "start_y_cm": 0, "end_x_cm": 600, "end_y_cm": 200, "covering": {}, "elements": []},
+          {"id": 602, "label": "C", "kind": "wall", "start_x_cm": 600, "start_y_cm": 200, "end_x_cm": 200, "end_y_cm": 200, "covering": {}, "elements": []},
+          {
+            "id": 603, "label": "D", "kind": "wall",
+            "start_x_cm": 200, "start_y_cm": 200, "end_x_cm": 200, "end_y_cm": 500,
+            "covering": {},
+            "elements": [
+              {"id": 6001, "kind": "furniture", "x_offset_cm": 50, "y_offset_cm": 0, "width_cm": 80, "height_cm": 180, "depth_cm": 30, "rotation_deg": 0, "furniture_type_id": 601, "colors": {"corps": "#4a4a4a"}, "variant_params": {"nb_etageres": 3}}
+            ]
+          },
+          {"id": 604, "label": "E", "kind": "wall", "start_x_cm": 200, "start_y_cm": 500, "end_x_cm": 0, "end_y_cm": 500, "covering": {}, "elements": []},
+          {"id": 605, "label": "F", "kind": "wall", "start_x_cm": 0, "start_y_cm": 500, "end_x_cm": 0, "end_y_cm": 0, "covering": {}, "elements": []}
+        ]
+      }
+    ]
+  },
+  "expected_walls": [
+    {
+      "kind": "wall", "face_id": 600, "face_label": "A",
+      "length_cm": 600.0, "height_cm": 250.0,
+      "origin": [0.0, 0.0, 0.0],
+      "rotation_y": 0.0,
+      "outward_normal": [0.0, 0.0, -1.0],
+      "outline": [[0.0, 0.0], [600.0, 0.0], [600.0, 250.0], [0.0, 250.0]],
+      "holes": [[[100.0, 0.0], [190.0, 0.0], [190.0, 204.0], [100.0, 204.0]]],
+      "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 601, "face_label": "B",
+      "length_cm": 200.0, "height_cm": 250.0,
+      "origin": [600.0, 0.0, 0.0],
+      "rotation_y": -1.570796327,
+      "outward_normal": [1.0, 0.0, 0.0],
+      "outline": [[0.0, 0.0], [200.0, 0.0], [200.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 602, "face_label": "C",
+      "length_cm": 400.0, "height_cm": 250.0,
+      "origin": [600.0, 0.0, 200.0],
+      "rotation_y": 3.141592654,
+      "outward_normal": [0.0, 0.0, 1.0],
+      "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 603, "face_label": "D",
+      "length_cm": 300.0, "height_cm": 250.0,
+      "origin": [200.0, 0.0, 200.0],
+      "rotation_y": -1.570796327,
+      "outward_normal": [1.0, 0.0, 0.0],
+      "outline": [[0.0, 0.0], [300.0, 0.0], [300.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 604, "face_label": "E",
+      "length_cm": 200.0, "height_cm": 250.0,
+      "origin": [200.0, 0.0, 500.0],
+      "rotation_y": 3.141592654,
+      "outward_normal": [0.0, 0.0, 1.0],
+      "outline": [[0.0, 0.0], [200.0, 0.0], [200.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 605, "face_label": "F",
+      "length_cm": 500.0, "height_cm": 250.0,
+      "origin": [0.0, 0.0, 500.0],
+      "rotation_y": 1.570796327,
+      "outward_normal": [-1.0, 0.0, 0.0],
+      "outline": [[0.0, 0.0], [500.0, 0.0], [500.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    }
+  ],
+  "expected_room": {
+    "floor_area_cm2": 180000.0,
+    "net_floor_area_cm2": 169100.0
+  },
+  "expected_offset_polygon": [[5.0, 5.0], [595.0, 5.0], [595.0, 195.0], [195.0, 195.0], [195.0, 495.0], [5.0, 495.0]],
+  "expected_cameras": [
+    {"name": "dessus", "kind": "orthographic", "position": [233.3333, 850.0, 183.3333], "target": [233.3333, 0.0, 183.3333], "up": [0.0, 0.0, -1.0], "half_width_cm": 315.0, "half_height_cm": 262.5, "face_label": null},
+    {"name": "isometrique", "kind": "perspective", "position": [926.1537, 817.8203, 876.1537], "target": [233.3333, 125.0, 183.3333], "up": [0.0, 1.0, 0.0], "fov_deg": 50.0, "face_label": null},
+    {"name": "orbite", "kind": "perspective", "position": [926.1537, 817.8203, 876.1537], "target": [233.3333, 125.0, 183.3333], "up": [0.0, 1.0, 0.0], "fov_deg": 50.0, "face_label": null},
+    {"name": "face-A", "kind": "orthographic", "position": [300.0, 125.0, 160.0], "target": [300.0, 125.0, 0.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 315.0, "half_height_cm": 131.25, "face_label": "A"},
+    {"name": "face-B", "kind": "orthographic", "position": [120.0, 125.0, 100.0], "target": [600.0, 125.0, 100.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 105.0, "half_height_cm": 131.25, "face_label": "B"},
+    {"name": "face-C", "kind": "orthographic", "position": [400.0, 125.0, 40.0], "target": [400.0, 125.0, 200.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 210.0, "half_height_cm": 131.25, "face_label": "C"},
+    {"name": "face-D", "kind": "orthographic", "position": [40.0, 125.0, 350.0], "target": [200.0, 125.0, 350.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 157.5, "half_height_cm": 131.25, "face_label": "D"},
+    {"name": "face-E", "kind": "orthographic", "position": [100.0, 125.0, 100.0], "target": [100.0, 125.0, 500.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 105.0, "half_height_cm": 131.25, "face_label": "E"},
+    {"name": "face-F", "kind": "orthographic", "position": [160.0, 125.0, 250.0], "target": [0.0, 125.0, 250.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 262.5, "half_height_cm": 131.25, "face_label": "F"}
+  ],
+  "expected_miter_extensions_cm": {
+    "A>B": 5.0,
+    "B>C": 5.0,
+    "C>D": 5.0,
+    "D>E": 5.0,
+    "E>F": 5.0,
+    "F>A": 5.0
+  },
+  "expected_joinery_node": {
+    "kind": "joinery",
+    "element_id": 6000,
+    "face_label": "A",
+    "opening_kind": "door_hinged",
+    "furniture_type_slug": "porte-battante",
+    "position": [145.0, 102.0, 0.0],
+    "rotation_y": 0.0,
+    "size_cm": [90.0, 204.0, 10.0],
+    "primitives": [
+      {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [90.0, 204.0, 10.0], "color_slot": "panneau", "color": "#f0efe9", "operation": "add", "axis": "y"},
+      {"type": "cylinder", "offset": [36.0, -10.2, 7.0], "size": [5.4, 12.24, 3.0], "color_slot": "poignee", "color": null, "operation": "add", "axis": "z"}
+    ],
+    "requires_csg": false
+  },
+  "expected_furniture_node": {
+    "kind": "furniture",
+    "element_id": 6001,
+    "face_label": "D",
+    "furniture_type_slug": "bibliotheque",
+    "position": [180.0, 90.0, 290.0],
+    "rotation_y": -1.570796327,
+    "size_cm": [80.0, 180.0, 30.0],
+    "primitives": [
+      {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [80.0, 180.0, 30.0], "color_slot": "corps", "color": "#4a4a4a", "operation": "add", "axis": "y"},
+      {"type": "box", "offset": [0.0, -9.0, 0.0], "size": [75.2, 5.4, 28.2], "color_slot": "etagere", "color": null, "operation": "add", "axis": "y"},
+      {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [75.2, 5.4, 28.2], "color_slot": "etagere", "color": null, "operation": "add", "axis": "y"},
+      {"type": "box", "offset": [0.0, 9.0, 0.0], "size": [75.2, 5.4, 28.2], "color_slot": "etagere", "color": null, "operation": "add", "axis": "y"}
+    ],
+    "requires_csg": false,
+    "variant_params": {"nb_etageres": 3}
+  }
+}

@@ -15,11 +15,26 @@ from typing import Any
 
 import pytest
 
-from app.geometry.furniture import expand_recipe, requires_csg
+from app.geometry.furniture import expand_recipe, requires_csg, resolve_variants
 from app.geometry.scene import build_scene_graph
-from app.geometry.vectors import ensure_counter_clockwise, outward_normal, signed_area
+from app.geometry.vectors import (
+    ensure_counter_clockwise,
+    first_hit_distance,
+    miter_extension,
+    offset_polygon,
+    outward_normal,
+    signed_area,
+    wall_direction,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Champs ajoutés au contrat APRÈS l'écriture des fixtures 01 à 04. Les décrire dans ces fixtures
+# reviendrait à les réécrire, ce que `CLAUDE.md` interdit ; ils sont donc exclus du seul contrôle
+# d'exhaustivité et figés par les fixtures 05 et 06, qui les décrivent en entier. La liste est
+# volontairement explicite : un champ ajouté sans être inscrit ici fait toujours échouer les
+# fixtures d'origine, et le contrôle des champs *manquants* ou renommés reste entier.
+FIELDS_ADDED_AFTER_P6 = frozenset({"axis", "net_floor_area_cm2"})
 
 
 def load(name: str) -> dict[str, Any]:
@@ -39,7 +54,7 @@ def assert_matches(actual: Any, expected: Any, path: str = "", *, strict_keys: b
     if isinstance(expected, dict):
         assert isinstance(actual, dict), f"{path} : dict attendu, reçu {type(actual).__name__}"
         if strict_keys:
-            unexpected = sorted(set(actual) - set(expected))
+            unexpected = sorted(set(actual) - set(expected) - FIELDS_ADDED_AFTER_P6)
             assert not unexpected, f"{path} : champs non décrits par la fixture : {unexpected}"
         for key, value in expected.items():
             assert key in actual, f"{path}.{key} absent du résultat"
@@ -208,18 +223,96 @@ def test_a_parametric_recipe_expands_to_its_reference_primitives() -> None:
         assert_matches(furniture[0][key], expected[key], f"meuble.{key}")
 
 
-def test_the_drawer_count_is_a_parameter_not_a_hardcoded_geometry() -> None:
-    """Spec §4.1 : `repeat_y` doit produire N copies, sans nouvelle primitive écrite à la main."""
-    fixture = load("03_commode_parametrique.json")
-    parts = fixture["input"]["furniture_type"]["parts"]
+def _commode(variants: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """La recette de la fixture 03, éventuellement dotée d'une déclaration de variation."""
+    recipe = json.loads(json.dumps(load("03_commode_parametrique.json")["input"]["furniture_type"]))
+    if variants is not None:
+        recipe["variants"] = variants
+    return dict(recipe)
 
-    for drawers in (1, 2, 4, 8):
-        adjusted = [
-            {**part, "repeat_y": drawers} if part.get("repeat_y") else part for part in parts
-        ]
-        primitives = expand_recipe(adjusted, (100.0, 85.0, 45.0), {})
+
+DRAWER_VARIANT = [{"name": "nb_tiroirs", "axis": "y", "applies_to": ["facade", "poignee"],
+                   "min": 1, "max": 5}]
+
+
+def test_the_drawer_count_comes_from_the_instance_not_from_the_recipe() -> None:
+    """Spec §4.1 et §4.4 : le nombre de tiroirs est un paramètre d'**instance**.
+
+    La version précédente de ce test réécrivait `repeat_y` dans la RECETTE, puis vérifiait que la
+    recette modifiée produisait N copies. Elle ne testait donc que `_axis_centers`, et passait
+    alors même que `variant_params` n'était lu par personne — ce qui était exactement le cas.
+    Ici c'est `variant_params`, et lui seul, qui varie.
+    """
+    recipe = _commode(DRAWER_VARIANT)
+
+    for drawers in (1, 2, 4, 5):
+        primitives = expand_recipe(
+            recipe["parts"], (100.0, 85.0, 45.0), {}, recipe["variants"], {"nb_tiroirs": drawers}
+        )
         facades = [p for p in primitives if p.color_slot == "facade"]
+        poignees = [p for p in primitives if p.color_slot == "poignee"]
         assert len(facades) == drawers
+        assert len(poignees) == drawers
+
+
+def test_a_recipe_without_variants_ignores_the_instance_parameters() -> None:
+    """Sans déclaration, rien ne dit ce que `nb_tiroirs` pilote : la recette fait foi."""
+    recipe = _commode()
+
+    primitives = expand_recipe(
+        recipe["parts"], (100.0, 85.0, 45.0), {}, None, {"nb_tiroirs": 2}
+    )
+
+    assert len([p for p in primitives if p.color_slot == "facade"]) == 4
+
+
+def test_a_variant_value_is_clamped_to_the_bounds_of_the_recipe() -> None:
+    """`variant_params` est un JSON libre : c'est ici que sa valeur rencontre les bornes.
+
+    Borner plutôt que refuser : un refus ferait disparaître le meuble du plan pour une saisie
+    hors bornes, alors qu'un meuble borné reste visible et corrigeable.
+    """
+    recipe = _commode(DRAWER_VARIANT)
+
+    def drawers(value: Any) -> int:
+        primitives = expand_recipe(
+            recipe["parts"], (100.0, 85.0, 45.0), {}, recipe["variants"], {"nb_tiroirs": value}
+        )
+        return len([p for p in primitives if p.color_slot == "facade"])
+
+    assert drawers(12) == 5  # borné par max
+    assert drawers(0) == 1  # borné par min
+    assert drawers(-3) == 1
+    # `isinstance(True, int)` vaut True en Python : sans exclusion explicite des booléens, un
+    # `true` saisi produirait un tiroir unique au lieu d'être ignoré.
+    assert drawers(True) == 4
+    assert drawers("quatre") == 4
+    assert drawers(None) == 4
+
+
+def test_a_variant_only_touches_the_slots_it_declares() -> None:
+    """Les emplacements visés sont désignés par leur `color_slot`, pas par leur rang."""
+    recipe = _commode(
+        [{"name": "nb_tiroirs", "axis": "y", "applies_to": ["facade"], "min": 1, "max": 5}]
+    )
+
+    primitives = expand_recipe(
+        recipe["parts"], (100.0, 85.0, 45.0), {}, recipe["variants"], {"nb_tiroirs": 2}
+    )
+
+    assert len([p for p in primitives if p.color_slot == "facade"]) == 2
+    assert len([p for p in primitives if p.color_slot == "poignee"]) == 4
+    assert len([p for p in primitives if p.color_slot == "corps"]) == 1
+
+
+def test_variant_resolution_indexes_by_slot_and_axis() -> None:
+    resolved = resolve_variants(DRAWER_VARIANT, {"nb_tiroirs": 3})
+
+    assert resolved == {("facade", "y"): 3, ("poignee", "y"): 3}
+    assert resolve_variants(DRAWER_VARIANT, {}) == {}
+    assert resolve_variants(None, {"nb_tiroirs": 3}) == {}
+    # Un axe fantaisiste ne pilote rien : `parts` et `variants` sont du JSON libre.
+    assert resolve_variants([{**DRAWER_VARIANT[0], "axis": "w"}], {"nb_tiroirs": 3}) == {}
 
 
 def test_repeated_primitives_are_centred_on_the_furniture() -> None:
@@ -518,3 +611,320 @@ def test_the_scene_graph_is_json_serialisable_and_stable() -> None:
     second = json.dumps(build_scene_graph(fixture["input"]), sort_keys=True)
 
     assert first == second
+
+
+# --- Fixtures 05 et 06 : outils communs ----------------------------------------------------------
+
+
+def _catalog(fixture: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """Le catalogue de la fixture, réindexé par entier : JSON n'a que des clés textuelles."""
+    return {
+        int(key): value for key, value in (fixture["input"].get("furniture_types") or {}).items()
+    }
+
+
+def _nodes(fixture: dict[str, Any], kind: str) -> list[dict[str, Any]]:
+    scene = build_scene_graph(fixture["input"], _catalog(fixture))
+    return [node for node in scene["rooms"][0]["nodes"] if node["kind"] == kind]
+
+
+def _miter_extensions(fixture: dict[str, Any]) -> dict[str, float]:
+    """Rallonge d'onglet à chaque sommet, indexée `mur entrant>mur sortant`."""
+    room = fixture["input"]["rooms"][0]
+    walls = [face for face in room["faces"] if face["kind"] == "wall"]
+    half_thickness = float(room["wall_thickness_cm"]) / 2.0
+
+    def direction(face: dict[str, Any]) -> Any:
+        return wall_direction(
+            [face["start_x_cm"], face["start_y_cm"]], [face["end_x_cm"], face["end_y_cm"]]
+        )
+
+    return {
+        f"{face['label']}>{walls[(index + 1) % len(walls)]['label']}": round(
+            miter_extension(direction(face), direction(walls[(index + 1) % len(walls)]),
+                            half_thickness),
+            4,
+        )
+        for index, face in enumerate(walls)
+    }
+
+
+def _contains(polygon: list[list[float]], x: float, y: float) -> bool:
+    """Appartenance d'un point à un polygone, par parité des croisements d'un rayon horizontal.
+
+    Une boîte englobante suffit pour un rectangle et ment sur une pièce en L : c'est justement ce
+    que ces fixtures cherchent à mettre en défaut.
+    """
+    inside = False
+    for index, (start_x, start_y) in enumerate(polygon):
+        end_x, end_y = polygon[(index + 1) % len(polygon)]
+        if (start_y > y) != (end_y > y):
+            crossing_x = start_x + (y - start_y) * (end_x - start_x) / (end_y - start_y)
+            if x < crossing_x:
+                inside = not inside
+    return inside
+
+
+# --- Fixture 05 : murs obliques ------------------------------------------------------------------
+
+
+def test_oblique_walls_match_their_reference_fixture() -> None:
+    fixture = load("05_mur_oblique.json")
+
+    assert_matches(_nodes(fixture, "wall"), fixture["expected_walls"], "murs")
+
+
+def test_the_four_quadrants_of_atan2_are_all_exercised() -> None:
+    """Contre-mesure au biais des fixtures 01 à 04 : elles n'ont que des murs alignés sur les axes.
+
+    Sur un rectangle, une composante sur deux de la direction est nulle : un `atan2` dont les
+    arguments seraient permutés ou mal signés y donne parfois la bonne valeur par accident. Les
+    quatre murs obliques de l'octogone, un par quadrant, ne laissent pas cette échappatoire.
+    """
+    fixture = load("05_mur_oblique.json")
+
+    angles = {node["face_label"]: node["rotation_y"] for node in _nodes(fixture, "wall")}
+    obliques = sorted(angles[label] for label in ("B", "D", "F", "H"))
+
+    quarter = math.pi / 4
+    assert obliques == pytest.approx([-3 * quarter, -quarter, quarter, 3 * quarter], abs=1e-6)
+
+
+def test_oblique_face_cameras_match_their_reference_fixture() -> None:
+    fixture = load("05_mur_oblique.json")
+
+    cameras = build_scene_graph(fixture["input"], _catalog(fixture))["rooms"][0]["cameras"]
+
+    assert_matches(cameras, fixture["expected_cameras"], "cameras")
+
+
+def test_every_corner_of_the_octagon_needs_the_same_miter() -> None:
+    """Huit sommets à 45° : la rallonge vaut partout 5 x tan(22.5°) = 2.0711."""
+    fixture = load("05_mur_oblique.json")
+
+    assert _miter_extensions(fixture) == fixture["expected_miter_extensions_cm"]
+
+
+# --- Fixture 06 : pièce en L (polygone concave) --------------------------------------------------
+
+
+def test_a_concave_room_matches_its_reference_fixture() -> None:
+    fixture = load("06_piece_en_L.json")
+
+    assert_matches(_nodes(fixture, "wall"), fixture["expected_walls"], "murs")
+
+
+def test_a_reentrant_corner_is_mitred_outwards_and_not_shortened() -> None:
+    """Au sommet rentrant, la rallonge signée serait négative et creuserait la fente au lieu de
+    la combler : c'est la valeur absolue qui compte."""
+    fixture = load("06_piece_en_L.json")
+
+    extensions = _miter_extensions(fixture)
+
+    assert extensions == fixture["expected_miter_extensions_cm"]
+    assert extensions["C>D"] == 5.0
+
+
+def test_face_cameras_of_a_concave_room_match_their_reference_fixture() -> None:
+    fixture = load("06_piece_en_L.json")
+
+    cameras = build_scene_graph(fixture["input"], _catalog(fixture))["rooms"][0]["cameras"]
+
+    assert_matches(cameras, fixture["expected_cameras"], "cameras")
+
+
+def test_no_face_camera_of_a_concave_room_lands_outside_it() -> None:
+    """Régression : la profondeur venait de la projection des sommets, donc de la boîte englobante.
+
+    Sur cette pièce en L, les caméras des murs A et F reculaient au-delà du retour et se
+    retrouvaient hors de la pièce, le mur opposé devant elles.
+    """
+    fixture = load("06_piece_en_L.json")
+    polygon = fixture["input"]["rooms"][0]["polygon"]
+
+    cameras = build_scene_graph(fixture["input"], _catalog(fixture))["rooms"][0]["cameras"]
+
+    for camera in cameras:
+        if camera["face_label"] is None:
+            continue
+        x, _y, z = camera["position"]
+        assert _contains(polygon, x, z), f"{camera['name']} est hors de la pièce en ({x}, {z})"
+
+
+def test_a_ray_stops_at_the_first_edge_it_meets_and_not_at_the_furthest() -> None:
+    """Le mur F borde l'aile courte : le retour l'arrête à 200, la boîte englobante disait 600."""
+    polygon = load("06_piece_en_L.json")["input"]["rooms"][0]["polygon"]
+
+    assert first_hit_distance([0.0, 250.0], [1.0, 0.0], polygon) == pytest.approx(200.0)
+    assert first_hit_distance([300.0, 0.0], [0.0, 1.0], polygon) == pytest.approx(200.0)
+    # Le côté qui porte le point de départ est touché à distance nulle : il doit être écarté.
+    assert first_hit_distance([100.0, 500.0], [0.0, -1.0], polygon) == pytest.approx(500.0)
+    # Un rayon qui sort de la pièce ne rencontre plus rien.
+    assert first_hit_distance([700.0, 250.0], [1.0, 0.0], polygon) is None
+
+
+# --- Onglet des murs -----------------------------------------------------------------------------
+
+
+def test_two_collinear_walls_need_no_miter() -> None:
+    """Droites décalées parallèles : l'intersection part à l'infini, et il n'y a aucune fente."""
+    straight = wall_direction([0.0, 0.0], [100.0, 0.0])
+    folded = wall_direction([100.0, 0.0], [0.0, 0.0])
+
+    assert miter_extension(straight, straight, 5.0) == 0.0
+    assert miter_extension(straight, folded, 5.0) == 0.0
+
+
+def test_a_right_angle_needs_half_the_wall_thickness() -> None:
+    """Sur la pièce de référence, la fente d'un angle droit fait 5 sur 5 : la rallonge vaut 5."""
+    along_x = wall_direction([0.0, 0.0], [400.0, 0.0])
+    along_z = wall_direction([400.0, 0.0], [400.0, 300.0])
+
+    assert miter_extension(along_x, along_z, 5.0) == pytest.approx(5.0)
+    assert miter_extension(along_x, along_z, 15.0) == pytest.approx(15.0)
+
+
+# --- Aire nette ----------------------------------------------------------------------------------
+
+
+def test_the_net_floor_area_is_measured_between_the_wall_faces() -> None:
+    """`floor_area_cm2` mesure la ligne médiane des murs, pas le sol : c'est l'aire du plan.
+
+    Sur la pièce de référence (400 sur 300), l'aire nette vaut 390 x 290 = 113100 avec des murs de
+    10, et 370 x 270 = 99900 avec des murs de 30 : la médiane surévalue de 6 % puis de 20 %.
+    """
+    fixture = load("01_piece_carree.json")
+
+    for thickness, expected in ((10.0, 113100.0), (30.0, 99900.0)):
+        source = json.loads(json.dumps(fixture["input"]))
+        source["rooms"][0]["wall_thickness_cm"] = thickness
+        room = build_scene_graph(source)["rooms"][0]
+
+        assert room["floor_area_cm2"] == 120000.0, "l'aire historique ne doit pas bouger"
+        assert room["net_floor_area_cm2"] == pytest.approx(expected)
+
+
+def test_the_net_floor_area_of_the_reference_fixtures() -> None:
+    for name in ("05_mur_oblique.json", "06_piece_en_L.json"):
+        fixture = load(name)
+        room = build_scene_graph(fixture["input"], _catalog(fixture))["rooms"][0]
+
+        assert_matches(
+            {key: room[key] for key in fixture["expected_room"]},
+            fixture["expected_room"],
+            f"{name}.piece",
+        )
+
+
+def test_the_offset_contour_pushes_a_reentrant_corner_outwards() -> None:
+    """Le sommet rentrant (200,200) doit partir en (195,195) : décalé vers l'extérieur du L."""
+    fixture = load("06_piece_en_L.json")
+
+    inner = offset_polygon(fixture["input"]["rooms"][0]["polygon"], 5.0)
+
+    assert_matches(inner, fixture["expected_offset_polygon"], "contour_decale")
+
+
+def test_a_room_narrower_than_its_own_walls_has_no_net_area() -> None:
+    """Le contour décalé se replie sur lui-même : toute valeur positive serait une invention."""
+    scene = build_scene_graph(
+        {
+            "project_id": 7,
+            "rooms": [
+                {
+                    "id": 70, "name": "Placard", "wall_thickness_cm": 200.0,
+                    "ceiling_height_cm": 250.0,
+                    "polygon": [[0, 0], [60, 0], [60, 40], [0, 40]],
+                    "faces": [],
+                }
+            ],
+        }
+    )
+
+    assert scene["rooms"][0]["floor_area_cm2"] == 2400.0
+    assert scene["rooms"][0]["net_floor_area_cm2"] == 0.0
+
+
+# --- Menuiseries des ouvertures ------------------------------------------------------------------
+
+
+def test_an_opening_produces_its_hole_and_its_joinery() -> None:
+    """Spec §4.3 : le catalogue décrit une porte battante, pas seulement un vide dans un mur."""
+    fixture = load("06_piece_en_L.json")
+
+    joinery = _nodes(fixture, "joinery")
+    wall_a = next(node for node in _nodes(fixture, "wall") if node["face_label"] == "A")
+
+    assert len(wall_a["holes"]) == 1
+    assert len(joinery) == 1
+    assert_matches(joinery[0], fixture["expected_joinery_node"], "menuiserie")
+
+
+def test_the_joinery_fills_the_thickness_of_the_wall() -> None:
+    """La profondeur saisie sur l'élément (5) est ignorée : la menuiserie occupe le percement."""
+    fixture = load("06_piece_en_L.json")
+
+    joinery = _nodes(fixture, "joinery")[0]
+
+    assert fixture["input"]["rooms"][0]["faces"][0]["elements"][0]["depth_cm"] == 5
+    assert joinery["size_cm"][2] == fixture["input"]["rooms"][0]["wall_thickness_cm"]
+
+
+def test_an_opening_without_its_recipe_in_the_catalogue_stays_a_plain_hole() -> None:
+    """Comme un meuble sans recette : une menuiserie inventée masquerait le catalogue manquant."""
+    fixture = load("02_mur_avec_ouvertures.json")
+
+    scene = build_scene_graph(fixture["input"], {})
+
+    assert [node["kind"] for node in scene["rooms"][0]["nodes"]] == ["wall"]
+
+
+def test_each_opening_kind_maps_to_its_own_recipe() -> None:
+    fixture = load("06_piece_en_L.json")
+    catalog = {
+        1: {"id": 1, "slug": "porte-battante", "parts": [], "color_slots": []},
+        2: {"id": 2, "slug": "porte-coulissante", "parts": [], "color_slots": []},
+        3: {"id": 3, "slug": "fenetre", "parts": [], "color_slots": []},
+    }
+
+    for kind, slug in (
+        ("door_hinged", "porte-battante"),
+        ("door_sliding", "porte-coulissante"),
+        ("window", "fenetre"),
+    ):
+        source = json.loads(json.dumps(fixture["input"]))
+        source["rooms"][0]["faces"][0]["elements"][0]["kind"] = kind
+        scene = build_scene_graph(source, catalog)
+
+        joinery = next(node for node in scene["rooms"][0]["nodes"] if node["kind"] == "joinery")
+        assert joinery["opening_kind"] == kind
+        assert joinery["furniture_type_slug"] == slug
+
+
+# --- Axe de révolution des primitives ------------------------------------------------------------
+
+
+def test_a_lying_cylinder_declares_its_axis() -> None:
+    """Une poignée de porte est un cylindre couché : sans `axis`, le viewer la dresse debout."""
+    fixture = load("06_piece_en_L.json")
+
+    joinery = _nodes(fixture, "joinery")[0]
+    handle = next(p for p in joinery["primitives"] if p["color_slot"] == "poignee")
+
+    assert handle["axis"] == "z"
+
+
+def test_a_primitive_without_axis_stands_upright() -> None:
+    primitives = expand_recipe(
+        [
+            {"type": "cylinder", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1],
+             "color_slot": "pied"},
+            # `parts` est du JSON libre : un axe fantaisiste ne doit pas remonter jusqu'au viewer.
+            {"type": "cylinder", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1],
+             "color_slot": "pied", "axis": "diagonale"},
+        ],
+        (10.0, 40.0, 10.0),
+        {},
+    )
+
+    assert [primitive.axis for primitive in primitives] == ["y", "y"]

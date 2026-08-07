@@ -127,6 +127,9 @@ export interface Primitive {
   color_slot: string
   color: string | null
   operation: 'add' | 'subtract'
+  // Axe de révolution : `size` donne la boîte englobante, pas l'orientation. Sans lui, une
+  // poignée de porte ou une barre d'appui reste dressée à la verticale.
+  axis: 'x' | 'y' | 'z'
 }
 
 export interface FurnitureNode {
@@ -142,7 +145,21 @@ export interface FurnitureNode {
   variant_params: Record<string, unknown>
 }
 
-export type SceneNode = WallNode | HorizontalNode | FurnitureNode
+/** La menuiserie logée dans le percement d'une ouverture : le trou est un vide, la porte non. */
+export interface JoineryNode {
+  kind: 'joinery'
+  element_id: number
+  face_label: string
+  opening_kind: ElementKind
+  furniture_type_slug: string
+  position: [number, number, number]
+  rotation_y: number
+  size_cm: [number, number, number]
+  primitives: Primitive[]
+  requires_csg: boolean
+}
+
+export type SceneNode = WallNode | HorizontalNode | FurnitureNode | JoineryNode
 
 export interface CameraPreset {
   name: string
@@ -162,6 +179,9 @@ export interface SceneRoom {
   wall_thickness_cm: number
   ceiling_height_cm: number
   floor_area_cm2: number
+  // Aire au sol dans l'œuvre, murs déduits — celle qu'on annonce dans un devis. `floor_area_cm2`
+  // reste l'aire brute mesurée sur l'axe des murs.
+  net_floor_area_cm2: number
   nodes: SceneNode[]
   cameras: CameraPreset[]
 }

@@ -9,10 +9,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Aucun job n'a besoin d'écrire quoi que ce soit. Le jeton par défaut d'un dépôt peut être en
+# écriture : le restreindre ici évite qu'une dépendance compromise d'un job pousse un commit.
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (pytest, ruff, mypy)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -38,9 +44,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+        # Le verrou d'abord, en contrainte : la CI valide exactement les versions que l'image de
+        # production installera, pas la résolution du jour.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev]" -c requirements.txt
 
       - name: Lint (ruff)
         run: ruff check .
@@ -69,6 +77,7 @@ jobs:
   frontend:
     name: Frontend (build, tests, lint)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -96,6 +105,7 @@ jobs:
   contrat-api:
     name: Contrat OpenAPI (le frontend n'invente aucune route)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -105,7 +115,7 @@ jobs:
 
       - name: Install backend
         working-directory: backend
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" -c requirements.txt
 
       - name: Régénérer l'instantané OpenAPI
         working-directory: backend
@@ -121,35 +131,168 @@ jobs:
             exit 1
           fi
 
-  compose-prod:
-    name: Stack de production (validation)
+  securite:
+    name: Sécurité (dépendances, secrets)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # L'historique complet : gitleaks cherche aussi ce qui a été commité puis retiré, et un
+      # secret retiré au commit suivant reste un secret compromis.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Vulnérabilités connues des dépendances Python (pip-audit)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r requirements.txt
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Vulnérabilités connues des dépendances npm
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+      - name: Secrets commités (gitleaks)
+        # Version figée : un scanner qui se met à jour tout seul rend la CI non reproductible, et
+        # une nouvelle règle ferait rougir un commit qui n'a rien changé.
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" zricethezav/gitleaks:v8.30.1 \
+            detect --source=/repo --config=/repo/.gitleaks.toml --redact --no-banner
+
+  compose-prod:
+    name: Stack de production (démarrage réel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      POSTGRES_USER: ci
+      POSTGRES_PASSWORD: mot-de-passe-de-ci
+      POSTGRES_DB: ci
+      SECRET_KEY: cle-de-ci-suffisamment-longue-pour-passer-le-controle
+      COMPOSE: -f docker-compose.yml -f docker-compose.prod.yml
     steps:
       - uses: actions/checkout@v5
 
       - name: La surcouche de production est valide
-        env:
-          POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci
-          POSTGRES_DB: ci
-          SECRET_KEY: cle-de-ci-suffisamment-longue-pour-passer-le-controle
-          CORS_ORIGINS: https://exemple.test
-          PUBLIC_API_URL: https://api.exemple.test
-        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+        run: docker compose $COMPOSE config -q
 
       - name: Le démarrage échoue si un secret manque
         run: |
-          if POSTGRES_USER=ci POSTGRES_PASSWORD=ci POSTGRES_DB=ci \
-             CORS_ORIGINS=https://exemple.test PUBLIC_API_URL=https://api.exemple.test \
-             docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q 2>/dev/null; then
+          if SECRET_KEY= docker compose $COMPOSE config -q 2>/dev/null; then
             echo "::error::La configuration de production accepte de démarrer sans SECRET_KEY."
             exit 1
           fi
           echo "Absence de SECRET_KEY correctement refusée."
 
+      # Jusqu'ici la CI s'arrêtait à `config -q`, c'est-à-dire à la syntaxe. Elle ne voyait donc
+      # pas que l'image du frontend ne démarrait pas du tout, ni qu'aucune migration n'était
+      # jouée. Tout ce qui suit exerce la pile réelle.
+      - name: Démarrer la pile de production
+        run: docker compose $COMPOSE up -d --wait --wait-timeout 300
+
+      - name: Le frontend répond
+        run: curl --fail --silent --show-error --output /dev/null http://127.0.0.1:8080/
+
+      - name: La page HTML porte bien sa CSP
+        run: |
+          entetes=$(curl --fail --silent --show-error -D - -o /dev/null http://127.0.0.1:8080/)
+          if ! echo "$entetes" | grep -qi '^content-security-policy:'; then
+            echo "::error::La page HTML est servie sans Content-Security-Policy."
+            echo "$entetes"
+            exit 1
+          fi
+          # `connect-src 'self'` est ce qui prouve que l'API est bien servie sur la même origine.
+          if ! echo "$entetes" | grep -qi "connect-src 'self'"; then
+            echo "::error::La CSP ne contient pas connect-src 'self'."
+            echo "$entetes"
+            exit 1
+          fi
+
+      - name: Une vue partagée n'est pas indexable
+        run: |
+          if ! curl --fail --silent -D - -o /dev/null http://127.0.0.1:8080/partage/jeton-de-ci \
+               | grep -qi '^x-robots-tag: *noindex'; then
+            echo "::error::/partage/ est servi sans X-Robots-Tag."
+            exit 1
+          fi
+          curl --fail --silent --show-error --output /dev/null http://127.0.0.1:8080/robots.txt
+
+      - name: L'API répond sur la même origine
+        run: |
+          reponse=$(curl --fail --silent --show-error http://127.0.0.1:8080/health)
+          echo "réponse: $reponse"
+          test "$reponse" = '{"status":"ok"}'
+
+      - name: Un appel authentifié aboutit, un appel anonyme est refusé
+        run: |
+          curl --fail --silent --show-error --output /dev/null -X POST \
+            http://127.0.0.1:8080/api/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci@exemple.fr","password":"mot-de-passe-de-ci-123"}'
+          jeton=$(curl --fail --silent --show-error -X POST http://127.0.0.1:8080/api/auth/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'username=ci@exemple.fr' \
+            --data-urlencode 'password=mot-de-passe-de-ci-123' \
+            | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+          test -n "$jeton"
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $jeton" http://127.0.0.1:8080/api/projects)
+          test "$code" = "200" || { echo "::error::/api/projects authentifié → $code"; exit 1; }
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            http://127.0.0.1:8080/api/projects)
+          test "$code" = "401" || { echo "::error::/api/projects anonyme → $code"; exit 1; }
+
+      - name: Le catalogue a bien été alimenté par le service de migration
+        run: |
+          if curl --fail --silent http://127.0.0.1:8080/api/furniture-types | grep -q '"total":0'; then
+            echo "::error::Catalogue vide : le service migrate n'a pas joué son seed."
+            exit 1
+          fi
+
+      - name: L'image de production n'embarque pas l'outillage de test
+        run: |
+          if docker compose $COMPOSE exec -T backend python -c "import pytest" 2>/dev/null; then
+            echo "::error::pytest est présent dans l'image de production."
+            exit 1
+          fi
+          echo "Outillage de test absent de l'image de production."
+
+      - name: Ni la base ni Redis ne publient de port
+        run: |
+          for service in db redis; do
+            conteneur=$(docker compose $COMPOSE ps -q "$service")
+            # Sans publication, chaque entrée de la table des ports vaut `null` ; une liaison sur
+            # l'hôte y ferait apparaître un HostPort.
+            liaisons=$(docker inspect "$conteneur" --format '{{json .NetworkSettings.Ports}}')
+            case "$liaisons" in
+              *HostPort*)
+                echo "::error::$service publie un port sur l'hôte : $liaisons"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Logs en cas d'échec
+        if: failure()
+        run: docker compose $COMPOSE logs --no-color
+
+      - name: Arrêter la pile
+        if: always()
+        run: docker compose $COMPOSE down -v
+
   compose:
     name: Stack Docker (docker compose up)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 

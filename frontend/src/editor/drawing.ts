@@ -67,6 +67,18 @@ export function wallGeometries(polygon: number[][], faces: Face[]): WallGeometry
   })
 }
 
+/**
+ * Identité stable d'un mur pour un `v-for`.
+ *
+ * La face quand elle existe (contour déjà enregistré), sinon le rang du segment dans le contour.
+ * Les coordonnées ne conviennent pas : dans un rectangle, deux murs partagent la même abscisse de
+ * départ et deux autres la même longueur — soit deux paires de clés en double, donc un réemploi
+ * de nœuds Konva entre des murs qui n'ont rien à voir.
+ */
+export function wallKey(faceId: number | undefined, index: number): string {
+  return faceId === undefined ? `rang-${index}` : `face-${faceId}`
+}
+
 /** Point situé à `alongCm` le long du mur, décalé de `offsetCm` vers l'extérieur. */
 export function pointOnWall(
   wall: WallGeometry,

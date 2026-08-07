@@ -11,6 +11,19 @@
  * cascade de conflits de version et de confirmations.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+// Enregistrement local plutôt que `app.use(VueKonva)` : globalement installé, Konva (55 Ko
+// gzip) atterrissait dans le chunk d'entrée, donc sur l'écran de connexion et sur la page de
+// partage publique, qui n'affichent jamais de plan 2D.
+import {
+  Arc as VArc,
+  Circle as VCircle,
+  Label as VLabel,
+  Layer as VLayer,
+  Line as VLine,
+  Stage as VStage,
+  Tag as VTag,
+  Text as VText,
+} from 'vue-konva'
 
 import type { Face, PlanElement } from '@/api/types'
 import {
@@ -20,6 +33,7 @@ import {
   isOpening,
   openingSymbol,
   wallGeometries,
+  wallKey,
   wallOutline,
 } from '@/editor/drawing'
 import {
@@ -47,6 +61,8 @@ const props = withDefaults(
     width?: number
     height?: number
     furnitureNames?: Record<number, string>
+    /** Identifiant de persistance du brouillon, de la forme `projet:piece`. */
+    draftKey?: string | null
   }>(),
   {
     roomName: '',
@@ -57,6 +73,7 @@ const props = withDefaults(
     width: 960,
     height: 620,
     furnitureNames: () => ({}),
+    draftKey: null,
   },
 )
 
@@ -73,6 +90,16 @@ const draft = ref<number[][]>([])
 const cursor = ref<Point | null>(null)
 const hoveredLabel = ref<string | null>(null)
 
+/**
+ * Taille réelle du canvas.
+ *
+ * Un `<canvas>` de 960 px de large débordait de l'écran d'un téléphone, et Konva ne se
+ * redimensionne pas tout seul : la taille est un attribut, pas une règle CSS. Les props
+ * `width`/`height` ne servent donc plus que de valeur initiale, avant la première mesure.
+ */
+const stage = ref({ width: props.width, height: props.height })
+let surfaceObserver: ResizeObserver | null = null
+
 /** Copie de travail pendant un glisser : la source reste intacte tant qu'on n'a pas lâché. */
 const dragging = ref<{ index: number; polygon: number[][] } | null>(null)
 const panning = ref<{ x: number; y: number } | null>(null)
@@ -86,7 +113,9 @@ const walls = computed(() => wallGeometries(activePolygon.value, props.faces))
 const selfIntersecting = computed(() => isSelfIntersecting(activePolygon.value))
 const area = computed(() => areaInSquareMeters(activePolygon.value))
 
-const grid = computed(() => gridLines(props.width, props.height, viewport.value, props.gridCm * 10))
+const grid = computed(() =>
+  gridLines(stage.value.width, stage.value.height, viewport.value, props.gridCm * 10),
+)
 
 const floorPoints = computed(() =>
   activePolygon.value.flatMap((vertex) => {
@@ -96,8 +125,9 @@ const floorPoints = computed(() =>
 )
 
 const wallShapes = computed(() =>
-  walls.value.map((wall) => ({
+  walls.value.map((wall, index) => ({
     wall,
+    key: wallKey(wall.face?.id, index),
     points: wallOutline(wall, props.wallThicknessCm, viewport.value),
     selected: wall.face?.label === props.selectedFaceLabel,
     hovered: wall.face?.label === hoveredLabel.value,
@@ -131,9 +161,14 @@ const furniture = computed(() =>
 /** Cotes déportées : demi-épaisseur du mur, plus une marge constante à l'écran. */
 const dimensions = computed(() => {
   const offset = props.wallThicknessCm / 2 + 36 / Math.max(viewport.value.scale, 0.05)
-  return walls.value.map((wall) => {
+  return walls.value.map((wall, index) => {
     const line = dimensionLine(wall, offset, viewport.value)
-    return { wall, ...line, screenLabel: planToScreen(line.labelAt, viewport.value) }
+    return {
+      wall,
+      key: wallKey(wall.face?.id, index),
+      ...line,
+      screenLabel: planToScreen(line.labelAt, viewport.value),
+    }
   })
 })
 
@@ -254,8 +289,20 @@ function onWheel(event: { evt: WheelEvent }): void {
   }
 }
 
+const TYPING_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
+
+/**
+ * L'écoute est posée sur `window` — un canvas Konva ne prend pas le focus clavier. Il faut donc
+ * écarter explicitement la saisie de texte : sans ce filtre, une correction au clavier dans le
+ * champ « nom de pièce » supprimait un sommet du tracé, et personne ne faisait le lien.
+ */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return TYPING_TAGS.has(target.tagName) || target.isContentEditable
+}
+
 function onKeydown(event: KeyboardEvent): void {
-  if (props.mode !== 'draw') return
+  if (props.mode !== 'draw' || isTypingTarget(event.target)) return
   if (event.key === 'Escape') {
     draft.value = []
     emit('finish-drawing')
@@ -269,15 +316,69 @@ function onKeydown(event: KeyboardEvent): void {
 
 function fit(): void {
   if (activePolygon.value.length >= 3) {
-    viewport.value = fitViewport(activePolygon.value, props.width, props.height, 90)
+    const padding = Math.min(90, stage.value.width / 8)
+    viewport.value = fitViewport(activePolygon.value, stage.value.width, stage.value.height, padding)
   }
 }
 
+/**
+ * Persistance du brouillon de tracé.
+ *
+ * Un contour en cours de saisie n'existe que côté client : tant qu'il n'est pas fermé, rien
+ * n'est envoyé au serveur. Un rafraîchissement de page ou un onglet fermé par mégarde effaçait
+ * donc plusieurs minutes de relevé. La clé porte le projet **et** la pièce : c'est ce qui
+ * garantit qu'un brouillon ne peut pas ressortir dans une autre pièce.
+ */
+function storageKey(): string | null {
+  return props.draftKey ? `renovation.brouillon.${props.draftKey}` : null
+}
+
+function restoreDraft(): void {
+  const key = storageKey()
+  if (!key) return
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? 'null')
+    draft.value = Array.isArray(parsed) ? (parsed as number[][]) : []
+  } catch {
+    // Brouillon corrompu (écriture interrompue, format d'une version antérieure) : on repart
+    // d'un tracé vide plutôt que de casser le montage du composant.
+    draft.value = []
+  }
+}
+
+function persistDraft(): void {
+  const key = storageKey()
+  if (!key) return
+  if (draft.value.length === 0) localStorage.removeItem(key)
+  else localStorage.setItem(key, JSON.stringify(draft.value))
+}
+
+watch(draft, persistDraft)
+
+/** Suit la largeur disponible ; ne recadre qu'au changement de largeur, car la hauteur bouge à
+ *  chaque apparition de la barre d'adresse sur mobile et recadrer sans arrêt serait insupportable. */
+function observeSurface(): void {
+  if (typeof ResizeObserver === 'undefined' || !host.value) return
+  surfaceObserver = new ResizeObserver((entries) => {
+    const box = entries[0]?.contentRect
+    if (!box || box.width < 1) return
+    const widthChanged = Math.round(box.width) !== stage.value.width
+    stage.value = { width: Math.round(box.width), height: Math.round(box.height) }
+    if (widthChanged) fit()
+  })
+  surfaceObserver.observe(host.value)
+}
+
 onMounted(() => {
+  restoreDraft()
   window.addEventListener('keydown', onKeydown)
+  observeSurface()
   fit()
 })
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  surfaceObserver?.disconnect()
+})
 
 // Recadre au changement de pièce, pas à chaque micro-édition.
 watch(() => props.faces.map((face) => face.id).join(','), fit)
@@ -292,8 +393,8 @@ defineExpose({ fit })
       class="surface"
       :data-mode="mode"
     >
-      <v-stage
-        :config="{ width, height }"
+      <VStage
+        :config="{ width: stage.width, height: stage.height }"
         @click="onStageClick"
         @pointermove="onPointerMove"
         @pointerdown="startPanning"
@@ -301,22 +402,22 @@ defineExpose({ fit })
         @pointerleave="releasePointer"
         @wheel="onWheel"
       >
-        <v-layer :config="{ listening: false }">
-          <v-line
+        <VLayer :config="{ listening: false }">
+          <VLine
             v-for="(line, index) in grid"
             :key="`g-${index}`"
             :config="{ points: line, stroke: '#e6eaef', strokeWidth: 1 }"
           />
-          <v-line
+          <VLine
             v-if="floorPoints.length >= 6"
             :config="{ points: floorPoints, closed: true, fill: '#f7f4ef' }"
           />
-        </v-layer>
+        </VLayer>
 
-        <v-layer>
-          <v-line
+        <VLayer>
+          <VLine
             v-for="shape in wallShapes"
-            :key="`w-${shape.wall.face?.id ?? shape.wall.from.x}`"
+            :key="`w-${shape.key}`"
             :config="{
               points: shape.points,
               closed: true,
@@ -333,13 +434,13 @@ defineExpose({ fit })
             v-for="opening in openings"
             :key="`o-${opening.element.id}`"
           >
-            <v-line :config="{ points: opening.gap, closed: true, fill: '#f7f4ef' }" />
-            <v-line
+            <VLine :config="{ points: opening.gap, closed: true, fill: '#f7f4ef' }" />
+            <VLine
               v-for="(stroke, index) in opening.strokes"
               :key="`os-${opening.element.id}-${index}`"
               :config="{ points: stroke, stroke: '#1b222b', strokeWidth: 1.6 }"
             />
-            <v-arc
+            <VArc
               v-if="opening.arc"
               :config="{
                 x: opening.arc.x,
@@ -359,7 +460,7 @@ defineExpose({ fit })
             v-for="item in furniture"
             :key="`f-${item.element.id}`"
           >
-            <v-line
+            <VLine
               :config="{
                 points: item.outline,
                 closed: true,
@@ -370,7 +471,7 @@ defineExpose({ fit })
               }"
               @click="emit('select-element', item.element)"
             />
-            <v-text
+            <VText
               :config="{
                 x: planToScreen(item.center, viewport).x - 45,
                 y: planToScreen(item.center, viewport).y - 6,
@@ -383,20 +484,20 @@ defineExpose({ fit })
               }"
             />
           </template>
-        </v-layer>
+        </VLayer>
 
-        <v-layer :config="{ listening: false }">
+        <VLayer :config="{ listening: false }">
           <template
             v-for="dimension in dimensions"
-            :key="`d-${dimension.wall.face?.id ?? dimension.text}`"
+            :key="`d-${dimension.key}`"
           >
-            <v-line :config="{ points: dimension.line, stroke: '#95a0b0', strokeWidth: 1 }" />
-            <v-line
+            <VLine :config="{ points: dimension.line, stroke: '#95a0b0', strokeWidth: 1 }" />
+            <VLine
               v-for="(tick, index) in dimension.ticks"
-              :key="`t-${index}`"
+              :key="`t-${dimension.key}-${index}`"
               :config="{ points: tick, stroke: '#ccd3dc', strokeWidth: 1 }"
             />
-            <v-label
+            <VLabel
               :config="{
                 x: dimension.screenLabel.x,
                 y: dimension.screenLabel.y,
@@ -404,8 +505,8 @@ defineExpose({ fit })
                 offsetY: 9,
               }"
             >
-              <v-tag :config="{ fill: '#ffffff', cornerRadius: 3 }" />
-              <v-text
+              <VTag :config="{ fill: '#ffffff', cornerRadius: 3 }" />
+              <VText
                 :config="{
                   text: `${dimension.wall.face?.label ?? ''} · ${dimension.text} cm`,
                   fontSize: 11,
@@ -417,10 +518,10 @@ defineExpose({ fit })
                     dimension.wall.face?.label === selectedFaceLabel ? 'bold' : 'normal',
                 }"
               />
-            </v-label>
+            </VLabel>
           </template>
 
-          <v-text
+          <VText
             v-if="centroidScreen && roomName"
             :config="{
               x: centroidScreen.x - 90,
@@ -434,19 +535,19 @@ defineExpose({ fit })
             }"
           />
 
-          <v-line
+          <VLine
             v-if="previewLine.length === 4"
             :config="{ points: previewLine, stroke: '#0b4fd6', dash: [6, 4], strokeWidth: 1.5 }"
           />
-          <v-label
+          <VLabel
             v-if="previewLengthCm !== null && cursor"
             :config="{
               x: planToScreen(cursor, viewport).x + 12,
               y: planToScreen(cursor, viewport).y - 26,
             }"
           >
-            <v-tag :config="{ fill: '#0b4fd6', cornerRadius: 3 }" />
-            <v-text
+            <VTag :config="{ fill: '#0b4fd6', cornerRadius: 3 }" />
+            <VText
               :config="{
                 text: `${previewLengthCm} cm`,
                 fontSize: 11,
@@ -454,11 +555,11 @@ defineExpose({ fit })
                 fill: '#ffffff',
               }"
             />
-          </v-label>
-        </v-layer>
+          </VLabel>
+        </VLayer>
 
-        <v-layer>
-          <v-circle
+        <VLayer>
+          <VCircle
             v-for="(vertex, index) in activePolygon"
             :key="`v-${index}`"
             :config="{
@@ -471,8 +572,8 @@ defineExpose({ fit })
             }"
             @pointerdown="startDraggingVertex(index, $event)"
           />
-        </v-layer>
-      </v-stage>
+        </VLayer>
+      </VStage>
     </div>
 
     <p
@@ -505,6 +606,9 @@ defineExpose({ fit })
 }
 
 .surface {
+  /* La hauteur suit l'écran : sur un téléphone tenu à la verticale, 620 px figés ne laissaient
+     plus rien voir du reste de la page. */
+  height: clamp(18rem, 62vh, 38.75rem);
   border: 1px solid var(--bordure);
   border-radius: 0.5rem;
   background: #fdfdfc;

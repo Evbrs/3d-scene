@@ -9,9 +9,22 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, func
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
+
+
+def json_type() -> JSON:
+    """Type JSON portable : `JSONB` sur PostgreSQL, `JSON` textuel partout ailleurs.
+
+    `JSONB` est stocké décomposé : il est indexable et ne repasse pas par un analyseur syntaxique
+    à chaque lecture. `with_variant` le réserve à PostgreSQL et laisse SQLite — moteur par défaut
+    de la suite de tests (`tests/conftest.py`) — sur le `JSON` qu'il sait traiter, sans quoi la
+    portabilité affichée par la conftest serait fausse.
+    """
+    return JSON().with_variant(JSONB(), "postgresql")
 
 
 def value_enum(enum_class: type[StrEnum], name: str) -> SAEnum:
@@ -44,6 +57,14 @@ class TimestampedModel(SQLModel):
     `TIMESTAMP WITHOUT TIME ZONE` les relirait naïfs — toute comparaison ultérieure lèverait
     « can't compare offset-naive and offset-aware datetimes ». `sa_type` (et non `sa_column`)
     parce qu'un objet `Column` ne peut pas être partagé entre plusieurs tables.
+
+    Les deux colonnes portent en plus un `server_default` : sans lui, un `INSERT` écrit à la main
+    dans `psql` — la voie la plus courte en incident — échoue sur une violation `NOT NULL` de
+    colonnes que l'auteur de la requête n'a aucune raison de connaître.
+
+    `onupdate` ne se substitue pas à une affectation explicite : SQLAlchemy ne l'applique qu'aux
+    colonnes absentes du `SET` de l'`UPDATE`. Une écriture qui veut « toucher » la ligne sans
+    rien changer d'autre doit donc toujours affecter `updated_at` elle-même.
     """
 
     # `type: ignore` : la surcharge de `Field` déclare `sa_type: type[Any]`, alors que SQLModel
@@ -52,11 +73,13 @@ class TimestampedModel(SQLModel):
     created_at: datetime = Field(  # type: ignore[call-overload]
         default_factory=utcnow,
         sa_type=DateTime(timezone=True),
+        sa_column_kwargs={"server_default": func.now()},
         nullable=False,
     )
     updated_at: datetime = Field(  # type: ignore[call-overload]
         default_factory=utcnow,
         sa_type=DateTime(timezone=True),
+        sa_column_kwargs={"server_default": func.now(), "onupdate": utcnow},
         nullable=False,
     )
 

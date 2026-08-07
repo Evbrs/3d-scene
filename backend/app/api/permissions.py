@@ -44,11 +44,20 @@ async def get_owned_room(session: AsyncSession, room_id: int, user: User) -> Roo
 
 
 async def get_owned_face(session: AsyncSession, face_id: int, user: User) -> Face:
+    """Charge une face **avec ses éléments**.
+
+    Les éléments sont nécessaires à la validation de placement : une nouvelle ouverture doit être
+    confrontée à celles déjà posées sur la même face. Les charger ici, en une requête anticipée,
+    évite de les découvrir au milieu d'une écriture — où le `SELECT` déclencherait un autoflush.
+    """
     face = (
         await session.execute(
             select(Face)
             .where(Face.id == face_id)
-            .options(selectinload(Face.room).selectinload(Room.project))  # type: ignore[arg-type]
+            .options(
+                selectinload(Face.room).selectinload(Room.project),  # type: ignore[arg-type]
+                selectinload(Face.elements),  # type: ignore[arg-type]
+            )
         )
     ).scalar_one_or_none()
     if face is None or face.room.project.owner_id != user.id:
@@ -64,7 +73,10 @@ async def get_owned_element(session: AsyncSession, element_id: int, user: User) 
             .options(
                 selectinload(Element.face)  # type: ignore[arg-type]
                 .selectinload(Face.room)  # type: ignore[arg-type]
-                .selectinload(Room.project)  # type: ignore[arg-type]
+                .selectinload(Room.project),  # type: ignore[arg-type]
+                # Même raison que dans `get_owned_face` : déplacer une ouverture doit pouvoir la
+                # confronter aux autres ouvertures du même mur.
+                selectinload(Element.face).selectinload(Face.elements),  # type: ignore[arg-type]
             )
         )
     ).scalar_one_or_none()

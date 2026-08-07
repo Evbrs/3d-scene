@@ -7,22 +7,46 @@ Arbitrages figés par `docs/spec-complete.md` §8 et repris tels quels ici :
 - l'édition concurrente utilise un verrouillage optimiste par champ `version` (§8, cas 3).
 """
 
+from datetime import datetime
 from typing import Any, ClassVar
 
 # Pas de `from __future__ import annotations` dans ce module : SQLModel résout les annotations
 # de `Relationship` à l'exécution, et une annotation devenue chaîne ("list['Room']") est refusée
 # par SQLAlchemy (« seems to be using a generic class as the argument to relationship() »).
-from sqlalchemy import Column, Index, Integer, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, Integer, UniqueConstraint, text
 from sqlalchemy.ext.mutable import MutableDict, MutableList
-from sqlalchemy.types import JSON
 from sqlmodel import Field, Relationship
 
-from app.models.base import ElementKind, FaceKind, TimestampedModel, value_enum
+from app.models.base import ElementKind, FaceKind, TimestampedModel, json_type, value_enum
 
 # `version_id_col` de SQLAlchemy attend l'objet `Column` lui-même. Sous SQLModel, l'attribut de
 # classe n'est pas encore une `Column` au moment où `__mapper_args__` est lu : on construit donc
 # la colonne en amont et on la référence des deux côtés.
-_project_version_column = Column("version", Integer, nullable=False, default=1)
+_project_version_column = Column(
+    "version", Integer, nullable=False, default=1, server_default=text("1")
+)
+
+
+def _cascade(order_by: str) -> dict[str, Any]:
+    """Options communes aux relations enfant supprimées avec leur parent.
+
+    `order_by` : sans lui, PostgreSQL rend les lignes dans l'ordre physique du heap. Un `UPDATE`
+    y réécrit la ligne en fin de table, si bien qu'un simple renommage change l'ordre des pièces —
+    et le frontend, qui sélectionne la dernière pièce après création, fait alors dessiner
+    l'utilisateur dans la mauvaise. Invisible sur SQLite, dont le parcours suit le rowid.
+
+    `passive_deletes` : la cascade est déjà posée en base (`ondelete="CASCADE"`). Sans cette
+    option, SQLAlchemy charge tout l'arbre pour le supprimer ligne à ligne — des dizaines de
+    SELECT pour un résultat que la base produit seule.
+    """
+    return {"cascade": "all, delete-orphan", "order_by": order_by, "passive_deletes": True}
+
+
+# Bornes physiques, alignées sur celles que l'API applique déjà (`app/schemas/plan.py`). Les
+# répéter en base n'est pas de la redondance : SQLAdmin, la CLI, Celery et `psql` écrivent sans
+# passer par Pydantic, et SQLModel désactive la validation sur les modèles `table=True`.
+MAX_CENTIMETERS = 10_000
+MAX_FURNITURE_CENTIMETERS = 1_000
 
 
 class Project(TimestampedModel, table=True):
@@ -39,19 +63,18 @@ class Project(TimestampedModel, table=True):
     __mapper_args__: ClassVar[dict[str, Any]] = {"version_id_col": _project_version_column}
 
     id: int | None = Field(default=None, primary_key=True)
-    # Propriétaire du projet : socle des permissions objet (spec §7, P2).
-    owner_id: int = Field(foreign_key="user.id", index=True, ondelete="CASCADE")
-    name: str = Field(max_length=200, index=True)
+    # Propriétaire du projet : socle des permissions objet (spec §7, P2). Pas d'index dédié :
+    # `ix_project_owner_updated` a `owner_id` en tête, donc sert aussi le filtre seul.
+    owner_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
+    name: str = Field(max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     version: int = Field(default=1, sa_column=_project_version_column)
 
     rooms: list["Room"] = Relationship(
-        back_populates="project",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        back_populates="project", sa_relationship_kwargs=_cascade("Room.id")
     )
     shared_views: list["SharedView"] = Relationship(
-        back_populates="project",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        back_populates="project", sa_relationship_kwargs=_cascade("SharedView.id")
     )
 
 
@@ -63,6 +86,20 @@ class Room(TimestampedModel, table=True):
     """
 
     __tablename__ = "room"
+    __table_args__ = (
+        CheckConstraint(
+            f"wall_thickness_cm > 0 AND wall_thickness_cm <= {MAX_CENTIMETERS}",
+            name="ck_room_wall_thickness_cm_bounded",
+        ),
+        CheckConstraint(
+            f"ceiling_height_cm > 0 AND ceiling_height_cm <= {MAX_CENTIMETERS}",
+            name="ck_room_ceiling_height_cm_bounded",
+        ),
+        # `length(name) > 0` et non `trim` : c'est exactement ce que l'API refuse
+        # (`min_length=1`). Une contrainte plus stricte que l'API transformerait une requête
+        # aujourd'hui acceptée en erreur 500.
+        CheckConstraint("length(name) > 0", name="ck_room_name_not_empty"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="project.id", index=True, ondelete="CASCADE")
@@ -73,13 +110,15 @@ class Room(TimestampedModel, table=True):
     # Polygone libre de la pièce (spec §1 : « polygones libres »), liste de sommets [x, y] en cm,
     # ordonnés dans le sens trigonométrique. JSON assumé (§8, cas 1).
     polygon: list[list[float]] = Field(
-        default_factory=list, sa_column=Column(MutableList.as_mutable(JSON), nullable=False)
+        default_factory=list,
+        sa_column=Column(
+            MutableList.as_mutable(json_type()), nullable=False, server_default=text("'[]'")
+        ),
     )
 
     project: Project = Relationship(back_populates="rooms")
     faces: list["Face"] = Relationship(
-        back_populates="room",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        back_populates="room", sa_relationship_kwargs=_cascade("Face.id")
     )
 
 
@@ -110,13 +149,15 @@ class Face(TimestampedModel, table=True):
     # Revêtement : {"color": "#RRGGBB", "material": "...", "unit_width_cm": n,
     #               "unit_height_cm": n, "pattern": "chevron"} — voir spec §1.
     covering: dict[str, Any] = Field(
-        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
+        default_factory=dict,
+        sa_column=Column(
+            MutableDict.as_mutable(json_type()), nullable=False, server_default=text("'{}'")
+        ),
     )
 
     room: Room = Relationship(back_populates="faces")
     elements: list["Element"] = Relationship(
-        back_populates="face",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+        back_populates="face", sa_relationship_kwargs=_cascade("Element.id")
     )
 
 
@@ -131,6 +172,20 @@ class FurnitureType(TimestampedModel, table=True):
     """
 
     __tablename__ = "furnituretype"
+    __table_args__ = (
+        CheckConstraint(
+            f"default_width_cm > 0 AND default_width_cm <= {MAX_FURNITURE_CENTIMETERS}",
+            name="ck_furnituretype_default_width_cm_bounded",
+        ),
+        CheckConstraint(
+            f"default_height_cm > 0 AND default_height_cm <= {MAX_FURNITURE_CENTIMETERS}",
+            name="ck_furnituretype_default_height_cm_bounded",
+        ),
+        CheckConstraint(
+            f"default_depth_cm > 0 AND default_depth_cm <= {MAX_FURNITURE_CENTIMETERS}",
+            name="ck_furnituretype_default_depth_cm_bounded",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     slug: str = Field(max_length=100, unique=True, index=True)
@@ -138,10 +193,27 @@ class FurnitureType(TimestampedModel, table=True):
     category: str = Field(max_length=50, index=True)
 
     color_slots: list[str] = Field(
-        default_factory=list, sa_column=Column(MutableList.as_mutable(JSON), nullable=False)
+        default_factory=list,
+        sa_column=Column(
+            MutableList.as_mutable(json_type()), nullable=False, server_default=text("'[]'")
+        ),
     )
     parts: list[dict[str, Any]] = Field(
-        default_factory=list, sa_column=Column(MutableList.as_mutable(JSON), nullable=False)
+        default_factory=list,
+        sa_column=Column(
+            MutableList.as_mutable(json_type()), nullable=False, server_default=text("'[]'")
+        ),
+    )
+    # Paramètres de variation acceptés par la recette (spec §4.4 : « défini dans la recette du
+    # `FurnitureType`, pas dans le moteur de rendu générique »). Chaque entrée déclare
+    # `{"name", "axis", "applies_to", "min", "max"}` ; l'instance ne fait que choisir une valeur
+    # dans son `variant_params`. Une recette sans `variants` n'a aucun paramètre : le
+    # `variant_params` de ses instances est ignoré, faute de savoir ce qu'il piloterait.
+    variants: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(
+            MutableList.as_mutable(json_type()), nullable=False, server_default=text("'[]'")
+        ),
     )
 
     # Dimensions par défaut proposées à l'instanciation (spec §4.4).
@@ -160,6 +232,25 @@ class Element(TimestampedModel, table=True):
     """
 
     __tablename__ = "element"
+    __table_args__ = (
+        CheckConstraint(
+            f"width_cm > 0 AND width_cm <= {MAX_CENTIMETERS}", name="ck_element_width_cm_bounded"
+        ),
+        CheckConstraint(
+            f"height_cm > 0 AND height_cm <= {MAX_CENTIMETERS}", name="ck_element_height_cm_bounded"
+        ),
+        CheckConstraint(
+            f"depth_cm > 0 AND depth_cm <= {MAX_CENTIMETERS}", name="ck_element_depth_cm_bounded"
+        ),
+        CheckConstraint(
+            "rotation_deg >= -360 AND rotation_deg <= 360", name="ck_element_rotation_deg_bounded"
+        ),
+        # Un décalage négatif place l'élément hors de sa face : `element_fits_on_face` le refuse
+        # déjà, mais seulement quand la face a une géométrie connue.
+        CheckConstraint(
+            "x_offset_cm >= 0 AND y_offset_cm >= 0", name="ck_element_offsets_not_negative"
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     face_id: int = Field(foreign_key="face.id", index=True, ondelete="CASCADE")
@@ -179,10 +270,16 @@ class Element(TimestampedModel, table=True):
         default=None, foreign_key="furnituretype.id", index=True, ondelete="SET NULL"
     )
     colors: dict[str, str] = Field(
-        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
+        default_factory=dict,
+        sa_column=Column(
+            MutableDict.as_mutable(json_type()), nullable=False, server_default=text("'{}'")
+        ),
     )
     variant_params: dict[str, Any] = Field(
-        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
+        default_factory=dict,
+        sa_column=Column(
+            MutableDict.as_mutable(json_type()), nullable=False, server_default=text("'{}'")
+        ),
     )
 
     face: Face = Relationship(back_populates="elements")
@@ -194,6 +291,11 @@ class SharedView(TimestampedModel, table=True):
 
     Exposé par un endpoint public en lecture seule (P8) : `state` ne doit contenir que de la
     configuration d'affichage, jamais d'information sensible.
+
+    Le cycle de vie du lien — expiration, révocation, libellé — vit dans de vraies colonnes et non
+    dans `state`. Une expiration rangée dans un blob JSON n'est ni indexable, ni contrôlable par
+    la base, ni visible depuis SQLAdmin : rien n'empêchait de rouvrir un partage fermé en éditant
+    le JSON à la main.
     """
 
     __tablename__ = "sharedview"
@@ -205,7 +307,32 @@ class SharedView(TimestampedModel, table=True):
     # {"visible_faces": [...], "transparent_faces": [...], "camera_preset": "...",
     #  "camera_position": [x, y, z]} — voir spec §3.4 et §3.5.
     state: dict[str, Any] = Field(
-        default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON), nullable=False)
+        default_factory=dict,
+        sa_column=Column(
+            MutableDict.as_mutable(json_type()), nullable=False, server_default=text("'{}'")
+        ),
     )
+
+    # Indexée : la purge périodique des liens morts balaie la table sur ce seul critère.
+    expires_at: datetime | None = Field(  # type: ignore[call-overload]
+        default=None, sa_type=DateTime(timezone=True), nullable=True, index=True
+    )
+    # Révocation sans suppression : garder la ligne conserve la trace du partage et empêche la
+    # réattribution du jeton, là où un DELETE efface aussi la preuve qu'il a existé.
+    revoked_at: datetime | None = Field(  # type: ignore[call-overload]
+        default=None, sa_type=DateTime(timezone=True), nullable=True
+    )
+    # `label` est le nom donné par le propriétaire pour s'y retrouver dans sa liste de liens ;
+    # `public_label` est le seul des deux qu'un visiteur non authentifié pourra voir.
+    label: str | None = Field(default=None, max_length=100)
+    public_label: str | None = Field(default=None, max_length=100)
+
+    view_count: int = Field(default=0, sa_column_kwargs={"server_default": text("0")})
+    last_viewed_at: datetime | None = Field(  # type: ignore[call-overload]
+        default=None, sa_type=DateTime(timezone=True), nullable=True
+    )
+    # Lien protégé par mot de passe. Colonne posée dès maintenant : `sharedview` est lue par
+    # l'endpoint public à chaque affichage, et on ne veut la migrer qu'une fois.
+    password_hash: str | None = Field(default=None, max_length=255)
 
     project: Project = Relationship(back_populates="shared_views")

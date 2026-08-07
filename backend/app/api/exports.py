@@ -10,6 +10,7 @@ import time
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
@@ -147,7 +148,10 @@ async def export_pdf_synchronously(
     project = await _load_project(project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projet introuvable")
-    content = render_project_pdf(project, utcnow())
+    # ReportLab est purement synchrone : rendu sur la boucle d'événements, il fige toutes les
+    # autres requêtes le temps de la génération — la mesure de ce même endpoint donne des
+    # centaines de millisecondes sur un plan de quelques pièces.
+    content = await run_in_threadpool(render_project_pdf, project, utcnow())
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     headers = {"Content-Disposition": f'inline; filename="projet-{project_id}.pdf"'}

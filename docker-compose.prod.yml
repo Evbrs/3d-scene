@@ -1,17 +1,40 @@
 # Surcouche de production, à appliquer par-dessus `docker-compose.yml` :
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile tls up -d
 #
 # Différences volontaires avec le développement :
 #   - aucun port de base de données ni de Redis exposé sur l'hôte ;
+#   - le backend et le frontend n'écoutent que sur la boucle locale : c'est la bordure TLS qui
+#     est publique (profil `tls`), ou le terminateur de l'hébergeur ;
 #   - aucun montage du code source : l'image fait foi, pas le disque du serveur ;
 #   - pas de rechargement à chaud, plusieurs workers ;
-#   - frontend servi en statique par nginx, pas par Vite ;
+#   - frontend servi en statique par nginx, qui relaie aussi l'API sur la même origine ;
+#   - les migrations passent par un service dédié à usage unique, pas par la commande du backend ;
 #   - variables sensibles obligatoires — la substitution `${VAR:?message}` fait échouer le
 #     démarrage plutôt que de retomber sur une valeur de développement.
 
+# Interdit à un processus du conteneur de gagner des privilèges via un binaire setuid : rien ici
+# n'en a besoin, et c'est une marche de moins pour une évasion.
+x-durcissement: &durcissement
+  security_opt:
+    - "no-new-privileges:true"
+
+# Le backend, le worker et le service de migration partagent la même configuration : elle décrit
+# une seule application, une divergence entre les trois se paierait en incidents difficiles à
+# lire (une migration jouée sur une autre base que celle que sert l'API, par exemple).
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+  REDIS_URL: redis://redis:6379/0
+  # Toute valeur autre que « development » impose une SECRET_KEY forte (app/core/config.py).
+  ENVIRONMENT: production
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY est obligatoire en production}
+  EXPORT_DIR: /exports
+  DEBUG: "false"
+
 services:
   db:
+    <<: *durcissement
     ports: !override []
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER est obligatoire}
@@ -20,50 +43,171 @@ services:
     volumes: !override
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    mem_limit: 1g
+    # PostgreSQL doit pouvoir terminer son point de reprise : le tuer au bout des 10 s par défaut
+    # impose une récupération au démarrage suivant.
+    stop_grace_period: 1m
 
   redis:
+    <<: *durcissement
     ports: !override []
     restart: unless-stopped
+    mem_limit: 512m
+
+  migrate:
+    # Service à usage unique : applique les migrations, alimente le catalogue, puis s'arrête.
+    # En développement c'est la commande du conteneur backend qui s'en charge ; ici cette
+    # commande est écrasée par `--workers 4`, donc sans ce service AUCUNE migration ne serait
+    # jamais jouée et l'API servirait des 500 sur une base vide.
+    <<: *durcissement
+    build:
+      context: ./backend
+      target: runtime
+    command: sh -c "alembic upgrade head && python -m app.cli seed-catalog"
+    environment: *backend-env
+    volumes:
+      - exports:/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    # Un redémarrage automatique rejouerait la migration en boucle en cas d'échec, au lieu de
+    # laisser la pile s'arrêter sur une erreur visible.
+    restart: "no"
+    mem_limit: 512m
 
   backend:
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    <<: *durcissement
+    build:
+      context: ./backend
+      target: runtime
+    # `--proxy-headers` avec une liste stricte de relais de confiance. Derrière nginx,
+    # `request.client.host` vaudrait sinon l'adresse du conteneur de bordure pour TOUS les
+    # visiteurs : les limiteurs de débit (connexion, vues publiques) deviendraient un seau unique
+    # partagé par la plateforme entière, soit un déni de service auto-infligé. Jamais `*` :
+    # n'importe qui pourrait alors se déclarer une autre adresse via X-Forwarded-For.
+    command: >-
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+      --proxy-headers --forwarded-allow-ips=${DOCKER_SUBNET:-172.28.0.0/24}
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
-      # Toute valeur autre que « development » impose une SECRET_KEY forte (app/core/config.py).
-      ENVIRONMENT: production
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY est obligatoire en production}
-      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS est obligatoire en production}
-      EXPORT_DIR: /exports
-      DEBUG: "false"
+      <<: *backend-env
+      # Le frontend et l'API partagent l'origine : aucune requête inter-origines à autoriser.
+      # À ne renseigner que si PUBLIC_API_URL pointe vers un autre domaine.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Même réseau de confiance que `--forwarded-allow-ips` ci-dessus. Le middleware applicatif
+      # a pour défaut `127.0.0.1,::1` : sans cette variable il reste inerte derrière nginx, et
+      # c'est lui la seule protection le jour où l'application est servie autrement qu'ici.
+      TRUSTED_PROXIES: ${DOCKER_SUBNET:-172.28.0.0/24}
+      # Défaut applicatif `*` : tant que le domaine n'est pas renseigné, l'empoisonnement d'en-tête
+      # Host reste possible. `allowed_hosts()` réinjecte d'office localhost/127.0.0.1/::1, la
+      # sonde de santé du conteneur continue donc de répondre.
+      ALLOWED_HOSTS: ${PUBLIC_DOMAIN:-*}
+    ports: !override
+      # Boucle locale uniquement : /admin (SQLAdmin) est servi ici, il n'a rien à faire sur
+      # l'Internet public. Pour l'atteindre : tunnel SSH (voir README).
+      - "127.0.0.1:8000:8000"
     volumes: !override
       - exports:/exports
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+    mem_limit: 2g
+    stop_grace_period: 30s
 
   worker:
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
-      ENVIRONMENT: production
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY est obligatoire en production}
-      EXPORT_DIR: /exports
+    <<: *durcissement
+    build:
+      context: ./backend
+      target: runtime
+    environment: *backend-env
     volumes: !override
       - exports:/exports
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+    mem_limit: 1g
+    # Un export PDF en cours doit pouvoir se terminer : à la réception de SIGTERM, Celery cesse
+    # de consommer la file et achève sa tâche. Avec les 10 s par défaut, le conteneur est tué en
+    # plein rendu et l'export est perdu sans trace.
+    stop_grace_period: 5m
 
   frontend:
+    <<: *durcissement
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
-        VITE_API_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL est obligatoire en production}
+        # Vide = même origine, et c'est le cas nominal : nginx relaie /api vers le backend.
+        # Les chemins de `src/api/client.ts` portent déjà le préfixe `/api`, une base valant
+        # `/api` produirait des appels vers /api/api/... Ne renseigner PUBLIC_API_URL que si
+        # l'API vit réellement sur une autre origine — il faut alors rouvrir CORS_ORIGINS et la
+        # directive `connect-src` de la CSP.
+        VITE_API_BASE_URL: ${PUBLIC_API_URL:-}
     command: !reset null
+    environment: !override
+      # Seul ce réseau est autorisé à parler au nom d'un client via X-Forwarded-For.
+      NGINX_TRUSTED_PROXY_NETWORK: ${DOCKER_SUBNET:-172.28.0.0/24}
     ports: !override
-      - "${FRONTEND_HOST_PORT:-8080}:8080"
+      # Boucle locale par défaut : le service public, c'est la bordure TLS. Ne mettre
+      # FRONTEND_BIND=0.0.0.0 que si un terminateur TLS externe est en amont — sinon nginx
+      # accepterait un X-Forwarded-For forgé depuis le réseau de l'hôte.
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:8080"
     volumes: !override []
+    depends_on:
+      backend:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/ || exit 1"]
+      # 127.0.0.1 et non `localhost` : nginx n'écoute qu'en IPv4, alors que `localhost` est
+      # résolu d'abord en ::1 dans le conteneur — la sonde échouait en « Connection refused »
+      # sur un serveur parfaitement sain.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    mem_limit: 256m
+
+  caddy:
+    # Bordure TLS : obtention et renouvellement automatiques des certificats (ACME). Sans elle,
+    # l'en-tête HSTS serait posé sur une réponse en clair et un cookie `Secure` ne reviendrait
+    # jamais — la pile n'avait aucune terminaison TLS.
+    #
+    # Activée à la demande, via le profil `tls`. Un hébergeur qui termine déjà le TLS (répartiteur
+    # de charge managé, ingress, tunnel) démarre la pile sans ce profil et pointe son terminateur
+    # sur le port du frontend ; il doit alors transmettre X-Forwarded-For et X-Forwarded-Proto,
+    # dont dépendent les limiteurs de débit.
+    <<: *durcissement
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    # `localhost` par défaut : Caddy émet alors un certificat local au lieu de tenter un ACME
+    # voué à l'échec. PUBLIC_DOMAIN doit être renseigné pour un vrai déploiement.
+    command: caddy reverse-proxy --from ${PUBLIC_DOMAIN:-localhost} --to http://frontend:8080
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # Les certificats vivent ici : les perdre à chaque redéploiement épuiserait vite les quotas
+      # de l'autorité ACME.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+
+networks:
+  default:
+    # Sous-réseau fixé : c'est exactement la valeur donnée à nginx (`set_real_ip_from`) et à
+    # uvicorn (`--forwarded-allow-ips`). Sans plage connue à l'avance, il faudrait faire confiance
+    # à tout le monde. À changer si elle entre en conflit avec un réseau existant de l'hôte —
+    # le symptôme est un « Pool overlaps with other one » au démarrage.
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-172.28.0.0/24}
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,109 @@
+# Configuration de service du frontend en production.
+#
+# nginx sert la SPA **et** relaie l'API : tout tient sur une seule origine. C'est ce qui permet à
+# la CSP de se limiter à `connect-src 'self'`, au backend de ne rien publier sur l'extérieur, et
+# au CORS de devenir sans objet.
+#
+# Le fichier est un gabarit : l'entrée de l'image nginx substitue les `${NGINX_*}` au démarrage
+# (/docker-entrypoint.d/20-envsubst-on-templates.sh) avant de le déposer dans conf.d. Les
+# variables nginx sont écrites sans accolades — envsubst ne remplace que les formes `${...}` des
+# noms retenus par NGINX_ENVSUBST_FILTER.
+
+# Le proxy en amont a-t-il le droit de parler au nom d'un client ? La comparaison porte sur
+# `$realip_remote_addr`, c'est-à-dire l'adresse du pair AVANT toute réécriture par `real_ip`.
+geo $realip_remote_addr $from_trusted_proxy {
+    default 0;
+    ${NGINX_TRUSTED_PROXY_NETWORK} 1;
+}
+
+# Schéma vu par le client. Un `X-Forwarded-Proto` n'est repris que s'il vient du réseau de
+# confiance : sinon n'importe qui pourrait faire croire à l'application qu'elle est servie en
+# HTTPS alors qu'elle ne l'est pas.
+map "$from_trusted_proxy:$http_x_forwarded_proto" $forwarded_proto {
+    default   $scheme;
+    "1:https" https;
+    "1:http"  http;
+}
+
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # Adresse réelle du visiteur. Sans elle, tout ce qui est en aval ne voit que l'IP du
+    # conteneur de bordure : les limiteurs de débit du backend (connexion, vues publiques)
+    # deviendraient un seau unique partagé par toute la plateforme — 60 connexions par tranche de
+    # cinq minutes pour l'ensemble des utilisateurs, soit un déni de service auto-infligé.
+    # On ne fait confiance qu'au réseau de la pile, jamais à un X-Forwarded-For venu d'ailleurs.
+    set_real_ip_from ${NGINX_TRUSTED_PROXY_NETWORK};
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    # Résolveur interne de Docker, interrogé à chaque requête (voir snippets/proxy-backend.conf).
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    resolver_timeout 5s;
+
+    # Un plan chargé (pièces, faces, ouvertures, revêtements) dépasse la limite par défaut de 1 Mo.
+    client_max_body_size 10m;
+
+    # Les erreurs nginx ne doivent pas révéler la version du serveur.
+    server_tokens off;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # Filet pour les réponses produites hors de toute `location` (requête malformée, par
+    # exemple) : chaque bloc ci-dessous réinclut le fichier, faute d'héritage des `add_header`.
+    include /etc/nginx/snippets/security-headers.conf;
+
+    # --- API, relayée sur la même origine ---------------------------------------------------
+
+    # Les vues publiques s'ouvrent sans authentification, sur simple jeton. Un jeton qui fuit une
+    # fois — capture d'écran, historique de navigation, SMS transféré — ne doit pas rendre la
+    # géométrie complète du logement d'un client indexable de façon permanente.
+    location /api/public/ {
+        include /etc/nginx/snippets/proxy-backend.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+    }
+
+    location /api/ {
+        include /etc/nginx/snippets/proxy-backend.conf;
+    }
+
+    # Sonde de la pile complète : nginx joignable ET backend vivant.
+    location = /health {
+        include /etc/nginx/snippets/proxy-backend.conf;
+    }
+
+    # --- Application monopage ---------------------------------------------------------------
+
+    # Page de partage. `try_files` sur un fichier existant sert la réponse depuis CE bloc, sans
+    # redirection interne : la passer par `/index.html` la ferait traiter par le bloc
+    # `location = /index.html`, qui n'a pas de X-Robots-Tag — et le lien partagé redeviendrait
+    # indexable.
+    location /partage/ {
+        try_files /index.html =404;
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # Fichiers versionnés par empreinte : cachables indéfiniment.
+    location /assets/ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # index.html ne doit jamais être mis en cache, sinon un déploiement reste invisible.
+    location = /index.html {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # Toute route inconnue retombe sur index.html, sinon un rafraîchissement sur
+    # /projets/12/plan donnerait un 404.
+    location / {
+        try_files $uri $uri/ /index.html;
+        include /etc/nginx/snippets/security-headers.conf;
+    }
+}

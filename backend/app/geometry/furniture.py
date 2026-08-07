@@ -10,6 +10,12 @@ from typing import Any
 
 AUTO = "auto"
 
+AXES = ("x", "y", "z")
+
+# Axe de révolution par défaut d'un cylindre : la verticale, comme un pied de table. Les cylindres
+# couchés (poignée de porte, barre d'appui, tringle) le déclarent explicitement.
+DEFAULT_AXIS = "y"
+
 
 @dataclass(frozen=True)
 class Primitive:
@@ -21,6 +27,7 @@ class Primitive:
     color_slot: str
     color: str | None
     operation: str
+    axis: str = DEFAULT_AXIS
 
     def to_dict(self, digits: int = 4) -> dict[str, Any]:
         return {
@@ -30,6 +37,7 @@ class Primitive:
             "color_slot": self.color_slot,
             "color": self.color,
             "operation": self.operation,
+            "axis": self.axis,
         }
 
 
@@ -54,19 +62,77 @@ def _axis_centers(
     return [first + index * step for index in range(repeat)]
 
 
+def resolve_variants(
+    variants: list[dict[str, Any]] | None, variant_params: dict[str, Any] | None
+) -> dict[tuple[str, str], int]:
+    """Traduit les paramètres de variation d'une instance en répétitions à appliquer.
+
+    Spec §4.4 : le paramètre de variation (nombre de tiroirs, d'étagères…) est « défini dans la
+    recette du `FurnitureType`, pas dans le moteur de rendu générique ». La recette déclare donc
+    ce qu'elle accepte — `{"name", "axis", "applies_to", "min", "max"}` — et l'instance ne fait
+    que choisir une valeur. Une recette sans `variants` n'a aucun paramètre de variation : son
+    `variant_params` est ignoré, faute de savoir ce qu'il pilote.
+
+    Les emplacements visés sont désignés par leur `color_slot` et non par leur rang dans `parts` :
+    un rang change dès qu'on insère une primitive dans la recette, un `color_slot` non.
+
+    Renvoie les répétitions indexées par `(color_slot, axe)`.
+    """
+    if not variants or not variant_params:
+        return {}
+
+    resolved: dict[tuple[str, str], int] = {}
+    for declaration in variants:
+        repeat = _variant_repeat(declaration, variant_params)
+        if repeat is None:
+            continue
+        axis = str(declaration.get("axis", DEFAULT_AXIS))
+        if axis not in AXES:
+            continue
+        for color_slot in declaration.get("applies_to") or []:
+            resolved[(str(color_slot), axis)] = repeat
+    return resolved
+
+
+def _variant_repeat(declaration: dict[str, Any], variant_params: dict[str, Any]) -> int | None:
+    """Valeur retenue pour une variation, `None` si l'instance n'en propose pas d'utilisable.
+
+    `variant_params` est un JSON libre, validé en amont sur sa seule taille : c'est ici, et
+    nulle part ailleurs, que sa valeur rencontre les bornes de la recette. Elle est donc **bornée**
+    et non refusée — refuser ferait disparaître un meuble du plan pour une saisie hors bornes,
+    alors que le borner donne un résultat prévisible et corrigeable.
+
+    `isinstance(True, int)` vaut `True` en Python : sans l'exclusion explicite des booléens, un
+    `{"nb_tiroirs": true}` produirait un tiroir unique au lieu d'être ignoré.
+    """
+    raw = variant_params.get(str(declaration.get("name", "")))
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    low = int(declaration.get("min", 1))
+    high = int(declaration.get("max", low))
+    return max(low, min(high, raw))
+
+
 def expand_recipe(
     parts: list[dict[str, Any]],
     size_cm: tuple[float, float, float],
     colors: dict[str, str],
+    variants: list[dict[str, Any]] | None = None,
+    variant_params: dict[str, Any] | None = None,
 ) -> list[Primitive]:
     """Développe une recette en primitives absolues (en cm, relatives au centre du meuble).
 
     `colors` ne contient que les emplacements choisis par l'instance ; les autres restent à
     `None`, charge au rendu d'appliquer son matériau par défaut. Inventer une couleur ici la
     rendrait indiscernable d'un choix explicite de l'utilisateur.
+
+    `variants` (déclaré par la recette) et `variant_params` (choisi par l'instance) pilotent
+    ensemble les répétitions : c'est ce qui fait du nombre de tiroirs un paramètre d'instance et
+    non une géométrie codée en dur (spec §4.1).
     """
     width, height, depth = size_cm
     dimensions = (width, height, depth)
+    overrides = resolve_variants(variants, variant_params)
     primitives: list[Primitive] = []
 
     for part in parts:
@@ -76,13 +142,15 @@ def expand_recipe(
             relative_size[1] * height,
             relative_size[2] * depth,
         )
-        repeats = (
-            int(part.get("repeat_x", 1)),
-            int(part.get("repeat_y", 1)),
-            int(part.get("repeat_z", 1)),
+        color_slot = str(part["color_slot"])
+        repeats = tuple(
+            overrides.get((color_slot, axis), int(part.get(f"repeat_{axis}", 1))) for axis in AXES
         )
         gap = float(part.get("gap", 0.0))
-        color_slot = str(part["color_slot"])
+        # Une valeur inconnue retombe sur la verticale plutôt que d'être propagée telle quelle :
+        # `parts` est du JSON libre, et le viewer n'a pas à arbitrer une chaîne fantaisiste.
+        declared_axis = str(part.get("axis", DEFAULT_AXIS))
+        revolution_axis = declared_axis if declared_axis in AXES else DEFAULT_AXIS
 
         centers_per_axis = [
             _axis_centers(part["rel_position"][axis], repeats[axis], relative_size[axis], gap)
@@ -105,6 +173,7 @@ def expand_recipe(
                             color_slot=color_slot,
                             color=colors.get(color_slot),
                             operation=str(part.get("operation", "add")),
+                            axis=revolution_axis,
                         )
                     )
 

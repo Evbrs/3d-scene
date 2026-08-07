@@ -50,7 +50,10 @@ def get_client() -> Redis | None:
     if not settings.cache_enabled:
         return None
     if _client is None:
-        _client = Redis.from_url(settings.redis_url, decode_responses=True)
+        # Base Redis distincte de celle du courtier Celery : voir `app/core/config.py`. Le cache
+        # accumule une entrée par (projet, version, catalogue) ; sur la base du courtier, une
+        # session d'édition chargée finissait par évincer des messages de la file d'export.
+        _client = Redis.from_url(settings.cache_redis_url, decode_responses=True)
     return _client
 
 

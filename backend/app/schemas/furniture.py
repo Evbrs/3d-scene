@@ -24,6 +24,8 @@ HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 # commode : `"rel_position": [0.5, "auto", 1.01]`).
 RelativeAxis = RelativeCoordinate | Literal["auto"]
 
+Axis = Literal["x", "y", "z"]
+
 
 class Part(BaseModel):
     """Une primitive de la recette."""
@@ -46,6 +48,11 @@ class Part(BaseModel):
     # une boîte moins une boîte plus petite. C'est ce qui déclenche le recours au CSG.
     operation: Literal["add", "subtract"] = "add"
 
+    # Axe de révolution des primitives de révolution (cylindre). Sans lui, une poignée de porte ou
+    # une barre d'appui reste dressée à la verticale : `rel_size` donne la boîte englobante, pas
+    # l'orientation. Sans effet sur une boîte ou une sphère.
+    axis: Axis = "y"
+
     @model_validator(mode="after")
     def _auto_only_on_a_repeated_axis(self) -> "Part":
         """`"auto"` n'a de sens que sur un axe effectivement répété."""
@@ -61,6 +68,35 @@ class Part(BaseModel):
         return self
 
 
+class Variant(BaseModel):
+    """Un paramètre de variation accepté par la recette (spec §4.4).
+
+    La recette déclare ce qu'elle accepte, l'instance ne fait que choisir une valeur dans son
+    `variant_params` : le nombre de tiroirs est ainsi « défini dans la recette du
+    `FurnitureType`, pas dans le moteur de rendu générique ».
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=50)
+    axis: Axis
+
+    # Emplacements couleur touchés par la répétition, et non rangs dans `parts` : un rang change
+    # dès qu'on insère une primitive dans la recette, un `color_slot` non.
+    applies_to: list[str] = Field(min_length=1, max_length=12)
+
+    # Mêmes bornes que `repeat_*` : la valeur d'instance est bornée à cet intervalle, jamais
+    # refusée, pour qu'une saisie aberrante donne un meuble corrigeable plutôt qu'un meuble absent.
+    min: Annotated[int, Field(ge=1, le=32)] = 1
+    max: Annotated[int, Field(ge=1, le=32)] = 32
+
+    @model_validator(mode="after")
+    def _bounds_are_ordered(self) -> "Variant":
+        if self.min > self.max:
+            raise ValueError(f"borne basse {self.min} supérieure à la borne haute {self.max}")
+        return self
+
+
 class FurnitureTypeBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -69,9 +105,32 @@ class FurnitureTypeBase(BaseModel):
     category: FurnitureCategory
     color_slots: list[str] = Field(min_length=1, max_length=12)
     parts: list[Part] = Field(min_length=1, max_length=64)
+    variants: list[Variant] = Field(default_factory=list, max_length=8)
     default_width_cm: Annotated[float, Field(gt=0, le=1000)] = 100.0
     default_height_cm: Annotated[float, Field(gt=0, le=1000)] = 100.0
     default_depth_cm: Annotated[float, Field(gt=0, le=1000)] = 50.0
+
+    @model_validator(mode="after")
+    def _variants_reference_declared_slots(self) -> "FurnitureTypeBase":
+        """Même exigence que pour les primitives, et pour la même raison.
+
+        Un `applies_to` qui cite un emplacement inexistant ne produit aucune erreur au rendu : la
+        variation est simplement sans effet, et le meuble garde son nombre de tiroirs par défaut.
+        C'est précisément le genre de panne qu'on ne diagnostique qu'en lisant le moteur.
+        """
+        declared = set(self.color_slots)
+        names = [variant.name for variant in self.variants]
+        if len(set(names)) != len(names):
+            raise ValueError("paramètres de variation en double")
+
+        unknown = sorted({slot for variant in self.variants for slot in variant.applies_to}
+                         - declared)
+        if unknown:
+            raise ValueError(
+                f"emplacements couleur non déclarés dans variants : {', '.join(unknown)} "
+                f"(déclarés : {', '.join(sorted(declared))})"
+            )
+        return self
 
     @model_validator(mode="after")
     def _parts_reference_declared_slots(self) -> "FurnitureTypeBase":
@@ -104,6 +163,7 @@ class FurnitureTypeUpdate(BaseModel):
     category: FurnitureCategory | None = None
     color_slots: list[str] | None = Field(default=None, min_length=1, max_length=12)
     parts: list[Part] | None = Field(default=None, min_length=1, max_length=64)
+    variants: list[Variant] | None = Field(default=None, max_length=8)
     default_width_cm: Annotated[float, Field(gt=0, le=1000)] | None = None
     default_height_cm: Annotated[float, Field(gt=0, le=1000)] | None = None
     default_depth_cm: Annotated[float, Field(gt=0, le=1000)] | None = None
@@ -118,6 +178,7 @@ class FurnitureTypeRead(BaseModel):
     category: str
     color_slots: list[str]
     parts: list[dict[str, Any]]
+    variants: list[dict[str, Any]]
     default_width_cm: float
     default_height_cm: float
     default_depth_cm: float

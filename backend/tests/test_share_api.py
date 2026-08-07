@@ -11,7 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
-from app.api.share import EXPIRY_KEY, public_rate_limiter
+from app.api.share import LEGACY_EXPIRY_KEY, public_rate_limiter
 from app.models.base import utcnow
 from app.models.plan import SharedView
 
@@ -23,6 +23,12 @@ STATE = {
     "transparent_faces": ["C"],
     "camera_position": [100.0, 125.0, 240.0],
 }
+
+
+async def _shared_view(session: AsyncSession, token: str) -> SharedView:
+    return (
+        await session.execute(select(SharedView).where(col(SharedView.token) == token))
+    ).scalar_one()
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +112,9 @@ async def test_the_public_view_is_readable_without_any_token(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["project_name"] == "À partager"
+    # Sans `public_label`, le titre est neutre : le nom brut du projet ne sort jamais.
+    assert body["project_name"] == "Vue partagée"
+    assert "À partager" not in response.text
     assert body["state"]["camera_preset"] == "face-A"
     assert len(body["scene"]["rooms"][0]["nodes"]) == 6
 
@@ -144,10 +152,8 @@ async def test_an_expired_share_is_indistinguishable_from_a_missing_one(
     """Distinguer les deux cas confirmerait qu'un lien a existé."""
     _project_id, token = await _shared_project(auth_client)
 
-    shared = (
-        await session.execute(select(SharedView).where(col(SharedView.token) == token))
-    ).scalar_one()
-    shared.state = {**shared.state, EXPIRY_KEY: (utcnow() - timedelta(days=1)).isoformat()}
+    shared = await _shared_view(session, token)
+    shared.expires_at = utcnow() - timedelta(days=1)
     await session.commit()
 
     expired = await client.get(f"/api/public/views/{token}")
@@ -155,6 +161,46 @@ async def test_an_expired_share_is_indistinguishable_from_a_missing_one(
 
     assert expired.status_code == missing.status_code == 404
     assert expired.json() == missing.json()
+
+
+async def test_the_expiry_lives_in_a_column_and_not_in_the_json_blob(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Régression : l'expiration était rangée dans `state`, donc ni indexable ni contrôlable.
+
+    Elle y avait surtout **deux** sources de vérité une fois la colonne posée par le modèle : une
+    écriture pouvait rouvrir un partage volontairement fermé.
+    """
+    project = (await auth_client.post("/api/projects", json={"name": "Daté"})).json()
+    created = await auth_client.post(
+        f"/api/projects/{project['id']}/shared-views",
+        json={"state": STATE, "expires_in_days": 7},
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["expires_at"] is not None
+    shared = await _shared_view(session, created.json()["token"])
+    assert shared.expires_at is not None
+    assert LEGACY_EXPIRY_KEY not in shared.state
+
+
+@pytest.mark.parametrize("stored", ["pas-une-date", "", 12345, None])
+async def test_an_unreadable_legacy_expiry_closes_the_link(
+    auth_client: AsyncClient, client: AsyncClient, session: AsyncSession, stored: object
+) -> None:
+    """Sur un endpoint public, un doute ferme l'accès.
+
+    Les lignes antérieures à la colonne `expires_at` portent encore leur date dans `state`. Une
+    valeur que la migration n'a pas su convertir était jusqu'ici purement ignorée — le lien
+    restait donc ouvert pour toujours, alors que son propriétaire l'avait borné.
+    """
+    _project_id, token = await _shared_project(auth_client)
+
+    shared = await _shared_view(session, token)
+    shared.state = {**shared.state, LEGACY_EXPIRY_KEY: stored}
+    await session.commit()
+
+    assert (await client.get(f"/api/public/views/{token}")).status_code == 404
 
 
 async def test_a_share_with_an_expiry_still_works_before_it(
@@ -171,7 +217,27 @@ async def test_a_share_with_an_expiry_still_works_before_it(
     token = created.json()["token"]
     assert (await client.get(f"/api/public/views/{token}")).status_code == 200
     # La date d'expiration est un détail interne : elle ne fuite pas dans la réponse publique.
-    assert EXPIRY_KEY not in (await client.get(f"/api/public/views/{token}")).text
+    assert "expires_at" not in (await client.get(f"/api/public/views/{token}")).text
+
+
+async def test_revoking_keeps_the_row_and_closes_the_link(
+    auth_client: AsyncClient, client: AsyncClient, session: AsyncSession
+) -> None:
+    """La révocation ne doit pas effacer la preuve que le lien a existé.
+
+    Supprimer la ligne libère aussi le jeton : rien n'empêche plus qu'il soit réattribué, et le
+    propriétaire n'a aucune trace du partage qu'il vient de fermer.
+    """
+    project_id, token = await _shared_project(auth_client)
+    shared_id = (await auth_client.get(f"/api/projects/{project_id}/shared-views")).json()[0]["id"]
+
+    assert (await auth_client.delete(f"/api/shared-views/{shared_id}")).status_code == 204
+
+    assert (await client.get(f"/api/public/views/{token}")).status_code == 404
+    listed = (await auth_client.get(f"/api/projects/{project_id}/shared-views")).json()
+    assert [entry["id"] for entry in listed] == [shared_id]
+    assert listed[0]["revoked_at"] is not None
+    assert (await _shared_view(session, token)).revoked_at is not None
 
 
 async def test_deleting_the_project_removes_its_shares(
@@ -195,6 +261,95 @@ async def test_the_public_endpoint_is_rate_limited(
         statuses.append((await client.get(f"/api/public/views/{token}")).status_code)
 
     assert 429 in statuses, "aucune limitation de débit sur l'endpoint public"
+
+
+# --- Portée de ce qui est réellement publié -----------------------------------------------------
+
+
+async def _project_with_three_rooms(client: AsyncClient) -> str:
+    """Projet de trois pièces, partagé sur la deuxième."""
+    project = (await client.post("/api/projects", json={"name": "Rénovation Dupont"})).json()
+    for index, name in enumerate(("Salon", "Salle de bain", "Chambre")):
+        offset = index * 500
+        await client.post(
+            f"/api/projects/{project['id']}/rooms",
+            json={"name": name, "polygon": [[x + offset, y] for x, y in CARRE]},
+        )
+    created = await client.post(
+        f"/api/projects/{project['id']}/shared-views",
+        json={"state": {"camera_preset": "dessus", "room_index": 1}},
+    )
+    assert created.status_code == 201, created.text
+    token: str = created.json()["token"]
+    return token
+
+
+async def test_the_public_view_only_serves_the_room_it_targets(
+    auth_client: AsyncClient, client: AsyncClient
+) -> None:
+    """Régression : partager une pièce publiait le logement entier.
+
+    L'état ne vise qu'une pièce, mais la réponse contenait le graphe complet — surfaces,
+    revêtements, mobilier et dimensions de toutes les autres pièces, servis sans authentification
+    à quiconque possède le lien.
+    """
+    token = await _project_with_three_rooms(auth_client)
+
+    body = (await client.get(f"/api/public/views/{token}")).json()
+
+    assert [room["name"] for room in body["scene"]["rooms"]] == ["Salle de bain"]
+    assert "Chambre" not in (await client.get(f"/api/public/views/{token}")).text
+
+
+async def test_a_share_pointing_at_a_deleted_room_serves_nothing(
+    auth_client: AsyncClient, client: AsyncClient
+) -> None:
+    """Se rabattre sur les autres pièces serait exactement la fuite qu'on ferme."""
+    token = await _project_with_three_rooms(auth_client)
+    project_id = (await auth_client.get("/api/projects")).json()["items"][0]["id"]
+    rooms = (await auth_client.get(f"/api/projects/{project_id}")).json()["rooms"]
+    for room in rooms[1:]:
+        assert (await auth_client.delete(f"/api/rooms/{room['id']}")).status_code == 204
+
+    body = (await client.get(f"/api/public/views/{token}")).json()
+
+    assert body["scene"]["rooms"] == []
+
+
+async def test_a_public_label_replaces_the_project_name(
+    auth_client: AsyncClient, client: AsyncClient
+) -> None:
+    """Le nom d'un projet de rénovation porte souvent un nom de client et une adresse."""
+    created = await auth_client.post(
+        "/api/projects", json={"name": "Rénovation Dupont, 12 rue des Lilas"}
+    )
+    project = created.json()
+    await auth_client.post(
+        f"/api/projects/{project['id']}/rooms", json={"name": "P", "polygon": CARRE}
+    )
+    created = await auth_client.post(
+        f"/api/projects/{project['id']}/shared-views",
+        json={"state": STATE, "public_label": "Projet de salle de bain"},
+    )
+
+    response = await client.get(f"/api/public/views/{created.json()['token']}")
+
+    assert response.json()["public_label"] == "Projet de salle de bain"
+    assert response.json()["project_name"] == "Projet de salle de bain"
+    assert "Dupont" not in response.text
+
+
+@pytest.mark.parametrize("public_label", ["<script>alert(1)</script>", 'guillemet"', "a" * 101])
+async def test_a_public_label_is_as_hardened_as_the_rest_of_the_state(
+    auth_client: AsyncClient, public_label: str
+) -> None:
+    project = (await auth_client.post("/api/projects", json={"name": "Libellé public"})).json()
+
+    response = await auth_client.post(
+        f"/api/projects/{project['id']}/shared-views",
+        json={"state": STATE, "public_label": public_label},
+    )
+    assert response.status_code == 422, response.text
 
 
 # --- Validation de l'état partagé ---------------------------------------------------------------

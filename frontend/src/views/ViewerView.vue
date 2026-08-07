@@ -8,7 +8,7 @@
 import { OrbitControls } from '@tresjs/cientos'
 import { TresCanvas } from '@tresjs/core'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import * as api from '@/api/client'
 import type { CameraPreset, SceneGraph } from '@/api/types'
@@ -25,6 +25,7 @@ import {
 
 const props = defineProps<{ projectId: string }>()
 const route = useRoute()
+const router = useRouter()
 
 const scene = shallowRef<SceneGraph | null>(null)
 const roomIndex = ref(0)
@@ -80,6 +81,9 @@ async function load(preserveVisibility = false): Promise<void> {
   try {
     const previous = { ...visibility.value }
     scene.value = await api.readSceneGraph(Number(props.projectId))
+    // La pièce demandée peut avoir disparu ou l'URL être bricolée : sans borne, `room` devient
+    // `undefined` et la vue reste bloquée sur « Chargement de la scène… ».
+    roomIndex.value = clampRoomIndex(readRoomIndexFromUrl() ?? roomIndex.value)
     const labels = faceLabels.value
     visibility.value = preserveVisibility
       ? Object.fromEntries(labels.map((label) => [label, previous[label] ?? 'visible']))
@@ -89,6 +93,35 @@ async function load(preserveVisibility = false): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function clampRoomIndex(index: number): number {
+  const count = scene.value?.rooms.length ?? 0
+  if (count === 0) return 0
+  return Math.min(Math.max(index, 0), count - 1)
+}
+
+function readRoomIndexFromUrl(): number | null {
+  const raw = Number(route.query.piece)
+  return Number.isFinite(raw) ? raw : null
+}
+
+/**
+ * Change de pièce.
+ *
+ * `roomIndex` n'était jamais réaffecté : le viewer restait figé sur la première pièce, et un
+ * projet de plusieurs pièces n'était visible qu'au tiers. La sélection passe par l'URL pour
+ * survivre à un rechargement et pour qu'un lien désigne bien la pièce montrée.
+ */
+function selectRoom(index: number): void {
+  roomIndex.value = clampRoomIndex(index)
+  // Les étiquettes de face et les élévations appartiennent à la pièce : les reprendre telles
+  // quelles masquerait des murs au hasard dans la nouvelle.
+  visibility.value = defaultVisibility(faceLabels.value)
+  if (!room.value?.cameras.some((preset) => preset.name === activeCamera.value)) {
+    activeCamera.value = 'isometrique'
+  }
+  void router.replace({ query: { ...route.query, piece: roomIndex.value } })
 }
 
 /**
@@ -106,8 +139,11 @@ function defaultVisibility(labels: string[]): Record<string, FaceVisibility> {
 
 onMounted(() => load())
 
-// Revenir depuis l'éditeur doit montrer le plan à jour, pas la scène d'il y a dix minutes.
-watch(() => route.fullPath, () => load(true))
+// Passer d'un projet à l'autre réutilise le composant : sans ça, la scène du projet précédent
+// resterait affichée. Volontairement sur le projet et non sur l'URL complète, dont la chaîne de
+// requête porte maintenant la pièce sélectionnée — la relire déclencherait un rechargement
+// complet de la scène à chaque changement de pièce.
+watch(() => props.projectId, () => load(true))
 
 function cycle(label: string): void {
   visibility.value = { ...visibility.value, [label]: nextVisibility(visibility.value[label]) }
@@ -235,6 +271,26 @@ async function share(): Promise<void> {
       </div>
 
       <aside aria-label="Contrôles de la vue">
+        <div
+          v-if="scene && scene.rooms.length > 1"
+          class="champ"
+        >
+          <label for="piece-3d">Pièce</label>
+          <select
+            id="piece-3d"
+            :value="roomIndex"
+            @change="selectRoom(Number(($event.target as HTMLSelectElement).value))"
+          >
+            <option
+              v-for="(candidate, index) in scene.rooms"
+              :key="candidate.id"
+              :value="index"
+            >
+              {{ candidate.name }}
+            </option>
+          </select>
+        </div>
+
         <h2>Point de vue</h2>
         <ul class="cameras">
           <li
@@ -410,11 +466,16 @@ async function share(): Promise<void> {
 }
 
 .scene {
-  height: 38rem;
+  /* Suit la hauteur disponible : 38 rem figés couvraient plus que l'écran d'un téléphone. */
+  height: clamp(20rem, 68vh, 38rem);
   border: 1px solid var(--bordure);
   border-radius: 0.5rem;
   overflow: hidden;
   background: #eef1f5;
+}
+
+.champ {
+  margin-bottom: 1rem;
 }
 
 .cameras {

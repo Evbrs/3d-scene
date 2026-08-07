@@ -6,7 +6,7 @@
  * version du projet pour le verrouillage optimiste.
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import * as api from '@/api/client'
 import type { Face, FurnitureType, PlanElement } from '@/api/types'
@@ -15,12 +15,16 @@ import { usePlanStore } from '@/stores/plan'
 
 const props = defineProps<{ projectId: string }>()
 const store = usePlanStore()
+const route = useRoute()
+const router = useRouter()
 
 const mode = ref<'navigate' | 'draw' | 'edit'>('navigate')
 const gridCm = ref(10)
 const roomName = ref('Nouvelle pièce')
 const catalog = ref<FurnitureType[]>([])
 const canvas = ref<InstanceType<typeof PlanCanvas> | null>(null)
+/** Erreurs de chargement du catalogue : distinctes des erreurs d'écriture portées par le store. */
+const loadError = ref<string | null>(null)
 
 /** Libellés lisibles : « window » n'a rien à faire dans une interface française. */
 const KIND_LABELS: Record<string, string> = {
@@ -115,17 +119,59 @@ watch(
   },
 )
 
+/**
+ * Sélection reflétée dans l'URL.
+ *
+ * Sans ça, revenir de la vue 3D, recharger la page ou envoyer le lien à un collègue ramenait
+ * systématiquement sur la première pièce du projet, et la face en cours d'examen était perdue.
+ */
+watch(
+  () => [store.selectedRoomId, store.selectedFaceLabel] as const,
+  ([roomId, faceLabel]) => {
+    const query = { ...route.query, piece: roomId ?? undefined, face: faceLabel ?? undefined }
+    if (String(query.piece ?? '') === String(route.query.piece ?? '') &&
+      String(query.face ?? '') === String(route.query.face ?? '')) {
+      return
+    }
+    void router.replace({ query })
+  },
+)
+
+// Sélection lue une fois, avant tout chargement : `load` retient d'office la première pièce, ce
+// qui déclencherait la surveillance ci-dessus et réécrirait la chaîne de requête avant qu'on ait
+// pu la lire.
+const requestedRoomId = Number(route.query.piece)
+const requestedFace = typeof route.query.face === 'string' ? route.query.face : ''
+
+function applyRequestedSelection(): void {
+  if (store.project?.rooms.some((candidate) => candidate.id === requestedRoomId)) {
+    store.selectedRoomId = requestedRoomId
+  }
+  if (requestedFace !== '') store.selectedFaceLabel = requestedFace
+}
+
 onMounted(async () => {
   await store.load(Number(props.projectId))
-  catalog.value = (await api.listFurnitureTypes()).items
+  applyRequestedSelection()
+  try {
+    catalog.value = (await api.listFurnitureTypes()).items
+  } catch (caught) {
+    // Le catalogue n'est pas vital pour tracer un plan : on signale sans bloquer l'éditeur.
+    loadError.value = `Catalogue de mobilier indisponible : ${messageOf(caught)}`
+  }
 })
 
+function messageOf(caught: unknown): string {
+  return caught instanceof Error ? caught.message : String(caught)
+}
+
 async function addRoom(): Promise<void> {
-  await store.write((version) =>
-    api.createRoom(Number(props.projectId), { name: roomName.value, version }),
+  const created = await store.write(
+    (version) => api.createRoom(Number(props.projectId), { name: roomName.value, version }),
+    (room) => store.applyRoom(room),
   )
-  const rooms = store.project?.rooms ?? []
-  store.selectedRoomId = rooms[rooms.length - 1]?.id ?? null
+  if (!created) return
+  store.selectedRoomId = created.id
   store.selectedFaceLabel = null
   mode.value = 'draw'
 }
@@ -134,39 +180,62 @@ async function addRoom(): Promise<void> {
  * Enregistre un contour.
  *
  * Un raccourcissement qui supprimerait des murs porteurs d'éléments est refusé par le serveur
- * (409). On ne force qu'après confirmation explicite : perdre des meubles sur un glisser de
- * souris serait la pire chose que puisse faire un éditeur de plan.
+ * (409, `code` destructif). On ne force qu'après confirmation explicite : perdre des meubles sur
+ * un glisser de souris serait la pire chose que puisse faire un éditeur de plan.
  */
 async function savePolygon(polygon: number[][]): Promise<void> {
-  await store.write((version) => api.updateRoom(room.value!.id, { polygon, version }))
+  const roomId = room.value!.id
+  await store.write(
+    (version) => api.updateRoom(roomId, { polygon, version }),
+    (updated) => store.applyRoom(updated),
+  )
 
-  if (store.error?.includes('force')) {
-    const detail = store.error
-    if (window.confirm(`${detail}\n\nConfirmer la suppression ?`)) {
-      await store.write((version) =>
-        api.updateRoom(room.value!.id, { polygon, version, force: true }),
-      )
-    } else {
-      await store.load(Number(props.projectId))
-    }
+  if (store.conflictKind !== 'destructive') return
+
+  if (window.confirm(`${store.error}\n\nConfirmer la suppression ?`)) {
+    await store.write(
+      (version) => api.updateRoom(roomId, { polygon, version, force: true }),
+      (updated) => store.applyRoom(updated),
+    )
+  } else {
+    // Le refus n'a rien écrit côté serveur ; on relit pour rendre au canvas le contour réel.
+    await store.load(Number(props.projectId))
   }
 }
 
+/**
+ * Le serveur remplace le revêtement au lieu de le fusionner : n'envoyer que la couleur effaçait
+ * la matière, les dimensions d'unité et le motif de pose choisis auparavant.
+ */
 async function saveCovering(color: string): Promise<void> {
-  await store.write((version) =>
-    api.updateFaceCovering(selectedFace.value!.id, { color }, version),
+  const face = selectedFace.value!
+  await store.write(
+    (version) => api.updateFaceCovering(face.id, { ...face.covering, color }, version),
+    (updated) => store.applyFace(updated),
   )
 }
 
 async function addElement(): Promise<void> {
   const payload = { ...draftElement.value }
   if (payload.kind !== 'furniture') payload.furniture_type_id = null
-  await store.write((version) => api.createElement(selectedFace.value!.id, { ...payload, version }))
+  await store.write(
+    (version) => api.createElement(selectedFace.value!.id, { ...payload, version }),
+    (element) => store.applyElement(element),
+  )
 }
 
 async function removeElement(elementId: number): Promise<void> {
-  await store.write(() => api.deleteElement(elementId))
+  await store.write(
+    () => api.deleteElement(elementId),
+    () => store.dropElement(elementId),
+  )
 }
+
+const savedLabel = computed(() => {
+  if (store.saving) return 'Enregistrement…'
+  if (!store.savedAt) return 'Aucune modification enregistrée'
+  return `Enregistré à ${store.savedAt.toLocaleTimeString('fr-FR')}`
+})
 
 function describe(element: PlanElement): string {
   const kind = KIND_LABELS[element.kind] ?? element.kind
@@ -187,25 +256,40 @@ function describe(element: PlanElement): string {
           Plan 2D · version {{ store.project.version }}
         </p>
       </div>
-      <RouterLink
-        class="bouton-lien"
-        :to="`/projets/${props.projectId}/vue-3d`"
-      >
-        Voir en 3D →
-      </RouterLink>
+      <div class="entete-actions">
+        <p
+          class="etat-enregistrement"
+          :data-etat="store.saving ? 'en-cours' : 'repos'"
+          aria-live="polite"
+        >
+          {{ savedLabel }}
+        </p>
+        <RouterLink
+          class="bouton-lien"
+          :to="`/projets/${props.projectId}/vue-3d`"
+        >
+          Voir en 3D →
+        </RouterLink>
+      </div>
     </header>
 
     <p
-      v-if="store.conflict"
+      v-if="store.conflictKind === 'stale'"
       class="message erreur-bloc"
       role="alert"
     >
       Le plan a été modifié ailleurs. Vos dernières modifications n'ont pas été enregistrées.
       <button
         type="button"
+        @click="store.replayRefused()"
+      >
+        Recharger et réappliquer
+      </button>
+      <button
+        type="button"
         @click="store.load(Number(props.projectId))"
       >
-        Recharger
+        Recharger sans réappliquer
       </button>
     </p>
     <p
@@ -214,6 +298,13 @@ function describe(element: PlanElement): string {
       role="alert"
     >
       {{ store.error }}
+    </p>
+    <p
+      v-if="loadError"
+      class="message erreur-bloc"
+      role="alert"
+    >
+      {{ loadError }}
     </p>
 
     <div class="disposition">
@@ -289,6 +380,8 @@ function describe(element: PlanElement): string {
         <PlanCanvas
           v-if="room"
           ref="canvas"
+          :key="room.id"
+          :draft-key="`${props.projectId}:${room.id}`"
           :polygon="room.polygon"
           :faces="faces"
           :room-name="room.name"
@@ -511,6 +604,19 @@ function describe(element: PlanElement): string {
   <p v-else-if="store.loading">
     Chargement du plan…
   </p>
+  <p
+    v-else-if="store.error"
+    class="message erreur-bloc"
+    role="alert"
+  >
+    {{ store.error }}
+  </p>
+  <p
+    v-else
+    class="vide"
+  >
+    Ce projet est introuvable.
+  </p>
 </template>
 
 <style scoped>
@@ -518,12 +624,32 @@ function describe(element: PlanElement): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 1rem;
   margin-bottom: 0.75rem;
 }
 
 .entete h1 {
   margin: 0;
+}
+
+.entete-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.etat-enregistrement {
+  margin: 0;
+  color: var(--texte-doux);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.etat-enregistrement[data-etat='en-cours'] {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .sous-titre {
@@ -601,9 +727,27 @@ button[aria-pressed='true'] {
 .ajout {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1rem;
   max-width: 32rem;
+}
+
+/* Téléphone : la grille à deux colonnes du panneau de propriétés devient illisible, et les
+   boutons de la barre d'outils passent sous la taille de cible tactile recommandée. */
+@media (max-width: 40rem) {
+  .grille-champs {
+    grid-template-columns: 1fr;
+  }
+
+  .barre button,
+  .elements button {
+    min-height: 2.75rem;
+  }
+
+  .ajout {
+    align-items: stretch;
+  }
 }
 
 .ajout .champ {

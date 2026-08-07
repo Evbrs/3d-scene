@@ -5,26 +5,81 @@ stocke. Un client ne doit jamais pouvoir fixer un `id`, un `owner_id` ou un horo
 """
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.base import ElementKind, FaceKind, LayingPattern
+from app.services.faces import (
+    polygon_area,
+    polygon_crosses_itself,
+    shortest_side_length,
+)
 
 # Bornes physiques : une pièce de 10 km ou un mur de 2 mm ne relèvent pas de la rénovation. Ces
 # validations sont côté serveur, jamais seulement côté client (conventions OWASP du projet).
 Centimeters = Annotated[float, Field(gt=0, le=10_000)]
 Coordinate = Annotated[float, Field(ge=-100_000, le=100_000)]
 
+# Un mur plus court qu'un centimètre n'est pas un mur : c'est un sommet en double que
+# l'utilisateur n'a pas vu passer. Il produit pourtant une face, une lettre, et une direction
+# calculée par normalisation d'un vecteur quasi nul.
+MIN_WALL_LENGTH_CM = 1.0
+# Aire minimale d'une pièce, en cm² : 10 cm sur 10 cm. En dessous, le contour est dégénéré (tous
+# les sommets alignés, ou repliés) et son aire signée ne détermine plus d'orientation fiable.
+MIN_ROOM_AREA_CM2 = 100.0
+
 # Un seul type de couleur pour toute l'API. Avoir deux validations distinctes — un motif
 # hexadécimal ici, un simple « commence par # et fait 7 caractères » là — laissait passer
 # `#zzzzzz` sur un emplacement de meuble alors que la même valeur était refusée sur un revêtement.
 HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 
-# Les blobs JSON libres sont bornés : sans limite, un compte authentifié peut y écrire plusieurs
-# mégaoctets par élément et saturer le stockage.
-ColorSlots = Annotated[dict[str, HexColor], Field(max_length=24)]
-VariantParams = Annotated[dict[str, str | int | float | bool | None], Field(max_length=32)]
+# Les blobs JSON libres sont bornés en nombre d'entrées **et** en taille de chaque entrée. Borner
+# le seul nombre de clés laissait passer 61 Mo par élément : `{"a": "<30 Mo>"}` fait une entrée.
+BlobKey = Annotated[str, Field(max_length=50)]
+# Un paramètre de variante décrit une répétition ou un choix nommé (spec §4.4), pas un document :
+# `bool` avant `int` pour que `true` ne soit pas relu comme `1` par une union permissive.
+VariantValue = (
+    bool
+    | Annotated[int, Field(ge=-1_000_000, le=1_000_000)]
+    | Annotated[float, Field(ge=-1e9, le=1e9)]
+    | Annotated[str, Field(max_length=100)]
+    | None
+)
+ColorSlots = Annotated[dict[BlobKey, HexColor], Field(max_length=24)]
+VariantParams = Annotated[dict[BlobKey, VariantValue], Field(max_length=32)]
+
+
+class PartialUpdate(BaseModel):
+    """Base des schémas de modification partielle.
+
+    Un champ **absent** veut dire « ne touche pas » — c'est ce que `exclude_unset` exprime. Un
+    champ à `null` voudrait dire « écris NULL », ce que refusent toutes les colonnes du plan sauf
+    celles énumérées par `NULLABLE_FIELDS`. Sans ce contrôle, `{"width_cm": null}` traversait la
+    validation, partait en violation `NOT NULL` et ressortait en 500 : n'importe quel client
+    authentifié pouvait provoquer une erreur serveur sur n'importe quelle route de modification.
+
+    La liste est déclarée par sous-classe et non déduite de l'annotation : celle-ci porte déjà un
+    `| None` pour dire « facultatif », les deux sens y sont confondus.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset({"version"})
+
+    @model_validator(mode="after")
+    def _reject_meaningless_nulls(self) -> "PartialUpdate":
+        offenders = sorted(
+            field
+            for field in self.model_fields_set
+            if field not in self.NULLABLE_FIELDS and getattr(self, field, None) is None
+        )
+        if offenders:
+            raise ValueError(
+                f"champ(s) envoyé(s) à null sans signification : {', '.join(offenders)} — "
+                "omettez-les pour ne pas les modifier"
+            )
+        return self
 
 
 class Covering(BaseModel):
@@ -61,8 +116,13 @@ class ElementCreate(ElementBase):
     version: int | None = Field(default=None, ge=1)
 
 
-class ElementUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ElementUpdate(PartialUpdate):
+    # `furniture_type_id: null` détache l'élément du catalogue, `colors`/`variant_params: null`
+    # les vident — comme `covering: null` sur une face. Les trois sont donc des nuls porteurs de
+    # sens, contrairement aux dimensions.
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"version", "furniture_type_id", "colors", "variant_params"}
+    )
 
     kind: ElementKind | None = None
     x_offset_cm: Coordinate | None = None
@@ -90,13 +150,13 @@ class ElementRead(ElementBase):
 # --- Face -------------------------------------------------------------------------------------
 
 
-class FaceUpdate(BaseModel):
+class FaceUpdate(PartialUpdate):
     """Une face n'est pas créée ni supprimée directement : elle découle du polygone de la pièce.
 
     Seul son revêtement est modifiable par le client.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset({"version", "covering"})
 
     covering: Covering | None = None
     # Verrouillage optimiste : version du projet lue par le client (voir `ProjectUpdate`).
@@ -134,10 +194,12 @@ class RoomBase(BaseModel):
     @field_validator("polygon")
     @classmethod
     def _validate_polygon(cls, value: list[list[float]]) -> list[list[float]]:
-        """Un polygone est soit vide (pièce esquissée), soit un vrai contour fermé.
+        """Un polygone est soit vide (pièce esquissée), soit un vrai contour fermé et simple.
 
         Deux sommets identiques consécutifs produiraient un mur de longueur nulle, donc une face
-        dégénérée que le calcul du scene graph (P6) ne saurait pas orienter.
+        dégénérée que le calcul du scene graph (P6) ne saurait pas orienter. Un contour qui se
+        croise est pire : son aire signée ne détermine plus d'orientation, et toutes les normales
+        sortantes de la pièce s'inversent d'un appel à l'autre.
         """
         if not value:
             return value
@@ -149,6 +211,20 @@ class RoomBase(BaseModel):
             following = value[(index + 1) % len(value)]
             if vertex == following:
                 raise ValueError(f"sommets identiques consécutifs à l'index {index}")
+        shortest = shortest_side_length(value)
+        if shortest < MIN_WALL_LENGTH_CM:
+            raise ValueError(
+                f"mur de {round(shortest, 3)} cm : un mur doit mesurer au moins "
+                f"{MIN_WALL_LENGTH_CM} cm"
+            )
+        area = polygon_area(value)
+        if area < MIN_ROOM_AREA_CM2:
+            raise ValueError(
+                f"contour de {round(area, 2)} cm² : une pièce doit couvrir au moins "
+                f"{MIN_ROOM_AREA_CM2} cm²"
+            )
+        if polygon_crosses_itself(value):
+            raise ValueError("le contour se croise lui-même")
         return value
 
 
@@ -156,9 +232,7 @@ class RoomCreate(RoomBase):
     version: int | None = Field(default=None, ge=1)
 
 
-class RoomUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class RoomUpdate(PartialUpdate):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     wall_thickness_cm: Centimeters | None = None
     ceiling_height_cm: Centimeters | None = None
@@ -197,8 +271,9 @@ class ProjectCreate(ProjectBase):
     pass
 
 
-class ProjectUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ProjectUpdate(PartialUpdate):
+    # `description: null` efface la description : la colonne, elle, est bien nullable.
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset({"version", "description"})
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
@@ -238,13 +313,28 @@ class ProjectPage(Page):
     items: list[ProjectSummary]
 
 
+ConflictCode = Literal["stale_version", "destructive_change"]
+
+
 class ConflictDetail(BaseModel):
     """Corps de réponse d'un 409 sur conflit d'édition.
 
     Déclaré dans les `responses` des routes d'écriture : le schéma OpenAPI est la source de
     vérité du frontend (`docs/plan-generation-ia.md` §6), un 409 non documenté y serait
     invisible. `current_version` est aussi renvoyé dans l'en-tête `X-Current-Version`.
+
+    `code` est le champ sur lequel le client aiguille, et c'est la raison d'être de ce modèle :
+    un test de sous-chaîne sur `detail` — ce que faisait le frontend — casse à la première
+    reformulation d'un message. Deux natures de conflit seulement :
+
+    - `stale_version` : quelqu'un a écrit entre-temps, il faut recharger puis rejouer ;
+    - `destructive_change` : la requête est cohérente mais détruirait du travail déjà posé, et
+      n'aboutira qu'avec une confirmation explicite (`force: true`).
+
+    `current_version` est nul dans le seul cas où la collision est détectée par la base sans
+    qu'on sache encore de quel projet il s'agit (filet de sécurité, voir `app/api/conflicts.py`).
     """
 
     detail: str
-    current_version: int
+    current_version: int | None = None
+    code: ConflictCode = "stale_version"

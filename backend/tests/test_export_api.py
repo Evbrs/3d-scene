@@ -6,6 +6,7 @@ comparative des deux chemins.
 """
 
 import re
+import threading
 from datetime import UTC, datetime
 
 import pytest
@@ -216,21 +217,53 @@ async def test_the_generation_time_grows_with_the_plan(auth_client: AsyncClient)
     small = await _project_with_plan(auth_client, rooms=1)
     large = await _project_with_plan(auth_client, rooms=10)
 
-    def duration(response: object) -> float:
-        return float(response.headers["X-Generation-Ms"])  # type: ignore[attr-defined]
+    async def fastest_of_three(project_id: int) -> float:
+        """Minimum de trois mesures, et non une mesure isolée.
 
-    small_ms = duration(
-        await auth_client.get(
-            f"/api/projects/{small}/exports/pdf/direct", params={"measure": "true"}
-        )
-    )
-    large_ms = duration(
-        await auth_client.get(
-            f"/api/projects/{large}/exports/pdf/direct", params={"measure": "true"}
-        )
-    )
+        Le rendu se fait maintenant dans un fil du pool : l'ordonnanceur peut y ajouter quelques
+        millisecondes arbitraires, ce qui suffisait à inverser deux mesures uniques et faisait
+        rougir la CI par intermittence. Le minimum est l'estimateur robuste d'une durée : le bruit
+        d'ordonnancement ne fait qu'ajouter du temps, jamais en retirer.
+        """
+        measures = []
+        for _ in range(3):
+            response = await auth_client.get(
+                f"/api/projects/{project_id}/exports/pdf/direct", params={"measure": "true"}
+            )
+            measures.append(float(response.headers["X-Generation-Ms"]))
+        return min(measures)
+
+    small_ms = await fastest_of_three(small)
+    large_ms = await fastest_of_three(large)
 
     assert large_ms > small_ms, (
         f"génération de {large_ms:.1f} ms pour 10 pièces contre {small_ms:.1f} ms pour 1 : "
         "la durée ne suit pas la taille du plan, la mesure est douteuse"
+    )
+
+
+async def test_the_pdf_is_never_rendered_on_the_event_loop(
+    auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ReportLab est synchrone : rendu sur la boucle, il fige toutes les requêtes en cours.
+
+    Le chemin synchrone est justement celui que la spec §8 (cas 2) demande de garder pour la
+    mesure — il doit rester utilisable en production sans bloquer les autres clients.
+    """
+    from app.services import export_pdf
+
+    project_id = await _project_with_plan(auth_client)
+    seen: list[str] = []
+    original = export_pdf.render_project_pdf
+
+    def spy(project: dict[str, object], generated_at: datetime) -> bytes:
+        seen.append(threading.current_thread().name)
+        return original(project, generated_at)
+
+    monkeypatch.setattr("app.api.exports.render_project_pdf", spy)
+    response = await auth_client.get(f"/api/projects/{project_id}/exports/pdf/direct")
+
+    assert response.status_code == 200
+    assert seen and threading.main_thread().name not in seen, (
+        f"le PDF est rendu sur {seen}, donc sur la boucle d'événements"
     )

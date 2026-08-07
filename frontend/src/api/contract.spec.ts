@@ -23,12 +23,23 @@ const executableSource = clientSource
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '')
 
-/** Chemins appelés par le client, avec les gabarits remis sous la forme OpenAPI. */
+/**
+ * Chemins appelés par le client, avec leur verbe et les gabarits remis sous la forme OpenAPI.
+ *
+ * Le verbe était jusqu'ici figé à `'any'`, ce qui rendait la promesse « avec la bonne méthode »
+ * de l'en-tête de fichier purement décorative : un `POST` envoyé sur une route qui ne publie
+ * qu'un `GET` passait le test.
+ */
 function calledEndpoints(): { method: string; path: string }[] {
   const endpoints: { method: string; path: string }[] = []
 
-  // `request<T>('/api/...', { method: 'X' })` et les `fetch` explicites.
-  const pattern = /['"`](\/(?:api|openapi)[^'"`]*)['"`]/g
+  // `request<T>('/api/...', { method: 'X' })` et les `fetch` explicites. La suite est lue en
+  // anticipation (`?=`) pour ne pas être consommée : la consommer ferait sauter au lecteur les
+  // appels situés dans les 240 caractères suivants. Elle est ensuite tronquée à la fin de
+  // l'appel, sinon le `method:` de la fonction suivante serait attribué à celle-ci.
+  // Le préfixe `${API_BASE_URL}` des `fetch` explicites est absorbé : sans lui, la connexion, le
+  // rafraîchissement et la lecture publique échappaient entièrement à la vérification.
+  const pattern = /['"`](?:\$\{API_BASE_URL\})?(\/(?:api|openapi)[^'"`]*)['"`](?=([\s\S]{0,240}))/g
   let match: RegExpExecArray | null
   while ((match = pattern.exec(executableSource)) !== null) {
     const raw = match[1] as string
@@ -37,13 +48,28 @@ function calledEndpoints(): { method: string; path: string }[] {
       // `${projectId}` → `{project_id}` : on ne peut pas connaître le nom exact du paramètre,
       // donc on normalise toute interpolation en un joker comparé plus bas.
       .replace(/\$\{[^}]+\}/g, '{}')
-    endpoints.push({ method: 'any', path })
+    const tail = (match[2] ?? '').split(/\n\s*\n|export |request<|request\(|fetch\(/)[0] ?? ''
+    // Une requête sans `method:` explicite est un GET, comme `fetch` par défaut.
+    const method = /method:\s*['"`]([A-Za-z]+)['"`]/.exec(tail)?.[1]?.toLowerCase() ?? 'get'
+    endpoints.push({ method, path })
   }
   return endpoints
 }
 
 function schemaPathsNormalised(): Set<string> {
   return new Set(Object.keys(schema.paths).map((path) => path.replace(/\{[^}]+\}/g, '{}')))
+}
+
+/** `chemin normalisé` → verbes publiés. */
+function schemaOperations(): Map<string, Set<string>> {
+  const operations = new Map<string, Set<string>>()
+  for (const [path, methods] of Object.entries(schema.paths)) {
+    const normalised = path.replace(/\{[^}]+\}/g, '{}')
+    const known = operations.get(normalised) ?? new Set<string>()
+    for (const method of Object.keys(methods)) known.add(method.toLowerCase())
+    operations.set(normalised, known)
+  }
+  return operations
 }
 
 describe('contrat avec le backend', () => {
@@ -60,11 +86,24 @@ describe('contrat avec le backend', () => {
     expect(missing).toEqual([])
   })
 
+  it('chaque appel emploie un verbe publié sur ce chemin', () => {
+    const operations = schemaOperations()
+    const wrong = calledEndpoints()
+      .filter((endpoint) => endpoint.path !== '/openapi.json')
+      .filter((endpoint) => !operations.get(endpoint.path)?.has(endpoint.method))
+      .map((endpoint) => `${endpoint.method.toUpperCase()} ${endpoint.path}`)
+
+    expect(wrong).toEqual([])
+  })
+
   it('les routes attendues par les vues sont publiées', () => {
     const published = schemaPathsNormalised()
     for (const path of [
       '/api/auth/register',
       '/api/auth/token',
+      // Sans cette route, le rafraîchissement silencieux de `client.ts` ne peut pas exister et
+      // toute session redevient un compte à rebours de trente minutes.
+      '/api/auth/refresh',
       '/api/auth/me',
       '/api/projects',
       '/api/projects/{}',

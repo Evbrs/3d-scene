@@ -64,6 +64,31 @@ def _sphere(
     }
 
 
+def _variant(
+    name: str,
+    axis: str,
+    applies_to: list[str],
+    minimum: int,
+    maximum: int,
+) -> dict[str, Any]:
+    """Paramètre de variation d'une recette (spec §4.4).
+
+    Les emplacements visés sont désignés par leur `color_slot` et non par leur rang dans `parts` :
+    un rang change dès qu'on insère une primitive, un `color_slot` non.
+
+    `minimum` et `maximum` bornent la valeur reçue de l'instance plutôt que de la refuser : une
+    saisie hors bornes donne alors un meuble prévisible et corrigeable, là où un refus le ferait
+    disparaître du plan.
+    """
+    return {
+        "name": name,
+        "axis": axis,
+        "applies_to": applies_to,
+        "min": minimum,
+        "max": maximum,
+    }
+
+
 CATALOG: list[dict[str, Any]] = [
     # --- Général --------------------------------------------------------------------------
     {
@@ -73,7 +98,9 @@ CATALOG: list[dict[str, Any]] = [
         "color_slots": ["panneau", "poignee"],
         "parts": [
             _box((0.5, 0.5, 0.5), (1.0, 1.0, 1.0), "panneau"),
-            _cylinder((0.9, 0.45, 1.2), (0.06, 0.06, 0.3), "poignee"),
+            # Béquille perpendiculaire au panneau : sans `axis`, la révolution reste verticale et
+            # la poignée se dresse au lieu de pointer vers l'utilisateur.
+            _cylinder((0.9, 0.45, 1.2), (0.06, 0.06, 0.3), "poignee", axis="z"),
         ],
         "default_width_cm": 83.0,
         "default_height_cm": 204.0,
@@ -127,7 +154,8 @@ CATALOG: list[dict[str, Any]] = [
         "color_slots": ["plaque", "alveole"],
         "parts": [
             _box((0.5, 0.5, 0.5), (1.0, 1.0, 1.0), "plaque"),
-            _cylinder((0.5, 0.5, 1.05), (0.5, 0.5, 0.2), "alveole"),
+            # Alvéole percée dans la plaque : le disque regarde la pièce, il n'est pas couché.
+            _cylinder((0.5, 0.5, 1.05), (0.5, 0.5, 0.2), "alveole", axis="z"),
         ],
         "default_width_cm": 8.0,
         "default_height_cm": 8.0,
@@ -198,6 +226,7 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, "auto", 1.01), (0.94, 0.44, 0.03), "facade", repeat_y=2, gap=0.03),
             _box((0.5, "auto", 1.05), (0.3, 0.03, 0.03), "poignee", repeat_y=2, gap=0.44),
         ],
+        "variants": [_variant("nb_tiroirs", "y", ["facade", "poignee"], 1, 4)],
         "default_width_cm": 60.0,
         "default_height_cm": 55.0,
         "default_depth_cm": 45.0,
@@ -267,6 +296,7 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, 0.5, 0.5), (1.0, 1.0, 1.0), "corps"),
             _box((0.5, "auto", 0.5), (0.92, 0.02, 0.92), "etagere", repeat_y=4, gap=0.02),
         ],
+        "variants": [_variant("nb_etageres", "y", ["etagere"], 1, 8)],
         "default_width_cm": 40.0,
         "default_height_cm": 180.0,
         "default_depth_cm": 35.0,
@@ -290,9 +320,11 @@ CATALOG: list[dict[str, Any]] = [
         "category": FurnitureCategory.BATHROOM,
         "color_slots": ["barre", "platine"],
         "parts": [
-            _cylinder((0.5, 0.5, 0.6), (0.06, 0.06, 1.0), "barre"),
-            _cylinder((0.06, 0.5, 0.1), (0.12, 0.12, 0.2), "platine"),
-            _cylinder((0.94, 0.5, 0.1), (0.12, 0.12, 0.2), "platine"),
+            # Barre et platines sont allongées sur la profondeur : l'axe de révolution suit leur
+            # plus grande dimension relative, sinon chacune dégénère en disque écrasé.
+            _cylinder((0.5, 0.5, 0.6), (0.06, 0.06, 1.0), "barre", axis="z"),
+            _cylinder((0.06, 0.5, 0.1), (0.12, 0.12, 0.2), "platine", axis="z"),
+            _cylinder((0.94, 0.5, 0.1), (0.12, 0.12, 0.2), "platine", axis="z"),
         ],
         "default_width_cm": 60.0,
         "default_height_cm": 8.0,
@@ -324,6 +356,7 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, "auto", 1.01), (0.9, 0.18, 0.02), "facade", repeat_y=4, gap=0.02),
             _box((0.5, "auto", 1.04), (0.25, 0.03, 0.03), "poignee", repeat_y=4, gap=0.17),
         ],
+        "variants": [_variant("nb_tiroirs", "y", ["facade", "poignee"], 1, 6)],
         "default_width_cm": 100.0,
         "default_height_cm": 85.0,
         "default_depth_cm": 45.0,
@@ -338,6 +371,7 @@ CATALOG: list[dict[str, Any]] = [
             _box(("auto", 0.5, 1.01), (0.48, 0.96, 0.03), "porte", repeat_x=2, gap=0.02),
             _box(("auto", 0.5, 1.05), (0.03, 0.2, 0.03), "poignee", repeat_x=2, gap=0.1),
         ],
+        "variants": [_variant("nb_portes", "x", ["porte", "poignee"], 1, 4)],
         "default_width_cm": 120.0,
         "default_height_cm": 200.0,
         "default_depth_cm": 60.0,
@@ -352,6 +386,9 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, "auto", 1.01), (0.9, 0.3, 0.02), "facade", repeat_y=2, gap=0.04),
             _box(("auto", 0.1, 0.5), (0.08, 0.2, 0.08), "pied", repeat_x=2, gap=0.8),
         ],
+        # `applies_to` ne cite pas "pied" : les deux pieds se répètent eux aussi, mais leur nombre
+        # ne suit pas celui des tiroirs.
+        "variants": [_variant("nb_tiroirs", "y", ["facade"], 1, 3)],
         "default_width_cm": 45.0,
         "default_height_cm": 55.0,
         "default_depth_cm": 40.0,
@@ -406,6 +443,7 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, 0.5, 0.5), (1.0, 1.0, 1.0), "corps"),
             _box(("auto", 0.5, 1.01), (0.3, 0.8, 0.02), "facade", repeat_x=3, gap=0.02),
         ],
+        "variants": [_variant("nb_niches", "x", ["facade"], 1, 5)],
         "default_width_cm": 160.0,
         "default_height_cm": 45.0,
         "default_depth_cm": 40.0,
@@ -419,6 +457,7 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, 0.5, 0.5), (1.0, 1.0, 1.0), "corps"),
             _box((0.5, "auto", 0.5), (0.94, 0.03, 0.94), "etagere", repeat_y=5, gap=0.02),
         ],
+        "variants": [_variant("nb_etageres", "y", ["etagere"], 1, 10)],
         "default_width_cm": 80.0,
         "default_height_cm": 180.0,
         "default_depth_cm": 30.0,
@@ -447,6 +486,7 @@ CATALOG: list[dict[str, Any]] = [
             _box((0.5, 0.5, 0.5), (1.0, 1.0, 1.0), "caisson"),
             _box(("auto", 0.5, 1.01), (0.48, 0.96, 0.02), "facade", repeat_x=2, gap=0.02),
         ],
+        "variants": [_variant("nb_portes", "x", ["facade"], 1, 3)],
         "default_width_cm": 60.0,
         "default_height_cm": 70.0,
         "default_depth_cm": 35.0,

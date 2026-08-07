@@ -9,14 +9,28 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 # L'URL de l'API est figée à la compilation : Vite inline les variables `VITE_*`.
-ARG VITE_API_BASE_URL=/api
+# Vide par défaut = même origine. Les chemins de `src/api/client.ts` portent déjà le préfixe
+# `/api` : une base valant `/api` produirait des appels vers /api/api/... C'est nginx qui relaie
+# vers le backend (voir nginx/default.conf.template).
+ARG VITE_API_BASE_URL=""
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+# L'image officielle `nginx` tourne en root et ne se durcit qu'avec un `USER nginx` ajouté après
+# coup : le processus maître n'a alors plus le droit de créer /var/cache/nginx/client_temp et
+# l'image ne démarre pas (`mkdir() ... failed (13: Permission denied)`). Cette variante est
+# construite pour l'exécution non privilégiée : uid 101, écoute sur 8080, pid dans /tmp.
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY nginx/snippets/ /etc/nginx/snippets/
 
-# nginx écoute sur 8080 : un port non privilégié permet de tourner en non-root.
+# Réseau autorisé à parler au nom d'un client via X-Forwarded-For. La valeur par défaut ne fait
+# confiance à personne d'autre que la machine elle-même ; le compose de production la remplace
+# par le sous-réseau réel de la pile. Jamais 0.0.0.0/0.
+ENV NGINX_TRUSTED_PROXY_NETWORK=127.0.0.1/32
+# Sans ce filtre, envsubst remplacerait toute variable nginx écrite `${...}` qui porterait le nom
+# d'une variable d'environnement du conteneur.
+ENV NGINX_ENVSUBST_FILTER=^NGINX_
+
 EXPOSE 8080
-USER nginx

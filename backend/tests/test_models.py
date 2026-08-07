@@ -3,14 +3,17 @@
 Référence : `docs/plan-generation-ia.md` §8 (P1), `docs/spec-complete.md` §5 et §8.
 """
 
+from datetime import timedelta
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import class_mapper, selectinload
 from sqlalchemy.orm.exc import StaleDataError
-from sqlmodel import select
+from sqlmodel import SQLModel, col, select
 
 from app.models import (
     Element,
@@ -265,6 +268,301 @@ async def test_enums_are_stored_by_value_not_by_python_name(
 
     assert raw_face_kind == "wall", raw_face_kind
     assert raw_element_kind == "window", raw_element_kind
+
+
+# --- Intégrité portée par la base elle-même ---------------------------------------------------
+#
+# SQLModel désactive la validation Pydantic sur les modèles `table=True` : `Room(wall_thickness_cm
+# =-5)` se construit sans broncher. La seule barrière qui vaille pour SQLAdmin, la CLI, Celery et
+# le SQL direct est donc la contrainte en base — c'est elle, et non le modèle, qu'on teste ici.
+
+
+async def _refusal_message(session: AsyncSession, instance: SQLModel) -> str:
+    """Message d'erreur renvoyé par la base pour une ligne qu'elle doit refuser."""
+    session.add(instance)
+    with pytest.raises(IntegrityError) as failure:
+        await session.commit()
+    await session.rollback()
+    return str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("constraint", "field", "value"),
+    [
+        ("ck_room_wall_thickness_cm_bounded", "wall_thickness_cm", 0.0),
+        ("ck_room_wall_thickness_cm_bounded", "wall_thickness_cm", -5.0),
+        ("ck_room_wall_thickness_cm_bounded", "wall_thickness_cm", 10_001.0),
+        ("ck_room_ceiling_height_cm_bounded", "ceiling_height_cm", 0.0),
+        ("ck_room_ceiling_height_cm_bounded", "ceiling_height_cm", -250.0),
+        ("ck_room_ceiling_height_cm_bounded", "ceiling_height_cm", 10_001.0),
+        ("ck_room_name_not_empty", "name", ""),
+    ],
+)
+async def test_the_database_refuses_an_impossible_room(
+    session: AsyncSession, owner: User, constraint: str, field: str, value: float | str
+) -> None:
+    project = Project(name="Projet", owner_id=owner.id or 0)
+    session.add(project)
+    await session.flush()
+
+    attributes: dict[str, Any] = {"project_id": project.id or 0, "name": "Salon", field: value}
+    message = await _refusal_message(session, Room(**attributes))
+
+    # Les deux moteurs nomment la contrainte fautive : on vérifie que c'est bien *celle-là* qui a
+    # rejeté la ligne, et pas une autre qui aurait masqué un trou.
+    assert constraint in message, message
+
+
+@pytest.mark.parametrize(
+    ("constraint", "field", "value"),
+    [
+        ("ck_element_width_cm_bounded", "width_cm", 0.0),
+        ("ck_element_width_cm_bounded", "width_cm", -100.0),
+        ("ck_element_width_cm_bounded", "width_cm", 10_001.0),
+        ("ck_element_height_cm_bounded", "height_cm", 0.0),
+        ("ck_element_height_cm_bounded", "height_cm", -100.0),
+        ("ck_element_depth_cm_bounded", "depth_cm", 0.0),
+        ("ck_element_depth_cm_bounded", "depth_cm", -50.0),
+        ("ck_element_rotation_deg_bounded", "rotation_deg", 99_999.0),
+        ("ck_element_rotation_deg_bounded", "rotation_deg", -361.0),
+        ("ck_element_offsets_not_negative", "x_offset_cm", -1.0),
+        ("ck_element_offsets_not_negative", "y_offset_cm", -1.0),
+    ],
+)
+async def test_the_database_refuses_an_impossible_element(
+    session: AsyncSession, owner: User, constraint: str, field: str, value: float
+) -> None:
+    _project, _room, face, _element = await _make_plan(session, owner)
+
+    attributes: dict[str, Any] = {
+        "face_id": face.id or 0,
+        "kind": ElementKind.FURNITURE,
+        field: value,
+    }
+    message = await _refusal_message(session, Element(**attributes))
+
+    assert constraint in message, message
+
+
+@pytest.mark.parametrize(
+    ("constraint", "field", "value"),
+    [
+        ("ck_furnituretype_default_width_cm_bounded", "default_width_cm", 0.0),
+        ("ck_furnituretype_default_width_cm_bounded", "default_width_cm", -100.0),
+        ("ck_furnituretype_default_width_cm_bounded", "default_width_cm", 1_001.0),
+        ("ck_furnituretype_default_height_cm_bounded", "default_height_cm", 0.0),
+        ("ck_furnituretype_default_height_cm_bounded", "default_height_cm", -100.0),
+        ("ck_furnituretype_default_depth_cm_bounded", "default_depth_cm", 0.0),
+        ("ck_furnituretype_default_depth_cm_bounded", "default_depth_cm", -50.0),
+    ],
+)
+async def test_the_database_refuses_an_impossible_furniture_type(
+    session: AsyncSession, constraint: str, field: str, value: float
+) -> None:
+    attributes: dict[str, Any] = {
+        "slug": "meuble-impossible",
+        "name": "Meuble impossible",
+        "category": "general",
+        field: value,
+    }
+    message = await _refusal_message(session, FurnitureType(**attributes))
+
+    assert constraint in message, message
+
+
+# --- Ordre des collections enfant --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("parent", "relation", "expected"),
+    [
+        (Project, "rooms", "room.id"),
+        (Room, "faces", "face.id"),
+        (Face, "elements", "element.id"),
+    ],
+)
+def test_child_collections_declare_an_explicit_order(
+    parent: type[SQLModel], relation: str, expected: str
+) -> None:
+    """Sans `order_by`, PostgreSQL rend les lignes dans l'ordre physique du heap.
+
+    Un `UPDATE` y réécrit la ligne en fin de table : renommer une pièce suffit à la faire passer
+    en dernier. Le frontend sélectionne la dernière pièce après création — l'utilisateur
+    dessinerait alors dans une autre pièce et en écraserait le polygone.
+
+    C'est cette assertion-là qui protège les deux moteurs : le test comportemental ci-dessous ne
+    peut pas *reproduire* le désordre sur SQLite, dont le parcours suit toujours le rowid.
+    """
+    # `order_by` vaut `False` — et non une séquence vide — quand la relation n'en déclare aucun.
+    order_by = class_mapper(parent).relationships[relation].order_by
+    assert order_by, f"{parent.__name__}.{relation} ne déclare aucun ordre"
+
+    assert [str(clause) for clause in order_by] == [expected]
+
+
+async def _room_names(session: AsyncSession, project_id: int) -> list[str]:
+    project = (
+        await session.execute(
+            select(Project)
+            .where(Project.id == project_id)
+            .options(selectinload(Project.rooms))  # type: ignore[arg-type]
+        )
+    ).scalar_one()
+    return [room.name for room in project.rooms]
+
+
+async def test_renaming_a_room_does_not_reshuffle_the_others(
+    session: AsyncSession, owner: User
+) -> None:
+    project = Project(name="Trois pièces", owner_id=owner.id or 0)
+    session.add(project)
+    await session.flush()
+    for name in ("Salon", "Cuisine", "Chambre"):
+        session.add(Room(project_id=project.id or 0, name=name))
+    await session.commit()
+    session.expunge_all()
+
+    assert await _room_names(session, project.id or 0) == ["Salon", "Cuisine", "Chambre"]
+
+    first = (
+        await session.execute(select(Room).where(Room.name == "Salon"))
+    ).scalar_one()
+    first.name = "Salon rénové"
+    await session.commit()
+    session.expunge_all()
+
+    assert await _room_names(session, project.id or 0) == ["Salon rénové", "Cuisine", "Chambre"]
+
+
+# --- Colonnes d'hygiène ------------------------------------------------------------------------
+
+
+async def test_a_raw_sql_insert_needs_only_the_business_columns(
+    session: AsyncSession, owner: User
+) -> None:
+    """En incident, le chemin le plus court est `psql`.
+
+    Sans valeur par défaut côté serveur, un `INSERT` écrit à la main échouait sur trois `NOT NULL`
+    — `created_at`, `updated_at` et `version` — que l'auteur de la requête n'a aucune raison de
+    connaître. La voie rapide était fermée précisément quand on en a besoin.
+    """
+    await session.execute(
+        text("INSERT INTO project (owner_id, name) VALUES (:owner, :name)"),
+        {"owner": owner.id, "name": "Créé en SQL direct"},
+    )
+    await session.commit()
+
+    project = (
+        await session.execute(select(Project).where(Project.name == "Créé en SQL direct"))
+    ).scalar_one()
+    assert project.version == 1
+    assert project.created_at is not None
+    assert project.updated_at is not None
+
+    # Une pièce garde ses dimensions obligatoires — ce sont des données métier, pas de la
+    # plomberie : qui insère une pièce à la main doit décider de l'épaisseur de ses murs.
+    await session.execute(
+        text(
+            "INSERT INTO room (project_id, name, wall_thickness_cm, ceiling_height_cm) "
+            "VALUES (:project, :name, 10, 250)"
+        ),
+        {"project": project.id, "name": "Pièce créée en SQL"},
+    )
+    await session.commit()
+
+    room = (
+        await session.execute(select(Room).where(Room.name == "Pièce créée en SQL"))
+    ).scalar_one()
+    # Les conteneurs JSON, eux, ont une valeur par défaut : sans elle, toute lecture de cette
+    # ligne échouerait plus loin sur un `None` là où le code attend une liste.
+    assert room.polygon == []
+
+
+async def test_a_raw_sql_insert_creates_a_usable_account(session: AsyncSession) -> None:
+    await session.execute(
+        text('INSERT INTO "user" (email, hashed_password) VALUES (:email, :hash)'),
+        {"email": "cree-en-sql@exemple.fr", "hash": "argon2-factice"},
+    )
+    await session.commit()
+
+    user = (
+        await session.execute(select(User).where(User.email == "cree-en-sql@exemple.fr"))
+    ).scalar_one()
+    assert user.is_active is True
+    assert user.is_superuser is False
+    assert user.token_version == 0
+    assert user.email_verified_at is None
+
+
+async def test_updated_at_moves_without_being_assigned(
+    session: AsyncSession, owner: User
+) -> None:
+    """Sans `onupdate`, seule une affectation explicite dans le code applicatif datait la ligne.
+
+    Une correction passée par SQLAdmin, par la CLI ou par Celery laissait donc `updated_at` à sa
+    valeur de création — et la liste des projets, triée dessus, mentait.
+    """
+    project = Project(name="Projet suivi", owner_id=owner.id or 0)
+    session.add(project)
+    await session.commit()
+    before = project.updated_at
+
+    project.description = "Modifié sans toucher à updated_at"
+    await session.commit()
+
+    assert project.updated_at > before
+
+
+async def test_the_expiry_of_a_shared_view_lives_in_a_column(
+    session: AsyncSession, owner: User
+) -> None:
+    """L'expiration rangée dans le blob `state` n'était ni indexable, ni visible depuis SQLAdmin.
+
+    Elle est désormais une colonne à part entière, comme la révocation et le libellé.
+    """
+    project = Project(name="Projet à partager", owner_id=owner.id or 0)
+    session.add(project)
+    await session.flush()
+
+    expiry = utcnow()
+    session.add(
+        SharedView(
+            project_id=project.id or 0,
+            token="jeton-avec-colonnes",
+            state={"camera_preset": "face"},
+            expires_at=expiry,
+            label="Lien client",
+        )
+    )
+    await session.commit()
+    session.expunge_all()
+
+    reloaded = (
+        await session.execute(select(SharedView).where(SharedView.token == "jeton-avec-colonnes"))
+    ).scalar_one()
+    assert reloaded.expires_at is not None
+    assert reloaded.label == "Lien client"
+    assert reloaded.revoked_at is None
+    assert reloaded.view_count == 0
+    assert reloaded.password_hash is None
+
+    # Tout l'intérêt de la manœuvre : l'expiration se **requête**. Rangée dans `state`, il fallait
+    # relire et désérialiser chaque ligne pour savoir laquelle était morte.
+    session.add(
+        SharedView(project_id=project.id or 0, token="jeton-sans-expiration", state={})
+    )
+    await session.commit()
+
+    expiring = (
+        (
+            await session.execute(
+                select(SharedView).where(col(SharedView.expires_at) <= utcnow() + timedelta(days=1))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [view.token for view in expiring] == ["jeton-avec-colonnes"]
 
 
 # --- A4 : admin SQLAdmin ----------------------------------------------------------------------

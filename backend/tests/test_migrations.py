@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, inspect, text
 from sqlmodel import SQLModel
 
@@ -115,6 +117,29 @@ def test_upgrade_head_creates_every_column_of_every_model(empty_database_url: st
             )
     finally:
         engine.dispose()
+
+
+def test_the_migrated_schema_matches_the_models_without_any_drift(
+    empty_database_url: str,
+) -> None:
+    """Les deux tests précédents ne comparent que des *sous-ensembles*.
+
+    Ils ne voient donc ni colonne restée en trop après un renommage, ni index oublié, ni type
+    divergent : une migration qui crée `polygon` en `VARCHAR` les laisse verts. `compare_metadata`
+    compare dans les deux sens, et c'est exactement ce que `alembic check` fait en CI — l'avoir
+    ici évite de découvrir la dérive au déploiement.
+    """
+    command.upgrade(_alembic_config(empty_database_url), "head")
+
+    engine = create_engine(empty_database_url)
+    try:
+        with engine.connect() as connection:
+            context = MigrationContext.configure(connection, opts={"compare_type": True})
+            differences = compare_metadata(context, SQLModel.metadata)
+    finally:
+        engine.dispose()
+
+    assert differences == [], f"dérive entre la migration et les modèles : {differences}"
 
 
 def test_downgrade_base_removes_every_table(empty_database_url: str) -> None:

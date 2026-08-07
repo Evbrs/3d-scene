@@ -13,7 +13,14 @@
 import * as THREE from 'three'
 import { computed } from 'vue'
 
-import type { FurnitureNode, HorizontalNode, SceneNode, SceneRoom, WallNode } from '@/api/types'
+import type {
+  FurnitureNode,
+  HorizontalNode,
+  JoineryNode,
+  SceneNode,
+  SceneRoom,
+  WallNode,
+} from '@/api/types'
 import type { FaceVisibility } from '@/viewer/visibility'
 import { buildShape, primitiveGeometry } from '@/viewer/geometry'
 import { vec3 } from '@/viewer/vectors'
@@ -34,8 +41,11 @@ function isHorizontal(node: SceneNode): node is HorizontalNode {
   return node.kind === 'floor' || node.kind === 'ceiling'
 }
 
-function isFurniture(node: SceneNode): node is FurnitureNode {
-  return node.kind === 'furniture'
+// Menuiseries et meubles se rendent à l'identique : une recette développée en primitives, posée
+// puis tournée. Seule leur provenance diffère — d'où un seul groupe de rendu, et non deux blocs
+// jumeaux. Les ignorer, comme c'était le cas, ne plantait pas : la porte manquait simplement.
+function isPlacedObject(node: SceneNode): node is FurnitureNode | JoineryNode {
+  return node.kind === 'furniture' || node.kind === 'joinery'
 }
 
 const walls = computed(() =>
@@ -60,13 +70,16 @@ const horizontals = computed(() =>
 )
 
 const furniture = computed(() =>
-  props.room.nodes.filter(isFurniture).map((node) => ({
+  props.room.nodes.filter(isPlacedObject).map((node) => ({
     node,
     // Les primitives soustraites sont ignorées tant que le CSG n'est pas activé : les afficher
     // en plein donnerait un volume faux (une baignoire pleine au lieu de creuse).
     parts: node.primitives
       .filter((primitive) => primitive.operation === 'add')
-      .map((primitive) => ({ primitive, geometry: primitiveGeometry(primitive.size, primitive.type) })),
+      .map((primitive) => ({
+        primitive,
+        geometry: primitiveGeometry(primitive.size, primitive.type, primitive.axis),
+      })),
   })),
 )
 </script>

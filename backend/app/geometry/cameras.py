@@ -18,6 +18,7 @@ from app.geometry.vectors import (
     UP,
     Vector3,
     bounding_box,
+    first_hit_distance,
     normalize,
     polygon_centroid,
     round_vector,
@@ -162,18 +163,19 @@ def _inside_distance(
 ) -> float:
     """Recul maximal utilisable depuis un mur sans sortir de la pièce.
 
-    On projette les sommets du contour sur l'axe rentrant : la plus grande projection positive
-    est la profondeur disponible. On en garde 80 % pour rester franchement à l'intérieur.
+    Un rayon part du milieu du mur vers l'intérieur : le premier côté touché donne la profondeur
+    réellement disponible. On en garde 80 % pour rester franchement à l'intérieur.
+
+    La projection des sommets sur l'axe rentrant, elle, mesure l'étendue de la **boîte
+    englobante** du contour, pas celle de la pièce. Sur une pièce en L, la caméra du mur qui borde
+    l'aile courte reculait jusqu'à l'étendue de l'aile longue et se retrouvait dans le retour,
+    hors de la pièce — exactement ce que la mesure est censée empêcher.
     """
     if not polygon:
         return fallback
 
-    depths = [
-        float(np.dot(np.array([vertex[0], center[1], vertex[1]]) - center, inward))
-        for vertex in polygon
-    ]
-    available = max(depths, default=0.0)
-    if available <= 1.0:
+    available = first_hit_distance([center[0], center[2]], [inward[0], inward[2]], polygon)
+    if available is None or available <= 1.0:
         return fallback
     return available * 0.8
 

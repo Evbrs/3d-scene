@@ -35,6 +35,10 @@ services:
   backend:
     build:
       context: ./backend
+      # Étage explicite : l'image de production (`runtime`) n'embarque ni pytest, ni ruff, ni
+      # mypy. La cible implicite d'un Dockerfile multi-étage étant le dernier étage, ne rien
+      # préciser marcherait ici par accident — le compose de production, lui, n'y survivrait pas.
+      target: dev
     # Les migrations sont appliquées au démarrage : sans ça, une stack fraîchement montée sert
     # une API sur une base sans tables. En production ce sera une étape de déploiement distincte
     # (P12), pas un effet de bord du lancement de l'application.
@@ -73,6 +77,7 @@ services:
     # base créé chez lui, jamais hérité d'un fork.
     build:
       context: ./backend
+      target: dev
     command: celery -A app.core.celery_app.celery_app worker --loglevel=info --concurrency=2
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}

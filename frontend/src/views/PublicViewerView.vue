@@ -5,6 +5,9 @@
  * Aucune authentification : cette page est accessible à qui possède le lien. Elle est donc en
  * lecture seule, et n'affiche que ce que l'API publique renvoie — jamais d'information sur le
  * propriétaire du projet.
+ *
+ * C'est la vitrine du produit, et son visiteur est le client de l'artisan : il l'ouvre depuis un
+ * SMS, sur un téléphone. La mise en page en tient compte.
  */
 import { TresCanvas } from '@tresjs/core'
 import { computed, onMounted, ref, shallowRef } from 'vue'
@@ -21,9 +24,11 @@ const scene = shallowRef<SceneGraph | null>(null)
 const projectName = ref('')
 const visibility = ref<Record<string, FaceVisibility>>({})
 const cameraName = ref('isometrique')
+const roomIndex = ref(0)
 const error = ref<string | null>(null)
+const loading = ref(true)
 
-const room = computed(() => scene.value?.rooms[0] ?? null)
+const room = computed(() => scene.value?.rooms[roomIndex.value] ?? null)
 const camera = computed<CameraPreset | null>(
   () => room.value?.cameras.find((preset) => preset.name === cameraName.value) ?? null,
 )
@@ -34,13 +39,18 @@ onMounted(async () => {
     scene.value = view.scene
     projectName.value = view.project_name
 
+    const state = view.state as unknown as ViewState & { room_index?: number }
+    // La vue partagée désigne une pièce précise ; l'ignorer montrait toujours la première.
+    const shared = Number(state.room_index)
+    roomIndex.value =
+      Number.isInteger(shared) && shared >= 0 && shared < view.scene.rooms.length ? shared : 0
+
     const labels = new Set<string>()
-    view.scene.rooms[0]?.nodes.forEach((node) => {
+    view.scene.rooms[roomIndex.value]?.nodes.forEach((node) => {
       if ('face_label' in node && node.face_label) labels.add(node.face_label)
     })
     const allLabels = [...labels]
 
-    const state = view.state as unknown as ViewState
     visibility.value = state.visible_faces
       ? fromViewState(state, allLabels)
       : showEverything(allLabels)
@@ -52,6 +62,8 @@ onMounted(async () => {
         : caught instanceof Error
           ? caught.message
           : String(caught)
+  } finally {
+    loading.value = false
   }
 })
 </script>
@@ -60,7 +72,7 @@ onMounted(async () => {
   <section v-if="room && camera">
     <h1>{{ projectName }}</h1>
     <p class="mention">
-      Vue partagée en lecture seule.
+      {{ room.name }} · vue partagée en lecture seule.
     </p>
 
     <div class="scene">
@@ -77,6 +89,8 @@ onMounted(async () => {
           :near="1"
           :far="20000"
         />
+        <!-- `near` doit rester positif : à -10000, le plan de coupe passe derrière la caméra et
+             le mur opposé se dessine par-dessus la face regardée. -->
         <TresOrthographicCamera
           v-else
           :position="vec3(camera.position)"
@@ -86,7 +100,7 @@ onMounted(async () => {
           :right="camera.half_width_cm ?? 100"
           :top="camera.half_height_cm ?? 100"
           :bottom="-(camera.half_height_cm ?? 100)"
-          :near="-10000"
+          :near="0.1"
           :far="20000"
         />
         <TresAmbientLight :intensity="1.1" />
@@ -109,8 +123,11 @@ onMounted(async () => {
   >
     {{ error }}
   </p>
-  <p v-else>
+  <p v-else-if="loading">
     Chargement de la vue partagée…
+  </p>
+  <p v-else>
+    Cette vue partagée ne contient aucune pièce à afficher.
   </p>
 </template>
 
@@ -120,9 +137,24 @@ onMounted(async () => {
 }
 
 .scene {
-  height: 34rem;
+  /* Prend la hauteur réellement disponible. Une hauteur figée de 34 rem réduisait la scène à une
+     vignette sur un téléphone tenu à l'horizontale, et la faisait déborder à la verticale. */
+  height: clamp(16rem, 72vh, 44rem);
   border: 1px solid var(--bordure);
   border-radius: 0.5rem;
   overflow: hidden;
+}
+
+@media (max-width: 40rem) {
+  h1 {
+    font-size: 1.4rem;
+  }
+
+  .scene {
+    /* Le lien de partage s'ouvre en pleine page : on rend au dessin la marge de `main`. */
+    margin-inline: -0.75rem;
+    border-inline: 0;
+    border-radius: 0;
+  }
 }
 </style>

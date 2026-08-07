@@ -1,0 +1,158 @@
+{
+  "description": "Pièce octogonale : quatre murs obliques à 45°, un par quadrant. Les quatre fixtures précédentes n'utilisent qu'un rectangle aligné sur les axes, où trois composantes sur quatre sont nulles : aucune erreur de quadrant d'atan2 n'y est détectable.",
+  "reasoning": [
+    "Forme : rectangle 600 x 400 dont les quatre coins sont coupés à 45° sur 100 cm. Polygone (100,0) (500,0) (600,100) (600,300) (500,400) (100,400) (0,300) (0,100). Aire du lacet = +220000, donc déjà en sens trigonométrique.",
+    "Aire au sol : 600 x 400 = 240000, moins quatre triangles rectangles isocèles de côté 100, soit 4 x (100 x 100 / 2) = 20000. Total 220000 cm².",
+    "Convention rappelée : direction 3D d = (dx, 0, dz) avec dz = dy du plan ; normale sortante = Yup x d = (dz, 0, -dx) ; rotation_y = atan2(-dz, dx).",
+    "Les quatre murs obliques ont pour direction (±1, 0, ±1)/racine(2) = (±0.7071067812, 0, ±0.7071067812), et leurs quatre rotation_y tombent une par quadrant : c'est ce que la pièce rectangulaire ne peut pas montrer.",
+    "Mur A : (100,0) -> (500,0). Longueur 400. d = (1,0,0). n = (0,0,-1). rotation_y = atan2(0, 1) = 0. Origine (100,0,0).",
+    "Mur B : (500,0) -> (600,100). Longueur = racine(100² + 100²) = 100 racine(2) = 141.4213562, arrondi 141.4214. d = (0.7071067812, 0, 0.7071067812). n = (0.7071067812, 0, -0.7071067812). rotation_y = atan2(-0.7071067812, +0.7071067812) = -pi/4 = -0.785398163. Origine (500,0,0).",
+    "Mur C : (600,100) -> (600,300). Longueur 200. d = (0,0,1). n = (1,0,0). rotation_y = atan2(-1, 0) = -pi/2 = -1.570796327. Origine (600,0,100).",
+    "Mur D : (600,300) -> (500,400). Longueur 141.4214. d = (-0.7071067812, 0, 0.7071067812). n = (0.7071067812, 0, 0.7071067812). rotation_y = atan2(-0.7071067812, -0.7071067812) = -3pi/4 = -2.35619449. Origine (600,0,300).",
+    "Mur E : (500,400) -> (100,400). Longueur 400. d = (-1,0,0). n = (0,0,1). rotation_y = atan2(0, -1) = pi = 3.141592654. Origine (500,0,400).",
+    "Mur F : (100,400) -> (0,300). Longueur 141.4214. d = (-0.7071067812, 0, -0.7071067812). n = (-0.7071067812, 0, 0.7071067812). rotation_y = atan2(+0.7071067812, -0.7071067812) = +3pi/4 = 2.35619449. Origine (100,0,400).",
+    "Mur G : (0,300) -> (0,100). Longueur 200. d = (0,0,-1). n = (-1,0,0). rotation_y = atan2(1, 0) = pi/2 = 1.570796327. Origine (0,0,300).",
+    "Mur H : (0,100) -> (100,0). Longueur 141.4214. d = (0.7071067812, 0, -0.7071067812). n = (-0.7071067812, 0, -0.7071067812). rotation_y = atan2(+0.7071067812, +0.7071067812) = +pi/4 = 0.785398163. Origine (0,0,100).",
+    "Vérification des normales sortantes : le centre de la pièce est en (300,200) par symétrie. Mur B, milieu (550,50) : le vecteur centre -> milieu vaut (250, 0, -150) et son produit scalaire avec n = (0.7071, 0, -0.7071) vaut 176.8 + 106.1 > 0. Même contrôle positif sur D, F et H.",
+    "Onglet : à chaque sommet on tourne de +45°. La rallonge à donner au mur entrant est |(t/2) tan(theta/2)| = 5 x tan(22.5°) = 5 x (racine(2) - 1) = 5 x 0.4142135624 = 2.0710678, arrondi 2.0711. Les huit sommets donnent la même valeur.",
+    "Aire nette : chaque côté est ramené de t/2 = 5 vers l'intérieur, et les sommets deviennent les intersections des droites décalées. Les quatre côtés droits donnent x = 5, x = 595, y = 5, y = 395, soit une boîte de 590 x 390 = 230100. Les côtés obliques : celui du coin bas-gauche a pour équation x + y = 100 et son décalage intérieur vaut x + y = 100 + 5 racine(2) = 107.0710678 ; il coupe y = 5 en x = 102.0710678 et x = 5 en y = 102.0710678. La coupe intérieure a donc pour côté 102.0710678 - 5 = 97.0710678 = 90 + 5 racine(2), et par symétrie les quatre coins sont identiques.",
+    "Aire nette = 230100 - 4 x (97.0710678² / 2) = 230100 - 2 x 9422.792206 = 230100 - 18845.584412 = 211254.415588, arrondi 211254.4156. L'aire de la ligne médiane (220000) la surévalue de 4.1 %.",
+    "Caméra du dessus : boîte englobante 600 x 400, centroïde (300,200) par symétrie. Altitude = 250 + max(600,400) = 850. Demi-cadre = (300, 200) x 1.05 = (315, 210).",
+    "Caméra isométrique : distance = 2 x max(600,400,250) = 1200 ; direction (1,1,1)/racine(3) = 0.5773502692 ; 1200 x 0.5773502692 = 692.8203230. Centre visé = (300, 125, 200), donc position (992.8203, 817.8203, 892.8203).",
+    "Caméras par face : un rayon part du milieu du mur vers l'intérieur, et la première arête touchée donne la profondeur ; on en garde 80 %.",
+    "  - Mur A, milieu (300,0), rentrante (0,0,1) : le rayon monte et coupe le mur E (y = 400, x de 100 à 500) en x = 300. Profondeur 400, recul 320, position (300,125,320).",
+    "  - Mur B, milieu (550,50), rentrante (-0.7071,0,0.7071) : le rayon suit x = 550 - u, y = 50 + u et coupe le mur E (y = 400) à u = 350, en x = 200 qui est bien entre 100 et 500. Profondeur = 350 racine(2) = 494.9747, recul = 0.8 x 350 racine(2) = 280 racine(2) = 395.9798. Le recul projeté sur chaque axe vaut 280 racine(2) x racine(2)/2 = 280 exactement, d'où position (550 - 280, 125, 50 + 280) = (270,125,330).",
+    "  - Mur C, milieu (600,200), rentrante (-1,0,0) : coupe le mur G (x = 0, y de 100 à 300) en y = 200. Profondeur 600, recul 480, position (120,125,200).",
+    "  - Mur D, milieu (550,350), rentrante (-0.7071,0,-0.7071) : coupe le mur A (y = 0) à u = 350, en x = 200. Recul projeté 280, position (270,125,70).",
+    "  - Mur E, milieu (300,400), rentrante (0,0,-1) : coupe le mur A (y = 0) en x = 300. Profondeur 400, recul 320, position (300,125,80).",
+    "  - Mur F, milieu (50,350), rentrante (0.7071,0,-0.7071) : coupe le mur A (y = 0) à u = 350, en x = 400. Recul projeté 280, position (330,125,70).",
+    "  - Mur G, milieu (0,200), rentrante (1,0,0) : coupe le mur C (x = 600, y de 100 à 300) en y = 200. Profondeur 600, recul 480, position (480,125,200).",
+    "  - Mur H, milieu (50,50), rentrante (0.7071,0,0.7071) : coupe le mur E (y = 400) à u = 350, en x = 400. Recul projeté 280, position (330,125,330).",
+    "Demi-cadres des élévations : moitié de la longueur du mur x 1.05, et 250/2 x 1.05 = 131.25 en hauteur. Pour les murs obliques : 141.4213562 / 2 x 1.05 = 74.2462.",
+    "Sol et plafond sont volontairement absents de l'entrée : cette fixture porte sur les murs et sur les aires, et l'orientation attendue du plafond est contestée (voir le rapport du lot).",
+    "Angles à 9 décimales : pi/4 = 0.785398163, pi/2 = 1.570796327, 3pi/4 = 2.35619449, pi = 3.141592654."
+  ],
+  "input": {
+    "project_id": 5,
+    "rooms": [
+      {
+        "id": 50,
+        "name": "Séjour octogonal",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[100, 0], [500, 0], [600, 100], [600, 300], [500, 400], [100, 400], [0, 300], [0, 100]],
+        "faces": [
+          {"id": 500, "label": "A", "kind": "wall", "start_x_cm": 100, "start_y_cm": 0, "end_x_cm": 500, "end_y_cm": 0, "covering": {}, "elements": []},
+          {"id": 501, "label": "B", "kind": "wall", "start_x_cm": 500, "start_y_cm": 0, "end_x_cm": 600, "end_y_cm": 100, "covering": {}, "elements": []},
+          {"id": 502, "label": "C", "kind": "wall", "start_x_cm": 600, "start_y_cm": 100, "end_x_cm": 600, "end_y_cm": 300, "covering": {}, "elements": []},
+          {"id": 503, "label": "D", "kind": "wall", "start_x_cm": 600, "start_y_cm": 300, "end_x_cm": 500, "end_y_cm": 400, "covering": {}, "elements": []},
+          {"id": 504, "label": "E", "kind": "wall", "start_x_cm": 500, "start_y_cm": 400, "end_x_cm": 100, "end_y_cm": 400, "covering": {}, "elements": []},
+          {"id": 505, "label": "F", "kind": "wall", "start_x_cm": 100, "start_y_cm": 400, "end_x_cm": 0, "end_y_cm": 300, "covering": {}, "elements": []},
+          {"id": 506, "label": "G", "kind": "wall", "start_x_cm": 0, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 100, "covering": {}, "elements": []},
+          {"id": 507, "label": "H", "kind": "wall", "start_x_cm": 0, "start_y_cm": 100, "end_x_cm": 100, "end_y_cm": 0, "covering": {}, "elements": []}
+        ]
+      }
+    ]
+  },
+  "expected_walls": [
+    {
+      "kind": "wall", "face_id": 500, "face_label": "A",
+      "length_cm": 400.0, "height_cm": 250.0,
+      "origin": [100.0, 0.0, 0.0],
+      "rotation_y": 0.0,
+      "outward_normal": [0.0, 0.0, -1.0],
+      "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 501, "face_label": "B",
+      "length_cm": 141.4214, "height_cm": 250.0,
+      "origin": [500.0, 0.0, 0.0],
+      "rotation_y": -0.785398163,
+      "outward_normal": [0.7071, 0.0, -0.7071],
+      "outline": [[0.0, 0.0], [141.4214, 0.0], [141.4214, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 502, "face_label": "C",
+      "length_cm": 200.0, "height_cm": 250.0,
+      "origin": [600.0, 0.0, 100.0],
+      "rotation_y": -1.570796327,
+      "outward_normal": [1.0, 0.0, 0.0],
+      "outline": [[0.0, 0.0], [200.0, 0.0], [200.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 503, "face_label": "D",
+      "length_cm": 141.4214, "height_cm": 250.0,
+      "origin": [600.0, 0.0, 300.0],
+      "rotation_y": -2.35619449,
+      "outward_normal": [0.7071, 0.0, 0.7071],
+      "outline": [[0.0, 0.0], [141.4214, 0.0], [141.4214, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 504, "face_label": "E",
+      "length_cm": 400.0, "height_cm": 250.0,
+      "origin": [500.0, 0.0, 400.0],
+      "rotation_y": 3.141592654,
+      "outward_normal": [0.0, 0.0, 1.0],
+      "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 505, "face_label": "F",
+      "length_cm": 141.4214, "height_cm": 250.0,
+      "origin": [100.0, 0.0, 400.0],
+      "rotation_y": 2.35619449,
+      "outward_normal": [-0.7071, 0.0, 0.7071],
+      "outline": [[0.0, 0.0], [141.4214, 0.0], [141.4214, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 506, "face_label": "G",
+      "length_cm": 200.0, "height_cm": 250.0,
+      "origin": [0.0, 0.0, 300.0],
+      "rotation_y": 1.570796327,
+      "outward_normal": [-1.0, 0.0, 0.0],
+      "outline": [[0.0, 0.0], [200.0, 0.0], [200.0, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    },
+    {
+      "kind": "wall", "face_id": 507, "face_label": "H",
+      "length_cm": 141.4214, "height_cm": 250.0,
+      "origin": [0.0, 0.0, 100.0],
+      "rotation_y": 0.785398163,
+      "outward_normal": [-0.7071, 0.0, -0.7071],
+      "outline": [[0.0, 0.0], [141.4214, 0.0], [141.4214, 250.0], [0.0, 250.0]],
+      "holes": [], "extrude_depth_cm": 10.0, "extrude_offset_cm": -5.0, "covering": {}
+    }
+  ],
+  "expected_room": {
+    "floor_area_cm2": 220000.0,
+    "net_floor_area_cm2": 211254.4156
+  },
+  "expected_cameras": [
+    {"name": "dessus", "kind": "orthographic", "position": [300.0, 850.0, 200.0], "target": [300.0, 0.0, 200.0], "up": [0.0, 0.0, -1.0], "half_width_cm": 315.0, "half_height_cm": 210.0, "face_label": null},
+    {"name": "isometrique", "kind": "perspective", "position": [992.8203, 817.8203, 892.8203], "target": [300.0, 125.0, 200.0], "up": [0.0, 1.0, 0.0], "fov_deg": 50.0, "face_label": null},
+    {"name": "orbite", "kind": "perspective", "position": [992.8203, 817.8203, 892.8203], "target": [300.0, 125.0, 200.0], "up": [0.0, 1.0, 0.0], "fov_deg": 50.0, "face_label": null},
+    {"name": "face-A", "kind": "orthographic", "position": [300.0, 125.0, 320.0], "target": [300.0, 125.0, 0.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 210.0, "half_height_cm": 131.25, "face_label": "A"},
+    {"name": "face-B", "kind": "orthographic", "position": [270.0, 125.0, 330.0], "target": [550.0, 125.0, 50.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 74.2462, "half_height_cm": 131.25, "face_label": "B"},
+    {"name": "face-C", "kind": "orthographic", "position": [120.0, 125.0, 200.0], "target": [600.0, 125.0, 200.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 105.0, "half_height_cm": 131.25, "face_label": "C"},
+    {"name": "face-D", "kind": "orthographic", "position": [270.0, 125.0, 70.0], "target": [550.0, 125.0, 350.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 74.2462, "half_height_cm": 131.25, "face_label": "D"},
+    {"name": "face-E", "kind": "orthographic", "position": [300.0, 125.0, 80.0], "target": [300.0, 125.0, 400.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 210.0, "half_height_cm": 131.25, "face_label": "E"},
+    {"name": "face-F", "kind": "orthographic", "position": [330.0, 125.0, 70.0], "target": [50.0, 125.0, 350.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 74.2462, "half_height_cm": 131.25, "face_label": "F"},
+    {"name": "face-G", "kind": "orthographic", "position": [480.0, 125.0, 200.0], "target": [0.0, 125.0, 200.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 105.0, "half_height_cm": 131.25, "face_label": "G"},
+    {"name": "face-H", "kind": "orthographic", "position": [330.0, 125.0, 330.0], "target": [50.0, 125.0, 50.0], "up": [0.0, 1.0, 0.0], "half_width_cm": 74.2462, "half_height_cm": 131.25, "face_label": "H"}
+  ],
+  "expected_miter_extensions_cm": {
+    "A>B": 2.0711,
+    "B>C": 2.0711,
+    "C>D": 2.0711,
+    "D>E": 2.0711,
+    "E>F": 2.0711,
+    "F>G": 2.0711,
+    "G>H": 2.0711,
+    "H>A": 2.0711
+  }
+}

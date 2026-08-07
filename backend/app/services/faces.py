@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, select
 
-from app.models.base import FaceKind
+from app.models.base import ElementKind, FaceKind
 from app.models.plan import Element, Face, Room
 
 FLOOR_LABEL = "SOL"
@@ -35,6 +35,21 @@ CEILING_LABEL = "PLAFOND"
 # Tolérance de comparaison de coordonnées, en centimètres. Deux sommets plus proches que 0,1 mm
 # désignent le même point : le plan est saisi au centimètre.
 COORDINATE_TOLERANCE = 0.01
+
+# Tolérance des comparaisons d'encombrement. Elle n'absorbe que le bruit du flottant — une
+# longueur de mur est une racine carrée, `400.0` peut sortir à `399.99999999999994`. L'ancienne
+# valeur, `+ 1` cm, laissait une ouverture déborder de 9 mm : un trou qui sort du contour du mur
+# n'est plus triangulable, et l'aire du mur passait de 100 000 à 163 258 cm² dans earcut.
+FIT_TOLERANCE = 1e-6
+
+# Taille minimale conservée quand on rétrécit un élément pour le faire tenir : les colonnes
+# `*_cm` sont contraintes `> 0` en base, ramener à 0 lèverait une violation de contrainte.
+MIN_ELEMENT_SIZE_CM = 1.0
+
+# Une ouverture est un percement du mur (spec §3.1) : elle n'a de sens sur aucune autre face.
+OPENING_KINDS = frozenset(
+    {ElementKind.DOOR_HINGED, ElementKind.DOOR_SLIDING, ElementKind.WINDOW}
+)
 
 Segment = tuple[float, float, float, float]
 
@@ -87,6 +102,71 @@ def wall_segments(polygon: list[list[float]]) -> list[Segment]:
         end = polygon[(index + 1) % len(polygon)]
         segments.append((start[0], start[1], end[0], end[1]))
     return segments
+
+
+def polygon_area(polygon: list[list[float]]) -> float:
+    """Aire absolue du contour (formule du lacet), en cm².
+
+    Dupliquée ici plutôt qu'importée de `app.geometry` : la validation des schémas doit rester
+    utilisable sans la couche de calcul 3D, et cette formule tient en trois lignes.
+    """
+    if len(polygon) < 3:
+        return 0.0
+    total = 0.0
+    for index, (x_start, y_start) in enumerate(polygon):
+        x_end, y_end = polygon[(index + 1) % len(polygon)]
+        total += x_start * y_end - x_end * y_start
+    return abs(total) / 2.0
+
+
+def shortest_side_length(polygon: list[list[float]]) -> float:
+    """Longueur du plus court côté du contour, en cm."""
+    return min(
+        float(((x_end - x_start) ** 2 + (y_end - y_start) ** 2) ** 0.5)
+        for x_start, y_start, x_end, y_end in wall_segments(polygon)
+    )
+
+
+def _orientation(
+    origin: tuple[float, float], first: tuple[float, float], second: tuple[float, float]
+) -> float:
+    return (first[0] - origin[0]) * (second[1] - origin[1]) - (first[1] - origin[1]) * (
+        second[0] - origin[0]
+    )
+
+
+def polygon_crosses_itself(polygon: list[list[float]]) -> bool:
+    """Vrai si deux côtés non adjacents se **croisent** franchement.
+
+    Un contour qui se croise n'a plus d'aire signée fiable : sur un nœud papillon parfaitement
+    symétrique elle vaut zéro, `ensure_counter_clockwise` bascule alors d'un appel à l'autre au
+    gré du bruit du flottant, et toutes les normales sortantes s'inversent d'un coup — la pièce
+    est vue de l'extérieur.
+
+    Seuls les croisements **francs** sont détectés : deux côtés colinéaires qui se recouvrent, ou
+    un sommet posé sur un autre côté, restent acceptés. Ce n'est pas un oubli — un contour en
+    escalier refermé le long d'un axe qu'il a déjà emprunté est produit par l'éditeur et garde une
+    aire parfaitement définie, donc ne présente aucun des symptômes ci-dessus.
+    """
+    segments = wall_segments(polygon)
+    count = len(segments)
+    for first in range(count):
+        a_start = (segments[first][0], segments[first][1])
+        a_end = (segments[first][2], segments[first][3])
+        for second in range(first + 1, count):
+            # Côtés consécutifs (y compris la paire dernier/premier) : ils partagent un sommet,
+            # ce qui n'est pas un croisement.
+            if second == first + 1 or (first == 0 and second == count - 1):
+                continue
+            b_start = (segments[second][0], segments[second][1])
+            b_end = (segments[second][2], segments[second][3])
+            first_side = _orientation(a_start, a_end, b_start)
+            second_side = _orientation(a_start, a_end, b_end)
+            third_side = _orientation(b_start, b_end, a_start)
+            fourth_side = _orientation(b_start, b_end, a_end)
+            if first_side * second_side < 0 and third_side * fourth_side < 0:
+                return True
+    return False
 
 
 def _label_rank(label: str) -> int:
@@ -226,29 +306,100 @@ async def sync_room_faces(
     return faces
 
 
+def wall_face_length(face: Face) -> float | None:
+    """Longueur d'un mur en cm, `None` si son segment n'est pas renseigné."""
+    coordinates = (face.start_x_cm, face.start_y_cm, face.end_x_cm, face.end_y_cm)
+    if any(value is None for value in coordinates):
+        return None
+    start_x, start_y, end_x, end_y = (float(value or 0.0) for value in coordinates)
+    return float(((end_x - start_x) ** 2 + (end_y - start_y) ** 2) ** 0.5)
+
+
+def _face_spans(face: Face, room: Room) -> tuple[float, float] | None:
+    """Étendue utile d'une face, en cm : `(le long de x_offset, le long de y_offset)`.
+
+    `None` quand la face n'a pas encore de géométrie (mur sans segment, pièce sans polygone) :
+    il n'y a alors rien à borner.
+    """
+    if face.kind is FaceKind.WALL:
+        length = wall_face_length(face)
+        return None if length is None else (length, float(room.ceiling_height_cm))
+    if not room.polygon:
+        return None
+    xs = [vertex[0] for vertex in room.polygon]
+    ys = [vertex[1] for vertex in room.polygon]
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
+def _element_footprint(element: Element, face: Face) -> tuple[float, float]:
+    """Encombrement de l'élément **dans le plan de la face**, en cm.
+
+    C'est tout l'enjeu : sur un mur, ce qui s'inscrit dans (longueur, hauteur sous plafond) est
+    le couple (largeur, hauteur) ; sur un sol ou un plafond, la face est horizontale et c'est
+    (largeur, profondeur) qui s'y pose — la hauteur, elle, s'élève dans la pièce. La version
+    précédente comparait `y_offset + height` à l'étendue au sol dans les deux cas : elle refusait
+    une armoire de 120x200x60 dans une pièce de 3 m de profondeur, et laissait un lit de
+    140x45x200 traverser le mur d'en face.
+    """
+    if face.kind is FaceKind.WALL:
+        return float(element.width_cm), float(element.height_cm)
+    return float(element.width_cm), float(element.depth_cm)
+
+
+def _assign(element: Element, field: str, value: float) -> None:
+    """Écrit `field` seulement s'il change.
+
+    Réécrire une valeur identique suffit à faire émettre un `UPDATE` par élément à chaque
+    resynchronisation des faces — c'est-à-dire à chaque coup de souris sur le plan.
+    """
+    if getattr(element, field) != value:
+        setattr(element, field, value)
+
+
+def _fit_on_axis(size: float, offset: float, span: float) -> tuple[float, float]:
+    """Ramène `(taille, décalage)` dans un segment de longueur `span`.
+
+    La taille est réduite avant le décalage : un élément plus large que son mur n'y tiendra pas
+    en le déplaçant. Le plancher `MIN_ELEMENT_SIZE_CM` est imposé par la contrainte `> 0` posée
+    en base sur les dimensions.
+    """
+    size = min(size, max(span, MIN_ELEMENT_SIZE_CM))
+    offset = min(max(offset, 0.0), max(span - size, 0.0))
+    return size, offset
+
+
 def _refit_elements(faces: list[Face], room: Room) -> None:
-    """Ramène dans leur mur les éléments qu'un raccourcissement a fait déborder.
+    """Ramène dans leur face les éléments qu'une déformation a fait déborder.
 
     L'alternative — les laisser tels quels — produit une ouverture percée en dehors du mur, donc
     une géométrie 3D absurde. Les supprimer serait pire : l'utilisateur perdrait son travail pour
     avoir déplacé un sommet. On les repousse donc à l'intérieur, ce qui reste visible et
     corrigeable d'un coup de souris.
+
+    Les trois axes sont traités, sur les murs **comme** sur le sol et le plafond : abaisser la
+    hauteur sous plafond ou rétrécir la pièce déborde tout autant qu'un mur raccourci, et ne
+    déclenchait jusqu'ici aucune correction.
     """
+    headroom = max(float(room.ceiling_height_cm), MIN_ELEMENT_SIZE_CM)
     for face in faces:
-        if face.kind is not FaceKind.WALL or None in (
-            face.start_x_cm, face.start_y_cm, face.end_x_cm, face.end_y_cm
-        ):
+        spans = _face_spans(face, room)
+        if spans is None:
             continue
-        length = (
-            (float(face.end_x_cm or 0) - float(face.start_x_cm or 0)) ** 2
-            + (float(face.end_y_cm or 0) - float(face.start_y_cm or 0)) ** 2
-        ) ** 0.5
+        span_u, span_v = spans
         for element in face.elements:
-            if element.width_cm > length:
-                element.width_cm = max(1.0, length)
-            maximum = length - element.width_cm
-            if element.x_offset_cm > maximum:
-                element.x_offset_cm = max(0.0, maximum)
+            size_u, size_v = _element_footprint(element, face)
+            size_u, offset_u = _fit_on_axis(size_u, element.x_offset_cm, span_u)
+            size_v, offset_v = _fit_on_axis(size_v, element.y_offset_cm, span_v)
+            _assign(element, "x_offset_cm", offset_u)
+            _assign(element, "y_offset_cm", offset_v)
+            _assign(element, "width_cm", size_u)
+            if face.kind is FaceKind.WALL:
+                _assign(element, "height_cm", size_v)
+            else:
+                _assign(element, "depth_cm", size_v)
+                # La hauteur d'un meuble posé au sol se mesure contre la hauteur sous plafond, et
+                # non contre l'étendue de la face : elle s'élève dans la pièce.
+                _assign(element, "height_cm", min(element.height_cm, headroom))
 
 
 def element_fits_on_face(element: Element, face: Face, room: Room) -> str | None:
@@ -258,30 +409,69 @@ def element_fits_on_face(element: Element, face: Face, room: Room) -> str | None
     et c'est le calcul du scene graph (P6) qui produit une géométrie absurde — très loin du
     point d'insertion.
     """
-    if face.kind is FaceKind.WALL:
-        if None in (face.start_x_cm, face.start_y_cm, face.end_x_cm, face.end_y_cm):
-            return None
-        length = (
-            (float(face.end_x_cm or 0) - float(face.start_x_cm or 0)) ** 2
-            + (float(face.end_y_cm or 0) - float(face.start_y_cm or 0)) ** 2
-        ) ** 0.5
-        height = room.ceiling_height_cm
-    else:
-        # Sol et plafond : on borne par la boîte englobante du polygone.
-        if not room.polygon:
-            return None
-        xs = [vertex[0] for vertex in room.polygon]
-        ys = [vertex[1] for vertex in room.polygon]
-        length, height = max(xs) - min(xs), max(ys) - min(ys)
+    if face.kind is not FaceKind.WALL and element.kind in OPENING_KINDS:
+        return (
+            f"une ouverture ne peut pas être posée sur la face {face.label} : "
+            "un percement n'a de sens que dans un mur"
+        )
 
-    if element.x_offset_cm < 0 or element.x_offset_cm + element.width_cm > length + 1:
+    spans = _face_spans(face, room)
+    if spans is None:
+        return None
+    span_u, span_v = spans
+    size_u, size_v = _element_footprint(element, face)
+    axis_v = "hauteur" if face.kind is FaceKind.WALL else "profondeur"
+
+    if element.x_offset_cm < 0 or element.x_offset_cm + size_u > span_u + FIT_TOLERANCE:
         return (
             f"l'élément déborde de la face {face.label} en largeur "
-            f"({element.x_offset_cm} + {element.width_cm} > {round(length, 1)} cm)"
+            f"({element.x_offset_cm} + {size_u} > {round(span_u, 1)} cm)"
         )
-    if element.y_offset_cm < 0 or element.y_offset_cm + element.height_cm > height + 1:
+    if element.y_offset_cm < 0 or element.y_offset_cm + size_v > span_v + FIT_TOLERANCE:
         return (
-            f"l'élément déborde de la face {face.label} en hauteur "
-            f"({element.y_offset_cm} + {element.height_cm} > {round(height, 1)} cm)"
+            f"l'élément déborde de la face {face.label} en {axis_v} "
+            f"({element.y_offset_cm} + {size_v} > {round(span_v, 1)} cm)"
         )
+    too_tall = element.height_cm > room.ceiling_height_cm + FIT_TOLERANCE
+    if face.kind is not FaceKind.WALL and too_tall:
+        return (
+            f"l'élément est plus haut que la pièce "
+            f"({element.height_cm} > {round(room.ceiling_height_cm, 1)} cm sous plafond)"
+        )
+    return None
+
+
+def _overlap(start_a: float, size_a: float, start_b: float, size_b: float) -> float:
+    return min(start_a + size_a, start_b + size_b) - max(start_a, start_b)
+
+
+def openings_overlap(element: Element, face: Face) -> str | None:
+    """Message d'erreur si `element` recouvre une autre ouverture de la même face.
+
+    Deux trous sécants ne sont pas triangulables : `earcut`, l'algorithme derrière
+    `THREE.Shape`, n'accepte que des trous disjoints. Sur deux fenêtres qui se croisent il retire
+    leur différence symétrique — 5 860 cm² au lieu des 27 460 de leur union — et le mur apparaît
+    percé de biais. Deux ouvertures posées bord à bord restent acceptées : elles ne se croisent
+    pas, elles se touchent.
+
+    L'élément candidat est écarté de la comparaison par son identité **et** par son `id` : à la
+    création il n'a pas encore d'`id`, et à la modification il est déjà dans `face.elements` avec
+    ses nouvelles valeurs — il se recouvrirait lui-même.
+    """
+    if element.kind not in OPENING_KINDS:
+        return None
+    for other in face.elements:
+        if other is element or other.kind not in OPENING_KINDS:
+            continue
+        if other.id is not None and other.id == element.id:
+            continue
+        along = _overlap(element.x_offset_cm, element.width_cm, other.x_offset_cm, other.width_cm)
+        across = _overlap(
+            element.y_offset_cm, element.height_cm, other.y_offset_cm, other.height_cm
+        )
+        if along > FIT_TOLERANCE and across > FIT_TOLERANCE:
+            return (
+                f"cette ouverture en recouvre une autre sur la face {face.label} "
+                f"(recouvrement de {round(along, 1)} x {round(across, 1)} cm)"
+            )
     return None

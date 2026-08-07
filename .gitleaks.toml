@@ -1,0 +1,16 @@
+# Configuration de gitleaks (recherche de secrets dans l'historique Git), utilisée par la CI.
+#
+# Les règles par défaut sont conservées telles quelles ; seules des exceptions explicites sont
+# ajoutées. Une exception se justifie ligne à ligne : un scanner qu'on fait taire globalement ne
+# sert plus à rien.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Mots de passe et empreintes des jeux d'essai. Ce sont des valeurs inventées, indispensables pour
+que les tests d'authentification aient un sens, et elles n'ouvrent l'accès à rien. Le chemin est
+restreint aux tests : un secret déposé dans le code applicatif reste signalé.
+"""
+paths = ['''^backend/tests/''']

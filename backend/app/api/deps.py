@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -14,7 +14,25 @@ from app.models.user import User
 # `tokenUrl` alimente le bouton « Authorize » de /docs ; il doit pointer sur la vraie route.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
+# Nom de l'attribut portant la session sur `request.state`.
+SESSION_STATE_ATTRIBUTE = "db_session"
+
+
+async def request_session(
+    request: Request, session: Annotated[AsyncSession, Depends(get_session)]
+) -> AsyncSession:
+    """Session de la requête, également déposée sur `request.state`.
+
+    Le dépôt sert au filet de sécurité de `app/api/conflicts.py` : il rattrape une collision
+    remontée par un `flush` implicite, et doit pouvoir annuler la transaction avant de répondre.
+    Sans ça, la session reste « à annuler » et la requête suivante échoue en `PendingRollbackError`
+    — une panne qui survit à la requête fautive.
+    """
+    setattr(request.state, SESSION_STATE_ATTRIBUTE, session)
+    return session
+
+
+SessionDep = Annotated[AsyncSession, Depends(request_session)]
 
 _CREDENTIALS_ERROR = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,

@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from celery.signals import worker_process_init
+
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.models.base import utcnow
@@ -33,12 +35,9 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
     from sqlmodel import col, select
 
     from app.api.scene import project_to_plain_dict
-    from app.db import get_session_factory, reset_engine
+    from app.db import get_session_factory
     from app.models.plan import Face, Project, Room
 
-    # Le worker Celery est un autre processus : son moteur doit être créé chez lui, jamais hérité
-    # d'un fork du serveur web — les connexions ne survivent pas au fork.
-    reset_engine()
     async with get_session_factory()() as session:
         project = (
             await session.execute(
@@ -73,6 +72,24 @@ def run_blocking[T](coroutine: Coroutine[Any, Any, T]) -> T:
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coroutine).result()
+
+
+@worker_process_init.connect  # type: ignore[untyped-decorator]
+def _renew_engine_after_fork(**_kwargs: Any) -> None:
+    """Abandonne le moteur hérité du parent, **une seule fois par processus** de worker.
+
+    Une connexion PostgreSQL ne survit pas à un `fork` : deux processus qui écrivent sur la même
+    socket se répondent mutuellement. Le moteur est donc jeté ici, au démarrage du processus
+    enfant, et non dans la fonction de chargement où il l'était auparavant — à cet endroit il
+    était refait à *chaque* tâche, et le même appel était en plus emprunté par la route d'export
+    direct, en plein traitement HTTP.
+
+    `close=False` est essentiel : ces connexions appartiennent encore au parent, les fermer
+    depuis l'enfant couperait le serveur web sous lui.
+    """
+    from app.db import reset_engine
+
+    run_blocking(reset_engine(close=False))
 
 
 # `type: ignore` : le décorateur de Celery n'est pas typé, et `celery.*` est déclaré sans stubs

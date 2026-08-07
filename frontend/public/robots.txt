@@ -1,0 +1,9 @@
+# Rien de ce service n'a vocation à être indexé : chaque URL utile mène soit à un espace
+# authentifié, soit à une vue partagée dont le jeton donne accès à la géométrie complète du
+# logement d'un client.
+#
+# Ce fichier ne protège que des robots qui le respectent. La vraie garantie est l'en-tête
+# X-Robots-Tag posé par nginx sur /partage/ et /api/public/ (frontend/nginx/).
+
+User-agent: *
+Disallow: /

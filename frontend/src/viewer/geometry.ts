@@ -45,15 +45,30 @@ export function buildShape(outline: number[][], holes: number[][][]): Shape {
   return shape
 }
 
+/** Axe de révolution d'une primitive de révolution, tel que le backend le publie. */
+export type PrimitiveAxis = 'x' | 'y' | 'z'
+
 /** Géométrie d'une primitive, mise à l'échelle par sa boîte englobante. */
 export function primitiveGeometry(
   size: readonly number[],
   type: string,
+  axis: PrimitiveAxis = 'y',
 ): BufferGeometry {
   const [width, height, depth] = [size[0] ?? 1, size[1] ?? 1, size[2] ?? 1]
 
   if (type === 'cylinder') {
-    return new CylinderGeometry(width / 2, depth / 2, height, 24)
+    // Un cylindre unitaire mis à l'échelle, comme la sphère plus bas : c'est ce qui donne une
+    // section elliptique quand largeur et profondeur diffèrent. `CylinderGeometry` ne prend qu'un
+    // rayon par extrémité — lui passer la demi-largeur en haut et la demi-profondeur en bas
+    // produit un CÔNE dès que les deux ne sont pas égales, ce qui est le cas de cinq recettes du
+    // catalogue (poignée de porte, alvéole de prise, barre d'appui, robinets).
+    const geometry = new CylinderGeometry(0.5, 0.5, 1, 24)
+    // La révolution est sur Y par défaut. On couche le cylindre AVANT la mise à l'échelle, pour
+    // que largeur, hauteur et profondeur restent celles de la boîte englobante du monde.
+    if (axis === 'x') geometry.rotateZ(Math.PI / 2)
+    if (axis === 'z') geometry.rotateX(Math.PI / 2)
+    geometry.scale(width, height, depth)
+    return geometry
   }
   if (type === 'sphere') {
     // Une sphère unitaire mise à l'échelle : c'est ce qui permet un ellipsoïde quand la boîte

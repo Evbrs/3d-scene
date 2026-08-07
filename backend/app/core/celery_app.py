@@ -17,8 +17,10 @@ def build_celery_app() -> Celery:
     settings = get_settings()
     # En mode immédiat, le broker et le backend de résultats sont en mémoire : la suite de tests
     # tourne ainsi sans Redis, sans que le code applicatif ait à connaître ce cas.
-    broker = "memory://" if settings.celery_eager else settings.redis_url
-    backend = "cache+memory://" if settings.celery_eager else settings.redis_url
+    # Base Redis dédiée au courtier. Le cache de scène écrit sans plafond ; le partager avec la
+    # file d'export laissait une session d'édition chargée faire tomber cette file.
+    broker = "memory://" if settings.celery_eager else settings.broker_redis_url
+    backend = "cache+memory://" if settings.celery_eager else settings.broker_redis_url
 
     app = Celery("renovation", broker=broker, backend=backend, include=["app.tasks.exports"])
     app.conf.update(

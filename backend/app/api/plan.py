@@ -8,12 +8,13 @@ revérifier le propriétaire.
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import col, select
 
+from app.api.conflicts import STALE_MESSAGE, ConflictAwareRoute, PlanConflict
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import (
     get_owned_element,
@@ -22,7 +23,7 @@ from app.api.permissions import (
     get_owned_room,
 )
 from app.core.cache import scene_cache
-from app.models.base import utcnow
+from app.models.base import ElementKind, utcnow
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 from app.schemas.plan import (
     ConflictDetail,
@@ -41,12 +42,14 @@ from app.schemas.plan import (
     RoomUpdate,
 )
 from app.services.faces import (
+    OPENING_KINDS,
     FaceRemovalWouldLoseElements,
     element_fits_on_face,
+    openings_overlap,
     sync_room_faces,
 )
 
-router = APIRouter(prefix="/api", tags=["plan"])
+router = APIRouter(prefix="/api", tags=["plan"], route_class=ConflictAwareRoute)
 
 # Le 409 est documenté dans l'OpenAPI : c'est la source de vérité du frontend
 # (`docs/plan-generation-ia.md` §6), un conflit non déclaré y serait invisible.
@@ -57,13 +60,12 @@ CONFLICT_RESPONSE: dict[int | str, dict[str, Any]] = {
     }
 }
 
+# Champs d'un élément qui n'ont de sens que pour un meuble (spec §5 : « renseignés uniquement
+# pour `kind == FURNITURE` »).
+FURNITURE_ONLY_FIELDS = ("furniture_type_id", "colors", "variant_params")
 
-def _conflict(project: Project) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail="Le projet a été modifié entre-temps",
-        headers={"X-Current-Version": str(project.version)},
-    )
+# Champs d'une pièce dont la modification invalide la géométrie des faces et de ce qui y est posé.
+RESYNCHRONIZING_FIELDS = frozenset({"polygon", "ceiling_height_cm", "wall_thickness_cm"})
 
 
 async def _claim_project(
@@ -80,11 +82,14 @@ async def _claim_project(
     Sans le point 2, une modification de pièce, de face ou d'élément laisserait `version`
     inchangée : deux clients éditant le même plan resteraient en « dernière écriture gagne »,
     exactement l'option que la spec écarte. C'est aussi ce qui fait remonter un projet
-    activement édité en tête de la liste triée par `updated_at`.
+    activement édité en tête de la liste triée par `updated_at`. L'affectation reste explicite
+    malgré le `onupdate` du modèle : `onupdate` ne s'applique qu'à un `UPDATE` déjà émis, or
+    toucher un projet par ailleurs inchangé est précisément le but ici.
     """
     if client_version is not None and client_version != project.version:
-        raise _conflict(project)
+        raise PlanConflict(STALE_MESSAGE, current_version=project.version)
     project.updated_at = utcnow()
+
 
 # Chargement en une passe de l'arbre complet : sans ça, sérialiser un projet déclenche une
 # requête par pièce, par face et par élément (spec §8, cas 4 — N+1).
@@ -92,13 +97,31 @@ FULL_TREE = selectinload(Project.rooms).options(  # type: ignore[arg-type]
     selectinload(Room.faces).options(selectinload(Face.elements))  # type: ignore[arg-type]
 )
 
+_NOT_FOUND = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND, detail="Ressource introuvable"
+)
+
 
 async def _load_full_project(session: SessionDep, project_id: int) -> Project:
-    return (
+    project = (
         await session.execute(
             select(Project).where(col(Project.id) == project_id).options(FULL_TREE)
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    # `scalar_one` levait ici une 500 dès que la ligne disparaissait entre la vérification de
+    # propriété et la relecture — cas courant avec deux onglets ouverts sur le même plan.
+    if project is None:
+        raise _NOT_FOUND
+    return project
+
+
+async def _delete_row(session: SessionDep, model: type[Room] | type[Element], row_id: int) -> None:
+    """Suppression ensembliste d'une ligne et, par la base, de tout ce qui en dépend.
+
+    Les relations enfant sont en `passive_deletes` et la cascade est déclarée en base : un seul
+    `DELETE` suffit là où la suppression par l'ORM chargeait l'arbre entier ligne à ligne.
+    """
+    await session.execute(delete(model).where(col(model.id) == row_id))
 
 
 # --- Projets ----------------------------------------------------------------------------------
@@ -194,20 +217,37 @@ async def _commit_or_conflict(session: SessionDep, project: Project) -> None:
         await session.commit()
     except StaleDataError as exc:
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Le projet a été modifié entre-temps",
-            headers={"X-Current-Version": str(current_version)},
-        ) from exc
+        raise PlanConflict(STALE_MESSAGE, current_version=current_version) from exc
 
 
-@router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/projects/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=CONFLICT_RESPONSE,
+)
 async def delete_project(
-    project_id: int, session: SessionDep, current_user: CurrentUser
+    project_id: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+    version: Annotated[int | None, Query(ge=1)] = None,
 ) -> Response:
+    """Supprime un projet et tout son arbre.
+
+    La `version` est optionnelle comme sur les autres écritures, mais c'est ici qu'elle compte le
+    plus : sans elle, la route la plus destructrice de l'API était la seule à rester en « dernière
+    écriture gagne » — l'option que la spec §8 (cas 3) écarte explicitement.
+
+    Elle transite par la chaîne de requête et non par un corps : `DELETE` avec corps n'est pas
+    relayé de façon fiable par les intermédiaires, et plusieurs clients HTTP le refusent.
+    """
     project = await get_owned_project(session, project_id, current_user)
+    await _claim_project(session, project, version)
+    # `session.delete` et non un `DELETE` ensembliste : c'est le seul moyen de conserver la
+    # clause `WHERE version = ?` posée par `version_id_col`, donc de refuser une suppression
+    # concurrente. Les enfants ne sont pas chargés pour autant — les relations sont en
+    # `passive_deletes`, la cascade est exécutée par la base (73 SELECT économisés pour 10 pièces).
     await session.delete(project)
-    await session.commit()
+    await _commit_or_conflict(session, project)
     # Seul cas où l'invalidation par version ne suffit pas : aucune version future ne viendra
     # rendre les clés inatteignables, il faut donc les retirer.
     await scene_cache.forget_project(project_id)
@@ -218,13 +258,16 @@ async def delete_project(
 
 
 async def _load_full_room(session: SessionDep, room_id: int) -> Room:
-    return (
+    room = (
         await session.execute(
             select(Room)
             .where(col(Room.id) == room_id)
             .options(selectinload(Room.faces).options(selectinload(Face.elements)))  # type: ignore[arg-type]
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if room is None:
+        raise _NOT_FOUND
+    return room
 
 
 @router.post(
@@ -267,37 +310,46 @@ async def update_room(
     un `200 OK` est une perte de données invisible pour l'utilisateur.
     """
     room = await get_owned_room(session, room_id, current_user)
+    current_version = room.project.version
     await _claim_project(session, room.project, payload.version)
 
     changes = payload.model_dump(exclude_unset=True, exclude={"version", "force"})
     for field, value in changes.items():
         setattr(room, field, value)
-    room.updated_at = utcnow()
 
-    if "polygon" in changes:
+    # La revalidation ne dépend pas que du polygone. Abaisser `ceiling_height_cm` fait sortir du
+    # mur toute fenêtre haute déjà posée, et `wall_thickness_cm` change l'emprise des murs : ces
+    # deux champs déclenchaient jusqu'ici zéro contrôle, et le trou finissait hors du contour
+    # extrudé — invisible dans l'éditeur 2D, absurde en 3D.
+    if RESYNCHRONIZING_FIELDS & changes.keys():
         try:
             await sync_room_faces(session, room, force=payload.force)
         except FaceRemovalWouldLoseElements as exc:
             await session.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"{exc}. Renvoyez la requête avec `force: true` pour confirmer la "
-                    "suppression."
-                ),
+            raise PlanConflict(
+                f"{exc}. Renvoyez la requête avec `force: true` pour confirmer la suppression.",
+                current_version=current_version,
+                code="destructive_change",
             ) from exc
 
     await _commit_or_conflict(session, room.project)
     return await _load_full_room(session, room_id)
 
 
-@router.delete("/rooms/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_room(room_id: int, session: SessionDep, current_user: CurrentUser) -> Response:
+@router.delete(
+    "/rooms/{room_id}", status_code=status.HTTP_204_NO_CONTENT, responses=CONFLICT_RESPONSE
+)
+async def delete_room(
+    room_id: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+    version: Annotated[int | None, Query(ge=1)] = None,
+) -> Response:
     room = await get_owned_room(session, room_id, current_user)
     project = room.project
-    await session.delete(room)
-    await _claim_project(session, project, None)
-    await session.commit()
+    await _claim_project(session, project, version)
+    await _delete_row(session, Room, room_id)
+    await _commit_or_conflict(session, project)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -338,31 +390,60 @@ async def update_face(
         # change rien. Confondre les deux rendait l'effacement impossible.
         covering = changes["covering"] or {}
         face.covering = {key: value for key, value in covering.items() if value is not None}
-    face.updated_at = utcnow()
     await _commit_or_conflict(session, face.room.project)
 
-    return (
+    reloaded = (
         await session.execute(
             select(Face)
             .where(col(Face.id) == face_id)
             .options(selectinload(Face.elements))  # type: ignore[arg-type]
         )
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if reloaded is None:
+        raise _NOT_FOUND
+    return reloaded
 
 
 # --- Éléments ---------------------------------------------------------------------------------
 
 
-def _reject_if_out_of_bounds(element: Element, face: Face) -> None:
-    """Refuse un élément qui déborde de sa face.
+def _unprocessable(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+def _reject_invalid_placement(element: Element, face: Face) -> None:
+    """Refuse un élément mal posé sur sa face.
 
     Sans ce contrôle, une fenêtre posée à 350 cm sur un mur long de 180 cm est acceptée, et c'est
     le calcul du scene graph (P6) qui produit une géométrie absurde — très loin du point
     d'insertion, donc très coûteuse à diagnostiquer.
+
+    Le recouvrement de deux ouvertures est vérifié au même endroit et pour la même raison : deux
+    trous sécants ne sont pas triangulables, et le mur se retrouve percé de travers.
     """
-    problem = element_fits_on_face(element, face, face.room)
-    if problem is not None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=problem)
+    for problem in (
+        element_fits_on_face(element, face, face.room),
+        openings_overlap(element, face),
+    ):
+        if problem is not None:
+            raise _unprocessable(problem)
+
+
+def _reject_incoherent_element(kind: ElementKind, values: dict[str, Any]) -> None:
+    """Refuse une ouverture qui porterait des attributs de meuble.
+
+    La vérification porte sur l'état **fusionné** et non sur la charge utile : un `PATCH` qui ne
+    change que `kind` transformerait sinon un meuble en fenêtre en lui laissant sa recette et ses
+    couleurs, et la contrainte serait contournée en deux requêtes au lieu d'une.
+    """
+    if kind not in OPENING_KINDS:
+        return
+    carried = [field for field in FURNITURE_ONLY_FIELDS if values.get(field)]
+    if carried:
+        raise _unprocessable(
+            f"une ouverture ({kind.value}) ne porte pas de {', '.join(carried)} : "
+            "ces champs ne valent que pour un meuble"
+        )
 
 
 async def _check_furniture_type(session: SessionDep, furniture_type_id: int | None) -> None:
@@ -391,20 +472,23 @@ async def create_element(
     face_id: int, payload: ElementCreate, session: SessionDep, current_user: CurrentUser
 ) -> Element:
     face = await get_owned_face(session, face_id, current_user)
+    values = payload.model_dump(exclude={"version"})
+    # Toutes les validations qui interrogent la base passent **avant** `_claim_project` : après,
+    # le projet est marqué modifié, et la moindre lecture déclenche un autoflush qui remonte la
+    # collision de version sous forme de 500 au lieu du 409 attendu.
+    _reject_incoherent_element(payload.kind, values)
     await _check_furniture_type(session, payload.furniture_type_id)
     await _claim_project(session, face.room.project, payload.version)
 
-    element = Element(**payload.model_dump(exclude={"version"}), face_id=face_id)
-    _reject_if_out_of_bounds(element, face)
+    element = Element(**values, face_id=face_id)
+    _reject_invalid_placement(element, face)
 
     session.add(element)
     try:
         await _commit_or_conflict(session, face.room.project)
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Élément invalide"
-        ) from exc
+        raise _unprocessable("Élément invalide") from exc
     await session.refresh(element)
     return element
 
@@ -416,29 +500,42 @@ async def update_element(
     element_id: int, payload: ElementUpdate, session: SessionDep, current_user: CurrentUser
 ) -> Element:
     element = await get_owned_element(session, element_id, current_user)
-    await _claim_project(session, element.face.room.project, payload.version)
 
     changes = payload.model_dump(exclude_unset=True, exclude={"version"})
+    # `colors: null` et `variant_params: null` **effacent**, comme `covering: null` sur une face ;
+    # écrire NULL dans ces colonnes `NOT NULL` sortait en 500.
+    for blob in ("colors", "variant_params"):
+        if changes.get(blob, {}) is None:
+            changes[blob] = {}
+    merged = {field: getattr(element, field) for field in FURNITURE_ONLY_FIELDS} | changes
+    _reject_incoherent_element(changes.get("kind") or element.kind, merged)
     if "furniture_type_id" in changes:
         await _check_furniture_type(session, changes["furniture_type_id"])
 
+    await _claim_project(session, element.face.room.project, payload.version)
     for field, value in changes.items():
         setattr(element, field, value)
-    _reject_if_out_of_bounds(element, element.face)
-    element.updated_at = utcnow()
+    _reject_invalid_placement(element, element.face)
 
     await _commit_or_conflict(session, element.face.room.project)
     await session.refresh(element)
     return element
 
 
-@router.delete("/elements/{element_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/elements/{element_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=CONFLICT_RESPONSE,
+)
 async def delete_element(
-    element_id: int, session: SessionDep, current_user: CurrentUser
+    element_id: int,
+    session: SessionDep,
+    current_user: CurrentUser,
+    version: Annotated[int | None, Query(ge=1)] = None,
 ) -> Response:
     element = await get_owned_element(session, element_id, current_user)
     project = element.face.room.project
-    await session.delete(element)
-    await _claim_project(session, project, None)
-    await session.commit()
+    await _claim_project(session, project, version)
+    await _delete_row(session, Element, element_id)
+    await _commit_or_conflict(session, project)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

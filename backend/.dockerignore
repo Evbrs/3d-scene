@@ -5,3 +5,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
+
+# Rien de ce qui suit ne sert à exécuter l'application : le garder hors du contexte allège
+# l'image de production et évite d'y publier des fichiers qui n'y ont rien à faire.
+tests/
+*.md
+htmlcov/
+.coverage
