@@ -23,7 +23,7 @@
     "vue-router": "^5.2.0"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
+    "@types/node": "^26.1.2",
     "@types/three": "^0.185.3",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.4.11",
