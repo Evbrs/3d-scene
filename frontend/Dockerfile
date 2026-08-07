@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Image de développement : Vite en mode dev avec HMR.
 # L'image de production (build statique servi par un reverse proxy) arrive en P12.
-FROM node:22-slim
+FROM node:25-slim
 
 WORKDIR /app
 

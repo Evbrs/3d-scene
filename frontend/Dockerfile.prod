@@ -3,7 +3,7 @@
 # L'image de développement (`Dockerfile`) fait tourner Vite avec le rechargement à chaud ; elle
 # n'a rien à faire en production, où l'on veut des fichiers figés et aucun outil de build.
 
-FROM node:22-slim AS build
+FROM node:25-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
