@@ -99,42 +99,66 @@ async def test_the_shelf_count_of_an_instance_changes_its_geometry(
 
     La déclaration vit dans la recette (spec §4.4). Elle n'avait pas de colonne où être rangée,
     donc `resolve_variants` recevait toujours `None` et retombait sur les répétitions codées dans
-    la recette. Le test compare deux instances de la **même** recette : seule la valeur d'instance
-    change, donc seul le câblage peut expliquer une différence.
+    la recette. Le test compare plusieurs instances de la **même** recette : seule la valeur
+    d'instance change, donc seul le câblage peut expliquer une différence.
+
+    Les quatre instances coexistent au lieu d'être posées puis retirées tour à tour. Recycler un
+    emplacement mesurait la suite de tests elle-même : SQLite réattribue la clé primaire libérée,
+    et la session partagée par les requêtes du test — créée avec `expire_on_commit=False` — sert
+    alors depuis son identity map l'objet **précédent**, avec l'ancien `variant_params`. En
+    production le problème n'existe pas, chaque requête ouvrant sa propre session.
     """
     await seed_catalog(session)
     bibliotheque_id = (await auth_client.get("/api/furniture-types/bibliotheque")).json()["id"]
     project, room = await _plan(auth_client)
-    face_a = next(face for face in room["faces"] if face["label"] == "A")
+    murs = [face for face in room["faces"] if face["kind"] == "wall"]
 
-    async def shelves(variant_params: dict[str, Any]) -> int:
+    cas: list[dict[str, Any]] = [
+        {},
+        {"nb_etageres": 3},
+        {"nb_etageres": 9},
+        {"nb_etageres": 99},
+        {"nb_etageres": 0},
+        {"nb_etageres": True},
+        {"nb_etageres": "beaucoup"},
+        {"nb_tiroirs": 2},
+    ]
+    # Deux bibliothèques de 80 cm par mur : le plus court fait 300 cm, elles y tiennent côte à
+    # côte. Le mur retenu n'a aucune incidence sur le nombre d'étagères, qui ne dépend que de la
+    # recette et de la valeur d'instance.
+    poses: list[int] = []
+    for rang, variant_params in enumerate(cas):
+        mur = murs[rang % len(murs)]
         element = (
             await auth_client.post(
-                f"/api/faces/{face_a['id']}/elements",
+                f"/api/faces/{mur['id']}/elements",
                 json={"kind": "furniture", "furniture_type_id": bibliotheque_id,
-                      "x_offset_cm": 0, "y_offset_cm": 0,
+                      "x_offset_cm": (rang // len(murs)) * 100, "y_offset_cm": 0,
                       "width_cm": 80, "height_cm": 180, "depth_cm": 30,
                       "variant_params": variant_params},
             )
         ).json()
-        scene = (await auth_client.get(f"/api/projects/{project['id']}/scene")).json()
-        node = next(item for item in _nodes(scene, "furniture")
-                    if item["element_id"] == element["id"])
-        await auth_client.delete(f"/api/elements/{element['id']}")
-        return sum(1 for part in node["primitives"] if part["color_slot"] == "etagere")
+        poses.append(element["id"])
 
-    assert await shelves({}) == 5  # la valeur de la recette, faute de choix d'instance
-    assert await shelves({"nb_etageres": 3}) == 3
-    assert await shelves({"nb_etageres": 9}) == 9
+    scene = (await auth_client.get(f"/api/projects/{project['id']}/scene")).json()
+    par_element = {node["element_id"]: node for node in _nodes(scene, "furniture")}
+
+    def etageres(element_id: int) -> int:
+        primitives = par_element[element_id]["primitives"]
+        return sum(1 for part in primitives if part["color_slot"] == "etagere")
+
+    assert etageres(poses[0]) == 5  # la valeur de la recette, faute de choix d'instance
+    assert etageres(poses[1]) == 3
+    assert etageres(poses[2]) == 9
     # Bornage plutôt que refus : un meuble prévisible vaut mieux qu'un meuble disparu du plan.
-    assert await shelves({"nb_etageres": 99}) == 10
-    assert await shelves({"nb_etageres": 0}) == 1
+    assert etageres(poses[3]) == 10
+    assert etageres(poses[4]) == 1
     # `isinstance(True, int)` vaut `True` en Python : sans exclusion explicite des booléens,
     # `true` produirait une étagère unique au lieu d'être ignoré.
-    assert await shelves({"nb_etageres": True}) == 5
-    assert await shelves({"nb_etageres": "beaucoup"}) == 5
+    assert etageres(poses[5]) == 5
+    assert etageres(poses[6]) == 5
     # Un paramètre que la recette ne déclare pas ne pilote rien.
-    assert await shelves({"nb_tiroirs": 2}) == 5
+    assert etageres(poses[7]) == 5
 
 
 async def test_a_variant_only_touches_the_slots_its_recipe_names(
