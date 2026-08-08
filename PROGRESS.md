@@ -633,3 +633,54 @@ partagée via Redis (celle en place vit dans la mémoire de chaque processus, do
 plusieurs workers), et supervision Sentry.
 
 Suite : **254 tests backend**, 44 tests frontend, `ruff` et `mypy --strict` verts.
+
+---
+
+## Vague 2 — multi-locataire, métré, devis et documents de chantier · **fait**
+
+*Quatre lots menés en parallèle avec propriété exclusive des fichiers, puis un agent d'assemblage
+dont c'était le seul travail (`docs/plan-generation-ia.md` §4). Décisions de contrat consignées
+dans `docs/spec-complete.md` §10 (amendements A1 à A3).*
+
+| Lot | Contenu |
+|---|---|
+| **V2-L1** | `organization` / `membership` / `invitation`, quatre rôles ordonnés, invitations à jeton non rejouable (la base ne garde qu'un SHA-256). `app/api/permissions.py` réécrit : l'appartenance **acceptée** remplace `Project.owner_id`, qui n'autorise plus rien. Migration avec rétro-remplissage en trois temps — une organisation personnelle par propriétaire distinct, l'appartenance `owner` correspondante, puis `NOT NULL`. |
+| **V2-L2** | `app/geometry/quantities.py::build_takeoff` — fonction pure, 4 fixtures calculées à la main. Surfaces nettes, linéaires au **nu intérieur** (et non sur l'axe), plinthe amputée des percements qui touchent le sol, calepinage par motif avec chutes, unités entières et coupes comptées trame par trame. |
+| **V2-L3** | `services/export_pdf.py` réécrit : une planche A4 paysage par mur, chaînes de cotes, allèges, échelle **normalisée et écrite**, cartouche, page de garde. Les 4 routes d'export ont enfin un appelant côté frontend. |
+| **V2-L4** | `price_book` / `price_item` / `face_costing` / `quote` / `quote_line` / `quote_counter`, moteur de chiffrage pur, correspondance `material → price_item` en 4 paliers, et Factur-X (PDF/A-3 + XML CII BASIC WL) produit sans aucune dépendance ajoutée. 19 routes. |
+
+**Les trois invariants d'argent, tenus par des tests dédiés** : tout montant est un entier de
+centimes ; la TVA est arrondie une seule fois, par taux, sur la somme des bases (`vat_buckets_from`
+est le seul endroit du dépôt qui l'arrondit) ; et un `price_item` modifié ou supprimé laisse un
+devis déjà émis **strictement** inchangé — `quote_line` copie, elle ne joint jamais.
+
+**La régression qui n'était pas permise : la fuite entre locataires.** Le test s'écrit avant la
+réécriture des permissions, pas après. `tests/test_permissions_locataire.py` confronte 47 routes
+authentifiées à un membre d'une autre organisation — toutes répondent 404, jamais 403 — et le fait
+avec deux garde-fous de complétude qui lisent le schéma OpenAPI publié :
+
+- une route portant un identifiant de locataire et absente de la liste fait échouer la suite ;
+- une route **de liste**, qui n'en porte aucun et par laquelle une fuite serait totale, doit être
+  classée à la main entre « appartient à un locataire » et « globale ». C'est ce second garde-fou
+  qui a révélé que `GET /api/quotes` — l'identité des clients de l'artisan et ses prix, d'un seul
+  appel — n'avait aucun test de non-fuite. Il en a un, et il a été vérifié en cassant le filtre
+  exprès : le test échoue bien.
+
+### Assemblage — ce que la réconciliation a corrigé
+
+- **La page de garde du dossier de plans et le métré donnaient deux surfaces différentes pour la
+  même pièce** (12,00 m² contre 11,31 m²) : le PDF mesurait l'aire du contour saisi, c'est-à-dire
+  la ligne médiane des murs, surévaluée de 6 à 20 %. Les deux lisent désormais la même fonction,
+  `geometry.scene.net_floor_area`, rendue publique pour cela plutôt que dupliquée.
+- **Les élévations étiquetaient tout meuble « Meuble »** : le chargement de l'export ne lisait que
+  `furniture_type_id`. Le nom du catalogue est joint en une requête pour tout le projet.
+- Instantané OpenAPI régénéré (**45 chemins**, 21 nouveaux pour 31 opérations), `Project.organization_id` ajouté au
+  back-office, docstring de `models/user.py` corrigée (elle désignait encore `owner_id` comme le
+  socle des permissions), fixtures 07 à 10 documentées dans leur `README.md`.
+- **Une seule tête Alembic** (`4c1e8b7a92d5`), vérifiée sur PostgreSQL 17 : aller-retour complet
+  jusqu'à `base` sans type ENUM ni table résiduels, `alembic check` sans dérive, et
+  rétro-remplissage confronté à des données réellement présentes — deux projets d'un même
+  propriétaire atterrissent bien dans une seule organisation, et aucun locataire n'est fusionné.
+
+Suite : **709 tests backend** (708 sur SQLite, le 709ᵉ ne s'exécutant que sur PostgreSQL), **96
+tests frontend**, `ruff`, `mypy --strict`, `eslint` et `npm run build` verts.

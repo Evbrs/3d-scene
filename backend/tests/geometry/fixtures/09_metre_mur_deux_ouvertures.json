@@ -1,0 +1,62 @@
+{
+  "description": "Métré d'un mur unique portant une fenêtre et une porte, carrelé en 50 x 50 posé droit : les percements retirent de la surface, avalent des carreaux entiers et en transforment d'autres en coupes.",
+  "reasoning": [
+    "Même mur que la fixture 02 : de (0,0) à (400,0), 400 de long, 250 de haut. Fenêtre de u = 80 à 170 et de v = 100 à 210 ; porte de u = 250 à 340 et de v = 0 à 204.",
+    "Surface brute = 400 x 250 = 100000 cm² = 10 m².",
+    "Percements : fenêtre 90 x 110 = 9900 cm², porte 90 x 204 = 18360 cm², total 28260 cm² = 2.826 m². Surface nette = 71740 cm² = 7.174 m².",
+    "La porte descend au sol (v = 0), la fenêtre non (allège à 100) : le mur perd 0.9 ml de plinthe. Mais ce mur est SEUL, il ne referme aucun contour : le métré refuse de chiffrer un périmètre au nu intérieur, une plinthe et une corniche, et le dit dans `warnings`. Un périmètre inventé ici ferait facturer une plinthe qui n'existe pas.",
+    "La pièce garde en revanche son `net_floor_area_cm2` (113100 cm² = 11.31 m²) et donc son volume 113100 x 250 = 28275000 cm³ = 28.275 m³, même si aucune face de sol n'est décrite.",
+    "Calepinage, faïence 50 x 50 posée droite. Unité = 2500 cm² = 0.25 m². Chute de 8 %.",
+    "  Commande : 71740 x 1.08 = 77479.2 cm² = 7.74792 m², arrondi à 7.748 m². Il faut ceil(77479.2 / 2500) = ceil(30.99) = 31 carreaux.",
+    "  Trame : 400 / 50 = 8 colonnes et 250 / 50 = 5 rangs, tous deux exacts — aucune coupe de rive. 40 positions, numérotées i de 0 à 7 en u et j de 0 à 4 en v, la position (i,j) couvrant u de 50i à 50i+50 et v de 50j à 50j+50.",
+    "  Fenêtre (u 80-170, v 100-210). Positions entièrement dedans : il faut 80 <= 50i et 50i+50 <= 170, donc i = 2 seul ; et 100 <= 50j et 50j+50 <= 210, donc j = 2 ou 3. Soit 2 carreaux avalés.",
+    "    Positions à cheval : i de 1 à 3 (i = 0 s'arrête à 50 < 80, i = 4 commence à 200 > 170) et j de 2 à 4 (j = 4 couvre v 200-250 et mord sur les 10 derniers centimètres de la fenêtre). Cela fait 3 x 3 = 9 positions touchées, moins les 2 avalées, donc 7 coupes.",
+    "  Porte (u 250-340, v 0-204). Positions entièrement dedans : 250 <= 50i et 50i+50 <= 340 donne i = 5 seul ; 50j+50 <= 204 donne j de 0 à 3. Soit 4 carreaux avalés.",
+    "    Positions à cheval : i = 5 et 6 (i = 4 finit exactement en 250, il ne mord pas ; i = 7 commence en 350 > 340) et j de 0 à 4. Cela fait 2 x 5 = 10 positions touchées, moins les 4 avalées, donc 6 coupes.",
+    "  Bilan : 40 positions, 6 avalées par les percements, 7 + 6 = 13 coupes, et 40 - 6 - 13 = 21 carreaux entiers.",
+    "  21 entiers et 13 coupes pour 31 unités commandées : les coupes ne consomment pas une unité chacune, c'est ce que dit le taux de chute."
+  ],
+  "input": {
+    "project_id": 9,
+    "rooms": [
+      {
+        "id": 90,
+        "name": "Salle d'eau",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {"id": 900, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0, "covering": {"material": "faience", "unit_width_cm": 50, "unit_height_cm": 50, "pattern": "straight"}, "elements": [
+            {"id": 9000, "kind": "window", "x_offset_cm": 80, "y_offset_cm": 100, "width_cm": 90, "height_cm": 110, "depth_cm": 12, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}},
+            {"id": 9001, "kind": "door_hinged", "x_offset_cm": 250, "y_offset_cm": 0, "width_cm": 90, "height_cm": 204, "depth_cm": 5, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]}
+        ]
+      }
+    ]
+  },
+  "expected_room": {
+    "room_id": 90,
+    "name": "Salle d'eau",
+    "ceiling_height_m": 2.5,
+    "wall_thickness_m": 0.1,
+    "perimeter_ml": 4.0,
+    "net_perimeter_ml": null,
+    "skirting_ml": null,
+    "cornice_ml": null,
+    "floor_area_m2": 11.31,
+    "ceiling_area_m2": 11.31,
+    "volume_m3": 28.275,
+    "wall_gross_area_m2": 10.0,
+    "wall_openings_area_m2": 2.826,
+    "wall_net_area_m2": 7.174,
+    "opening_count": 2,
+    "door_count": 1,
+    "window_count": 1
+  },
+  "expected_faces": [
+    {"face_id": 900, "face_label": "A", "kind": "wall", "length_m": 4.0, "height_m": 2.5, "gross_area_m2": 10.0, "openings_area_m2": 2.826, "net_area_m2": 7.174, "opening_count": 2, "door_count": 1, "window_count": 1, "skirting_deduction_ml": 0.9, "material": "faience", "tiling": {"pattern": "straight", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.08, "ordered_area_m2": 7.748, "units_total": 31, "full_units": 21, "cut_units": 13}}
+  ],
+  "expected_trame_positions": 40,
+  "expected_positions_swallowed_by_openings": 6,
+  "expected_warning_count": 1
+}

@@ -1,8 +1,8 @@
 """API CRUD du plan 2D (`docs/spec-complete.md` §7, phase P3).
 
 Toutes les routes sont authentifiées et passent par les permissions objet
-(`app/api/permissions.py`) : aucun identifiant fourni par le client n'est utilisé sans
-revérifier le propriétaire.
+(`app/api/permissions.py`) : aucun identifiant fourni par le client n'est utilisé sans revérifier
+l'appartenance à l'organisation qui porte le projet, et le rôle qu'y a l'appelant.
 """
 
 from typing import Annotated, Any
@@ -17,6 +17,8 @@ from sqlmodel import col, select
 from app.api.conflicts import STALE_MESSAGE, ConflictAwareRoute, PlanConflict
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import (
+    accessible_organization_ids,
+    default_organization_id,
     get_owned_element,
     get_owned_face,
     get_owned_project,
@@ -24,6 +26,7 @@ from app.api.permissions import (
 )
 from app.core.cache import scene_cache
 from app.models.base import ElementKind, utcnow
+from app.models.organization import OrganizationRole
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 from app.schemas.plan import (
     ConflictDetail,
@@ -131,7 +134,13 @@ async def _delete_row(session: SessionDep, model: type[Room] | type[Element], ro
 async def create_project(
     payload: ProjectCreate, session: SessionDep, current_user: CurrentUser
 ) -> Project:
-    project = Project(**payload.model_dump(), owner_id=current_user.id or 0)
+    # `owner_id` n'est plus qu'une trace de création : c'est `organization_id` qui portera les
+    # droits d'accès (`app/api/permissions.py`).
+    project = Project(
+        **payload.model_dump(),
+        owner_id=current_user.id or 0,
+        organization_id=await default_organization_id(session, current_user),
+    )
     session.add(project)
     await session.commit()
     return await _load_full_project(session, project.id or 0)
@@ -144,12 +153,21 @@ async def list_projects(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ProjectPage:
-    """Liste paginée des projets de l'utilisateur.
+    """Liste paginée des projets accessibles à l'utilisateur.
 
     Vue résumée : charger l'arbre complet de chaque projet pour une liste serait un gâchis
     proportionnel à la taille des plans.
+
+    Le filtre porte sur les organisations du compte et non sur `owner_id` : c'est exactement la
+    forme que sert `ix_project_organization_updated` (`WHERE organization_id IN (…) ORDER BY
+    updated_at DESC`), et c'est ce qui rend visible à tout un cabinet le chantier ouvert par l'un
+    de ses membres.
     """
-    owned = col(Project.owner_id) == current_user.id
+    organization_ids = await accessible_organization_ids(session, current_user)
+    if not organization_ids:
+        return ProjectPage(total=0, limit=limit, offset=offset, items=[])
+
+    owned = col(Project.organization_id).in_(organization_ids)
     total = (
         await session.execute(select(func.count()).select_from(Project).where(owned))
     ).scalar_one()
@@ -193,7 +211,9 @@ async def update_project(
     Si le client fournit `version`, une divergence est signalée par un 409 plutôt que par un
     écrasement silencieux — c'est l'arbitrage tranché par la spec.
     """
-    project = await get_owned_project(session, project_id, current_user)
+    project = await get_owned_project(
+        session, project_id, current_user, OrganizationRole.EDITOR
+    )
 
     changes = payload.model_dump(exclude_unset=True)
     await _claim_project(session, project, changes.pop("version", None))
@@ -240,7 +260,9 @@ async def delete_project(
     Elle transite par la chaîne de requête et non par un corps : `DELETE` avec corps n'est pas
     relayé de façon fiable par les intermédiaires, et plusieurs clients HTTP le refusent.
     """
-    project = await get_owned_project(session, project_id, current_user)
+    project = await get_owned_project(
+        session, project_id, current_user, OrganizationRole.ADMIN
+    )
     await _claim_project(session, project, version)
     # `session.delete` et non un `DELETE` ensembliste : c'est le seul moyen de conserver la
     # clause `WHERE version = ?` posée par `version_id_col`, donc de refuser une suppression
@@ -280,7 +302,9 @@ async def create_room(
     project_id: int, payload: RoomCreate, session: SessionDep, current_user: CurrentUser
 ) -> Room:
     """Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond)."""
-    project = await get_owned_project(session, project_id, current_user)
+    project = await get_owned_project(
+        session, project_id, current_user, OrganizationRole.EDITOR
+    )
 
     values = payload.model_dump()
     await _claim_project(session, project, values.pop("version", None))
@@ -309,7 +333,7 @@ async def update_room(
     tant que `force: true` n'est pas envoyé : perdre des meubles et des ouvertures en réponse à
     un `200 OK` est une perte de données invisible pour l'utilisateur.
     """
-    room = await get_owned_room(session, room_id, current_user)
+    room = await get_owned_room(session, room_id, current_user, OrganizationRole.EDITOR)
     current_version = room.project.version
     await _claim_project(session, room.project, payload.version)
 
@@ -345,7 +369,7 @@ async def delete_room(
     current_user: CurrentUser,
     version: Annotated[int | None, Query(ge=1)] = None,
 ) -> Response:
-    room = await get_owned_room(session, room_id, current_user)
+    room = await get_owned_room(session, room_id, current_user, OrganizationRole.EDITOR)
     project = room.project
     await _claim_project(session, project, version)
     await _delete_row(session, Room, room_id)
@@ -381,7 +405,7 @@ async def update_face(
 
     Ni création ni suppression : les faces découlent du polygone de la pièce.
     """
-    face = await get_owned_face(session, face_id, current_user)
+    face = await get_owned_face(session, face_id, current_user, OrganizationRole.EDITOR)
     await _claim_project(session, face.room.project, payload.version)
 
     changes = payload.model_dump(exclude_unset=True, exclude={"version"})
@@ -471,7 +495,7 @@ async def _check_furniture_type(session: SessionDep, furniture_type_id: int | No
 async def create_element(
     face_id: int, payload: ElementCreate, session: SessionDep, current_user: CurrentUser
 ) -> Element:
-    face = await get_owned_face(session, face_id, current_user)
+    face = await get_owned_face(session, face_id, current_user, OrganizationRole.EDITOR)
     values = payload.model_dump(exclude={"version"})
     # Toutes les validations qui interrogent la base passent **avant** `_claim_project` : après,
     # le projet est marqué modifié, et la moindre lecture déclenche un autoflush qui remonte la
@@ -499,7 +523,9 @@ async def create_element(
 async def update_element(
     element_id: int, payload: ElementUpdate, session: SessionDep, current_user: CurrentUser
 ) -> Element:
-    element = await get_owned_element(session, element_id, current_user)
+    element = await get_owned_element(
+        session, element_id, current_user, OrganizationRole.EDITOR
+    )
 
     changes = payload.model_dump(exclude_unset=True, exclude={"version"})
     # `colors: null` et `variant_params: null` **effacent**, comme `covering: null` sur une face ;
@@ -533,7 +559,9 @@ async def delete_element(
     current_user: CurrentUser,
     version: Annotated[int | None, Query(ge=1)] = None,
 ) -> Response:
-    element = await get_owned_element(session, element_id, current_user)
+    element = await get_owned_element(
+        session, element_id, current_user, OrganizationRole.EDITOR
+    )
     project = element.face.room.project
     await _claim_project(session, project, version)
     await _delete_row(session, Element, element_id)

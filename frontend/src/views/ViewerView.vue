@@ -174,6 +174,46 @@ function capture(): void {
   link.click()
 }
 
+/**
+ * Export PDF du dossier : plan coté et une élévation par mur (spec §3.5).
+ *
+ * Le fichier est produit par un worker Celery — on demande, on sonde, on télécharge. Le contenu
+ * passe par le client HTTP et non par un lien direct : la route exige l'en-tête `Authorization`,
+ * que le navigateur ne joint pas à une navigation.
+ */
+const exporting = ref(false)
+const exportMessage = ref<string | null>(null)
+
+async function exportPdf(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  error.value = null
+  exportMessage.value = 'Génération du dossier PDF en cours…'
+  const projectId = Number(props.projectId)
+
+  try {
+    const accepted = await api.requestPdfExport(projectId)
+    const produced = await api.waitForPdfExport(projectId, accepted.task_id)
+    const blob = await api.downloadExport(projectId, produced.filename)
+
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = produced.filename
+    link.click()
+    // Révoqué au tour suivant seulement : révoquer dans la foulée du clic annule le
+    // téléchargement avant qu'il ait commencé sur plusieurs navigateurs.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+    exportMessage.value = `Dossier téléchargé (${Math.round(produced.size_bytes / 1024)} Ko).`
+  } catch (caught) {
+    exportMessage.value = null
+    error.value = `Export impossible : ${caught instanceof Error ? caught.message : String(caught)}`
+  } finally {
+    exporting.value = false
+  }
+}
+
 async function share(): Promise<void> {
   error.value = null
   try {
@@ -383,7 +423,23 @@ async function share(): Promise<void> {
           >
             🔗 Partager
           </button>
+          <button
+            type="button"
+            :disabled="exporting"
+            :aria-busy="exporting"
+            @click="exportPdf"
+          >
+            {{ exporting ? 'Génération…' : '📄 Exporter en PDF' }}
+          </button>
         </div>
+
+        <p
+          v-if="exportMessage"
+          class="export"
+          aria-live="polite"
+        >
+          {{ exportMessage }}
+        </p>
 
         <p
           v-if="shareUrl"
@@ -534,6 +590,17 @@ td {
 
 .partage {
   margin-top: 0.75rem;
+}
+
+/* Contraste 7:1 minimum sur fond clair (WCAG AAA) : c'est un message d'état, il doit rester
+   lisible pour tout le monde. */
+.export {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.35rem;
+  background: #e8f1fb;
+  color: #10365e;
+  font-weight: 600;
 }
 
 .sr {

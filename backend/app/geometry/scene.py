@@ -290,13 +290,18 @@ def _joinery_node(
     }
 
 
-def _net_floor_area(polygon: list[list[float]], wall_thickness: float) -> float:
+def net_floor_area(polygon: list[list[float]], wall_thickness: float) -> float:
     """Aire nette : celle du contour ramené de `t/2` vers l'intérieur, entre les parements.
 
     `floor_area_cm2` mesure le contour tel qu'il est saisi, c'est-à-dire la **ligne médiane** des
     murs. C'est l'aire du plan, pas l'aire du sol : elle compte la moitié de chaque mur. Sur la
     pièce de référence (400 sur 300, murs de 10) l'écart est de 6 %, et il monte à 20 % avec des
     murs de 30. C'est l'aire nette qui sert au devis.
+
+    Publique — et non préfixée — parce qu'elle a désormais deux consommateurs : le scene graph, et
+    la page de garde du dossier d'élévations. Cette dernière annonçait l'aire de l'axe des murs
+    pendant que `GET /takeoff` chiffrait l'aire nette : deux documents du même produit donnaient
+    deux surfaces différentes pour la même pièce, et c'est la plus grande qui était imprimée.
 
     Renvoie 0 si le décalage retourne le contour sur lui-même : la pièce est alors plus étroite
     que ses propres murs, et toute valeur positive serait une invention.
@@ -398,7 +403,7 @@ def build_room(room: dict[str, Any], furniture_types: dict[int, dict[str, Any]])
         "ceiling_height_cm": round(height, DIGITS),
         "floor_area_cm2": round(abs(signed_area(polygon)), DIGITS),
         "net_floor_area_cm2": round(
-            _net_floor_area(polygon, float(room["wall_thickness_cm"])), DIGITS
+            net_floor_area(polygon, float(room["wall_thickness_cm"])), DIGITS
         ),
         "nodes": nodes,
         "cameras": [camera.to_dict(DIGITS) for camera in cameras],

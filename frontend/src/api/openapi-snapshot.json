@@ -660,6 +660,109 @@
         "title": "ExportStatus",
         "type": "object"
       },
+      "FaceCostingRead": {
+        "additionalProperties": false,
+        "properties": {
+          "face_id": {
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "override_quantity": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Quantity"
+          },
+          "override_unit_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Unit Price Cents"
+          },
+          "price_item_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Item Code"
+          }
+        },
+        "required": [
+          "id",
+          "face_id"
+        ],
+        "title": "FaceCostingRead",
+        "type": "object"
+      },
+      "FaceCostingWrite": {
+        "additionalProperties": false,
+        "description": "Décision explicite de l'artisan sur une face.\n\nLes trois champs sont facultatifs et indépendants : on peut imposer le seul code, la seule\nquantité (une reprise partielle relevée sur place) ou le seul prix (un tarif négocié).",
+        "properties": {
+          "override_quantity": {
+            "anyOf": [
+              {
+                "maximum": 999999999.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d{0,3}0*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Quantity"
+          },
+          "override_unit_price_cents": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000.0,
+                "minimum": -1000000000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Unit Price Cents"
+          },
+          "price_item_code": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z0-9][A-Z0-9_\\-]{0,39}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Item Code"
+          }
+        },
+        "title": "FaceCostingWrite",
+        "type": "object"
+      },
       "FaceKind": {
         "description": "Nature d'une face d'une pièce.\n\nLe plafond est une face à part entière (`docs/spec-complete.md` §1).",
         "enum": [
@@ -857,6 +960,14 @@
             "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
             "title": "Slug",
             "type": "string"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/Variant"
+            },
+            "maxItems": 8,
+            "title": "Variants",
+            "type": "array"
           }
         },
         "required": [
@@ -944,6 +1055,14 @@
           "slug": {
             "title": "Slug",
             "type": "string"
+          },
+          "variants": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Variants",
+            "type": "array"
           }
         },
         "required": [
@@ -953,6 +1072,7 @@
           "category",
           "color_slots",
           "parts",
+          "variants",
           "default_width_cm",
           "default_height_cm",
           "default_depth_cm"
@@ -1056,6 +1176,21 @@
               }
             ],
             "title": "Parts"
+          },
+          "variants": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Variant"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variants"
           }
         },
         "title": "FurnitureTypeUpdate",
@@ -1088,6 +1223,146 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "InvitationAccept": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "InvitationAccept",
+        "type": "object"
+      },
+      "InvitationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_in_days": {
+            "default": 7,
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Expires In Days",
+            "type": "integer"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole",
+            "default": "viewer"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "InvitationCreate",
+        "type": "object"
+      },
+      "InvitationCreated": {
+        "description": "Réponse de création. **Seul endroit** où le jeton en clair existe.\n\nLa base n'en garde que le hachage : ce jeton n'est plus jamais relisible, ni par l'API, ni par\nle back-office, ni par quelqu'un qui obtiendrait une copie de la base.",
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "integer"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "email",
+          "role",
+          "expires_at",
+          "token"
+        ],
+        "title": "InvitationCreated",
+        "type": "object"
+      },
+      "InvitationRead": {
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "integer"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "email",
+          "role",
+          "expires_at"
+        ],
+        "title": "InvitationRead",
+        "type": "object"
+      },
       "LayingPattern": {
         "description": "Motif de pose d'un revêtement (`docs/spec-complete.md` §1).",
         "enum": [
@@ -1099,10 +1374,561 @@
         "title": "LayingPattern",
         "type": "string"
       },
+      "MemberRead": {
+        "description": "Une ligne de la liste des membres.\n\nL'adresse e-mail est jointe depuis le compte : sans elle, la liste n'affiche que des\nidentifiants numériques, et personne ne sait qui retirer.",
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "invited_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invited At"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "role"
+        ],
+        "title": "MemberRead",
+        "type": "object"
+      },
+      "MemberRoleUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "MemberRoleUpdate",
+        "type": "object"
+      },
+      "OrganizationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 2,
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "OrganizationCreate",
+        "type": "object"
+      },
+      "OrganizationRead": {
+        "additionalProperties": false,
+        "properties": {
+          "address_line1": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Line1"
+          },
+          "address_line2": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Line2"
+          },
+          "billing_email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Email"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decennial_coverage_area": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decennial Coverage Area"
+          },
+          "decennial_insurer": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decennial Insurer"
+          },
+          "decennial_policy_number": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decennial Policy Number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "legal_form": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Form"
+          },
+          "logo_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "pattern": "^https?://",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "rcs": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rcs"
+          },
+          "share_capital_cents": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Capital Cents"
+          },
+          "siret": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{14}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siret"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "vat_number": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z]{2}[0-9A-Za-z]{2,13}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "created_at"
+        ],
+        "title": "OrganizationRead",
+        "type": "object"
+      },
+      "OrganizationRole": {
+        "description": "Rôle d'un compte dans une organisation.\n\nQuatre rôles et pas davantage : chacun doit rester explicable en une phrase à un artisan.",
+        "enum": [
+          "owner",
+          "admin",
+          "editor",
+          "viewer"
+        ],
+        "title": "OrganizationRole",
+        "type": "string"
+      },
+      "OrganizationUpdate": {
+        "additionalProperties": false,
+        "description": "Mise à jour des champs d'entreprise, et du nom.\n\nLe `slug` n'est pas modifiable : il apparaît dans des URL déjà diffusées, et le changer\ncasserait silencieusement les liens en circulation.",
+        "properties": {
+          "address_line1": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Line1"
+          },
+          "address_line2": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address Line2"
+          },
+          "billing_email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Email"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "decennial_coverage_area": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decennial Coverage Area"
+          },
+          "decennial_insurer": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decennial Insurer"
+          },
+          "decennial_policy_number": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decennial Policy Number"
+          },
+          "legal_form": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Form"
+          },
+          "logo_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "pattern": "^https?://",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo Url"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postal Code"
+          },
+          "rcs": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rcs"
+          },
+          "share_capital_cents": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Capital Cents"
+          },
+          "siret": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{14}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siret"
+          },
+          "vat_number": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z]{2}[0-9A-Za-z]{2,13}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Number"
+          }
+        },
+        "title": "OrganizationUpdate",
+        "type": "object"
+      },
       "Part": {
         "additionalProperties": false,
         "description": "Une primitive de la recette.",
         "properties": {
+          "axis": {
+            "default": "y",
+            "enum": [
+              "x",
+              "y",
+              "z"
+            ],
+            "title": "Axis",
+            "type": "string"
+          },
           "color_slot": {
             "maxLength": 50,
             "minLength": 1,
@@ -1237,6 +2063,212 @@
           "sphere"
         ],
         "title": "PartPrimitive",
+        "type": "string"
+      },
+      "PriceBookCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "is_default": {
+            "default": false,
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "seed_default_items": {
+            "default": true,
+            "title": "Seed Default Items",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PriceBookCreate",
+        "type": "object"
+      },
+      "PriceBookRead": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "is_default": {
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "name",
+          "is_default"
+        ],
+        "title": "PriceBookRead",
+        "type": "object"
+      },
+      "PriceItemCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "pattern": "^[A-Z0-9][A-Z0-9_\\-]{0,39}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/PriceUnit",
+            "default": "m2"
+          },
+          "unit_price_cents": {
+            "default": 0,
+            "maximum": 1000000000000.0,
+            "minimum": 0.0,
+            "title": "Unit Price Cents",
+            "type": "integer"
+          },
+          "vat_rate_bp": {
+            "default": 2000,
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Vat Rate Bp",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "label"
+        ],
+        "title": "PriceItemCreate",
+        "type": "object"
+      },
+      "PriceItemRead": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "price_book_id": {
+            "title": "Price Book Id",
+            "type": "integer"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/PriceUnit"
+          },
+          "unit_price_cents": {
+            "title": "Unit Price Cents",
+            "type": "integer"
+          },
+          "vat_rate_bp": {
+            "title": "Vat Rate Bp",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "price_book_id",
+          "code",
+          "label",
+          "unit",
+          "unit_price_cents",
+          "vat_rate_bp"
+        ],
+        "title": "PriceItemRead",
+        "type": "object"
+      },
+      "PriceItemUpdate": {
+        "additionalProperties": false,
+        "description": "Le code n'est pas modifiable : c'est la clé de rattachement du métré et des devis passés.\n\nLe renommer casserait silencieusement les correspondances déjà faites — supprimez la ligne et\nrecréez-la si c'est vraiment le code qui est faux.",
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PriceUnit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit_price_cents": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Price Cents"
+          },
+          "vat_rate_bp": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Rate Bp"
+          }
+        },
+        "title": "PriceItemUpdate",
+        "type": "object"
+      },
+      "PriceUnit": {
+        "description": "Unité de facturation d'une ligne de prix.\n\nQuatre unités et pas davantage : ce sont celles que le métré sait produire (`m2` pour les\nsurfaces, `ml` pour les linéaires de plinthe et de corniche) plus les deux que l'artisan\najoute à la main.",
+        "enum": [
+          "m2",
+          "ml",
+          "u",
+          "forfait"
+        ],
+        "title": "PriceUnit",
         "type": "string"
       },
       "ProjectCreate": {
@@ -1446,7 +2478,7 @@
         "type": "object"
       },
       "PublicSceneResponse": {
-        "description": "Réponse de l'endpoint public.\n\nNe contient **aucune** information sur le propriétaire : ni identifiant, ni adresse e-mail,\nni date de modification du projet. Un lien de partage ne doit rien révéler de plus que la\nvue elle-même.\n\n`project_name` est le titre à afficher, et non le nom brut du projet : il vaut `public_label`\ndès que le propriétaire en a posé un. Le champ garde ce nom parce que c'est celui que le\nviewer public lit déjà.",
+        "description": "Réponse de l'endpoint public.\n\nNe contient **aucune** information sur le propriétaire : ni identifiant, ni adresse e-mail,\nni date de modification du projet. Un lien de partage ne doit rien révéler de plus que la\nvue elle-même.\n\n`project_name` est le titre à afficher, et **jamais** le nom brut du projet : il vaut\n`public_label` quand le propriétaire en a posé un, et un libellé neutre sinon. La spec §3.5\nexige « pas d'info sensible exposée » d'un lien public, or le nom d'un projet de rénovation\nporte couramment le nom et l'adresse du client — et un lien de partage se transfère par SMS.\nUn défaut ouvert obligerait chaque propriétaire à penser à se protéger. Le champ garde ce nom\nparce que c'est celui que le viewer public lit déjà.",
         "properties": {
           "kind": {
             "const": "shared-view",
@@ -1486,6 +2518,1308 @@
           "scene"
         ],
         "title": "PublicSceneResponse",
+        "type": "object"
+      },
+      "QuoteCreate": {
+        "additionalProperties": false,
+        "description": "Demande de devis : le client, et ce que le métré ne peut pas deviner.\n\n`default_price_codes` est la fonctionnalité utile de tout ce module : « tous les murs en\npeinture, tous les sols en carrelage » en une requête, plutôt que soixante rattachements à la\nmain sur un projet de douze pièces.",
+        "properties": {
+          "client_address_line1": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Address Line1"
+          },
+          "client_address_line2": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Address Line2"
+          },
+          "client_city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client City"
+          },
+          "client_country": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Country"
+          },
+          "client_email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Email"
+          },
+          "client_is_consumer": {
+            "default": true,
+            "title": "Client Is Consumer",
+            "type": "boolean"
+          },
+          "client_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Client Name",
+            "type": "string"
+          },
+          "client_phone": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Phone"
+          },
+          "client_postal_code": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Postal Code"
+          },
+          "client_vat_number": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Vat Number"
+          },
+          "default_price_codes": {
+            "additionalProperties": {
+              "pattern": "^[A-Z0-9][A-Z0-9_\\-]{0,39}$",
+              "type": "string"
+            },
+            "title": "Default Price Codes",
+            "type": "object"
+          },
+          "extra_lines": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteLineInput"
+            },
+            "maxItems": 200,
+            "title": "Extra Lines",
+            "type": "array"
+          },
+          "include_cornice": {
+            "default": false,
+            "title": "Include Cornice",
+            "type": "boolean"
+          },
+          "include_openings": {
+            "default": false,
+            "title": "Include Openings",
+            "type": "boolean"
+          },
+          "include_skirting": {
+            "default": true,
+            "title": "Include Skirting",
+            "type": "boolean"
+          },
+          "late_penalty_rate_bp": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Late Penalty Rate Bp"
+          },
+          "mediator_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediator Name"
+          },
+          "mediator_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "pattern": "^https?://",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediator Url"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "payment_terms": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Terms"
+          },
+          "price_book_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Book Id"
+          },
+          "recovery_indemnity_cents": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Indemnity Cents"
+          },
+          "site_address_line1": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Address Line1"
+          },
+          "site_address_line2": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Address Line2"
+          },
+          "site_city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site City"
+          },
+          "site_postal_code": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Postal Code"
+          },
+          "valid_for_days": {
+            "anyOf": [
+              {
+                "maximum": 365.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid For Days"
+          },
+          "vat_attestation_over_two_years": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Over Two Years"
+          },
+          "vat_attestation_premises_use": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Premises Use"
+          },
+          "vat_attestation_required": {
+            "default": false,
+            "title": "Vat Attestation Required",
+            "type": "boolean"
+          },
+          "vat_attestation_signatory": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Signatory"
+          },
+          "vat_attestation_signed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Signed At"
+          }
+        },
+        "required": [
+          "client_name"
+        ],
+        "title": "QuoteCreate",
+        "type": "object"
+      },
+      "QuoteLineInput": {
+        "additionalProperties": false,
+        "description": "Une ligne saisie à la main, ajoutée aux lignes déduites du métré.",
+        "properties": {
+          "label": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "maximum": 999999999.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d{0,3}0*$",
+                "type": "string"
+              }
+            ],
+            "default": "1",
+            "title": "Quantity"
+          },
+          "source_price_item_code": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z0-9][A-Z0-9_\\-]{0,39}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Price Item Code"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/PriceUnit",
+            "default": "forfait"
+          },
+          "unit_price_cents": {
+            "default": 0,
+            "maximum": 1000000000000.0,
+            "minimum": -1000000000000.0,
+            "title": "Unit Price Cents",
+            "type": "integer"
+          },
+          "vat_rate_bp": {
+            "default": 2000,
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Vat Rate Bp",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "QuoteLineInput",
+        "type": "object"
+      },
+      "QuoteLineRead": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "quantity": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Quantity",
+            "type": "string"
+          },
+          "source_face_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Face Id"
+          },
+          "source_price_item_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Price Item Code"
+          },
+          "total_ht_cents": {
+            "title": "Total Ht Cents",
+            "type": "integer"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/PriceUnit"
+          },
+          "unit_price_cents": {
+            "title": "Unit Price Cents",
+            "type": "integer"
+          },
+          "vat_rate_bp": {
+            "title": "Vat Rate Bp",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "position",
+          "label",
+          "unit",
+          "quantity",
+          "unit_price_cents",
+          "vat_rate_bp",
+          "total_ht_cents"
+        ],
+        "title": "QuoteLineRead",
+        "type": "object"
+      },
+      "QuoteRead": {
+        "additionalProperties": false,
+        "description": "Le devis complet. `warnings` n'est pas décoratif : voir `QuoteRead.warnings`.",
+        "properties": {
+          "client_address_line1": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Address Line1"
+          },
+          "client_address_line2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Address Line2"
+          },
+          "client_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client City"
+          },
+          "client_country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Country"
+          },
+          "client_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Email"
+          },
+          "client_is_consumer": {
+            "title": "Client Is Consumer",
+            "type": "boolean"
+          },
+          "client_name": {
+            "title": "Client Name",
+            "type": "string"
+          },
+          "client_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Phone"
+          },
+          "client_postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Postal Code"
+          },
+          "client_vat_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Vat Number"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "invoice_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invoice Number"
+          },
+          "invoiced_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invoiced At"
+          },
+          "issued_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issued At"
+          },
+          "late_penalty_rate_bp": {
+            "title": "Late Penalty Rate Bp",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteLineRead"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "mediator_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediator Name"
+          },
+          "mediator_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediator Url"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "integer"
+          },
+          "payment_terms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Terms"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "project_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Name"
+          },
+          "recovery_indemnity_cents": {
+            "title": "Recovery Indemnity Cents",
+            "type": "integer"
+          },
+          "site_address_line1": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Address Line1"
+          },
+          "site_address_line2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Address Line2"
+          },
+          "site_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site City"
+          },
+          "site_postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Postal Code"
+          },
+          "status": {
+            "$ref": "#/components/schemas/QuoteStatus"
+          },
+          "total_ht_cents": {
+            "title": "Total Ht Cents",
+            "type": "integer"
+          },
+          "total_ttc_cents": {
+            "title": "Total Ttc Cents",
+            "type": "integer"
+          },
+          "total_tva_cents": {
+            "title": "Total Tva Cents",
+            "type": "integer"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "vat_attestation_over_two_years": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Over Two Years"
+          },
+          "vat_attestation_premises_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Premises Use"
+          },
+          "vat_attestation_required": {
+            "title": "Vat Attestation Required",
+            "type": "boolean"
+          },
+          "vat_attestation_signatory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Signatory"
+          },
+          "vat_attestation_signed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Signed At"
+          },
+          "vat_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/VatBucketRead"
+            },
+            "title": "Vat Breakdown",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "status",
+          "total_ht_cents",
+          "total_tva_cents",
+          "total_ttc_cents",
+          "client_name",
+          "client_is_consumer",
+          "vat_attestation_required",
+          "late_penalty_rate_bp",
+          "recovery_indemnity_cents"
+        ],
+        "title": "QuoteRead",
+        "type": "object"
+      },
+      "QuoteStatus": {
+        "description": "Cycle de vie d'un devis.\n\nL'ordre compte : `draft` est le seul état où les lignes se modifient encore. Dès `sent`, le\ndocument a un numéro, il est parti chez le client, et il est figé.",
+        "enum": [
+          "draft",
+          "sent",
+          "accepted",
+          "refused",
+          "invoiced"
+        ],
+        "title": "QuoteStatus",
+        "type": "string"
+      },
+      "QuoteSummary": {
+        "additionalProperties": false,
+        "description": "Vue de liste : ce qui tient dans un tableau, sans charger les lignes.",
+        "properties": {
+          "client_name": {
+            "title": "Client Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "invoice_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invoice Number"
+          },
+          "issued_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issued At"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "status": {
+            "$ref": "#/components/schemas/QuoteStatus"
+          },
+          "total_ht_cents": {
+            "title": "Total Ht Cents",
+            "type": "integer"
+          },
+          "total_ttc_cents": {
+            "title": "Total Ttc Cents",
+            "type": "integer"
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "client_name",
+          "total_ht_cents",
+          "total_ttc_cents"
+        ],
+        "title": "QuoteSummary",
+        "type": "object"
+      },
+      "QuoteUpdate": {
+        "additionalProperties": false,
+        "description": "Modification d'un devis.\n\nNe touche jamais aux lignes ni aux totaux : un devis émis est un contrat, et un devis brouillon\nse régénère plutôt qu'il ne se rafistole. Le statut est le seul champ qui pilote un cycle de\nvie, et les transactions interdites sont refusées par la route, pas ici.",
+        "properties": {
+          "client_address_line1": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Address Line1"
+          },
+          "client_address_line2": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Address Line2"
+          },
+          "client_city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client City"
+          },
+          "client_country": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Country"
+          },
+          "client_email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Email"
+          },
+          "client_is_consumer": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Is Consumer"
+          },
+          "client_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Name"
+          },
+          "client_phone": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Phone"
+          },
+          "client_postal_code": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Postal Code"
+          },
+          "client_vat_number": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Vat Number"
+          },
+          "late_penalty_rate_bp": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Late Penalty Rate Bp"
+          },
+          "mediator_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediator Name"
+          },
+          "mediator_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "pattern": "^https?://",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediator Url"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "payment_terms": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Terms"
+          },
+          "recovery_indemnity_cents": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Indemnity Cents"
+          },
+          "site_address_line1": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Address Line1"
+          },
+          "site_address_line2": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Address Line2"
+          },
+          "site_city": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site City"
+          },
+          "site_postal_code": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Postal Code"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuoteStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "valid_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Until"
+          },
+          "vat_attestation_over_two_years": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Over Two Years"
+          },
+          "vat_attestation_premises_use": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Premises Use"
+          },
+          "vat_attestation_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Required"
+          },
+          "vat_attestation_signatory": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Signatory"
+          },
+          "vat_attestation_signed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vat Attestation Signed At"
+          }
+        },
+        "title": "QuoteUpdate",
         "type": "object"
       },
       "RefreshRequest": {
@@ -1838,6 +4172,58 @@
         "title": "SharedViewRead",
         "type": "object"
       },
+      "TakeoffRead": {
+        "additionalProperties": false,
+        "description": "Enveloppe du métré.\n\nLe contenu reste un dictionnaire libre : sa forme dépend de la nature des faces, et un modèle\nPydantic de six variantes alourdirait le schéma OpenAPI sans rien apporter au client, qui\naiguille sur `kind`. Même arbitrage que pour le scene graph (`app/api/scene.py`).",
+        "properties": {
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "rooms": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rooms",
+            "type": "array"
+          },
+          "totals": {
+            "additionalProperties": true,
+            "title": "Totals",
+            "type": "object"
+          },
+          "units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Units",
+            "type": "object"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "units",
+          "rooms",
+          "totals",
+          "warnings"
+        ],
+        "title": "TakeoffRead",
+        "type": "object"
+      },
       "TokenPair": {
         "description": "Réponse d'une connexion ou d'un rafraîchissement.\n\n`refresh_token` n'est renvoyé dans le corps **qu'en développement** : la source de vérité est\nle cookie `httpOnly`, et un jeton long présent dans le corps est un jeton que du JavaScript\npeut lire, donc exfiltrer. Le repli existe pour les clients sans gestion de cookies — la\nsuite de tests, `curl`, un script d'intégration — qui tournent tous en développement.",
         "properties": {
@@ -1956,6 +4342,81 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "Variant": {
+        "additionalProperties": false,
+        "description": "Un paramètre de variation accepté par la recette (spec §4.4).\n\nLa recette déclare ce qu'elle accepte, l'instance ne fait que choisir une valeur dans son\n`variant_params` : le nombre de tiroirs est ainsi « défini dans la recette du\n`FurnitureType`, pas dans le moteur de rendu générique ».",
+        "properties": {
+          "applies_to": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Applies To",
+            "type": "array"
+          },
+          "axis": {
+            "enum": [
+              "x",
+              "y",
+              "z"
+            ],
+            "title": "Axis",
+            "type": "string"
+          },
+          "max": {
+            "default": 32,
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Max",
+            "type": "integer"
+          },
+          "min": {
+            "default": 1,
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Min",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "axis",
+          "applies_to"
+        ],
+        "title": "Variant",
+        "type": "object"
+      },
+      "VatBucketRead": {
+        "additionalProperties": false,
+        "properties": {
+          "base_cents": {
+            "title": "Base Cents",
+            "type": "integer"
+          },
+          "rate_bp": {
+            "title": "Rate Bp",
+            "type": "integer"
+          },
+          "tax_cents": {
+            "title": "Tax Cents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rate_bp",
+          "base_cents",
+          "tax_cents"
+        ],
+        "title": "VatBucketRead",
         "type": "object"
       },
       "ViewState": {
@@ -2436,6 +4897,102 @@
         ]
       }
     },
+    "/api/faces/{face_id}/costing": {
+      "delete": {
+        "operationId": "delete_face_costing_api_faces__face_id__costing_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "face_id",
+            "required": true,
+            "schema": {
+              "title": "Face Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Face Costing",
+        "tags": [
+          "devis"
+        ]
+      },
+      "put": {
+        "description": "Pose — ou remplace — le chiffrage d'une face.\n\n`PUT` et non `PATCH` : la ressource est un petit ensemble de trois décisions, et un remplacement\ncomplet évite l'ambiguïté entre « ne touche pas » et « efface » sur des champs qui sont tous\nfacultatifs.",
+        "operationId": "set_face_costing_api_faces__face_id__costing_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "face_id",
+            "required": true,
+            "schema": {
+              "title": "Face Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaceCostingWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaceCostingRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Set Face Costing",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
     "/api/faces/{face_id}/elements": {
       "post": {
         "operationId": "create_element_api_faces__face_id__elements_post",
@@ -2783,9 +5340,817 @@
         ]
       }
     },
+    "/api/invitations/accept": {
+      "post": {
+        "description": "Accepte une invitation avec son jeton.\n\nL'adresse de l'invitation doit être celle du compte connecté. Le jeton seul ne suffit\nvolontairement pas : un lien transféré, ou intercepté dans une boîte mail, ne doit pas ouvrir\nl'organisation à un compte qui n'était pas l'invité.",
+        "operationId": "accept_invitation_api_invitations_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationAccept"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Accept Invitation",
+        "tags": [
+          "organisations"
+        ]
+      }
+    },
+    "/api/organizations": {
+      "get": {
+        "description": "Organisations dont le compte est membre accepté. Rien d'autre n'est visible.",
+        "operationId": "list_organizations_api_organizations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrganizationRead"
+                  },
+                  "title": "Response List Organizations Api Organizations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Organizations",
+        "tags": [
+          "organisations"
+        ]
+      },
+      "post": {
+        "description": "Crée une organisation. Son créateur en devient propriétaire, sans invitation.",
+        "operationId": "create_organization_api_organizations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Organization",
+        "tags": [
+          "organisations"
+        ]
+      }
+    },
+    "/api/organizations/{organization_id}": {
+      "get": {
+        "operationId": "read_organization_api_organizations__organization_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Organization",
+        "tags": [
+          "organisations"
+        ]
+      },
+      "patch": {
+        "description": "Met à jour l'identité de l'entreprise.\n\nRéservé aux `admin` : ces champs sont imprimés sur les devis et les factures. Un champ absent\nn'est pas touché, un champ à `null` est effacé (voir `app/schemas/organization.py`).",
+        "operationId": "update_organization_api_organizations__organization_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Organization",
+        "tags": [
+          "organisations"
+        ]
+      }
+    },
+    "/api/organizations/{organization_id}/invitations": {
+      "get": {
+        "operationId": "list_invitations_api_organizations__organization_id__invitations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InvitationRead"
+                  },
+                  "title": "Response List Invitations Api Organizations  Organization Id  Invitations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Invitations",
+        "tags": [
+          "organisations"
+        ]
+      },
+      "post": {
+        "description": "Invite une adresse e-mail à rejoindre l'organisation.\n\nLe jeton en clair n'apparaît que dans cette réponse : c'est à l'appelant de l'acheminer. La\nbase n'en garde que le hachage, donc le relire est impossible — une invitation perdue se\nréémet, elle ne se retrouve pas.",
+        "operationId": "invite_member_api_organizations__organization_id__invitations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Invite Member",
+        "tags": [
+          "organisations"
+        ]
+      }
+    },
+    "/api/organizations/{organization_id}/members": {
+      "get": {
+        "description": "Membres de l'organisation, invitations en attente comprises.\n\nUne jointure et non deux requêtes : la liste affiche l'adresse de chaque membre, et la lire\ncompte par compte serait un N+1 sur une page ouverte à chaque gestion d'équipe.",
+        "operationId": "list_members_api_organizations__organization_id__members_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MemberRead"
+                  },
+                  "title": "Response List Members Api Organizations  Organization Id  Members Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Members",
+        "tags": [
+          "organisations"
+        ]
+      }
+    },
+    "/api/organizations/{organization_id}/members/{user_id}": {
+      "delete": {
+        "description": "Retire un membre — ou soi-même.\n\nQuitter une organisation ne demande aucun rôle particulier : c'est le pendant du droit de\npartir. Retirer *quelqu'un d'autre* demande `admin`, et jamais au-dessus de son propre rôle.",
+        "operationId": "remove_member_api_organizations__organization_id__members__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Remove Member",
+        "tags": [
+          "organisations"
+        ]
+      },
+      "patch": {
+        "operationId": "update_member_role_api_organizations__organization_id__members__user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRoleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Member Role",
+        "tags": [
+          "organisations"
+        ]
+      }
+    },
+    "/api/organizations/{organization_id}/price-books": {
+      "get": {
+        "operationId": "list_price_books_api_organizations__organization_id__price_books_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PriceBookRead"
+                  },
+                  "title": "Response List Price Books Api Organizations  Organization Id  Price Books Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Price Books",
+        "tags": [
+          "devis"
+        ]
+      },
+      "post": {
+        "description": "Crée un barème. Réservé aux `admin` : un prix est une décision commerciale.\n\n`is_default` est exclusif — poser le drapeau le retire aux autres barèmes de l'organisation.\nL'unicité est tenue ici plutôt que par un index partiel, qui ne se reconstruit pas en mode\nbatch sur SQLite.",
+        "operationId": "create_price_book_api_organizations__organization_id__price_books_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceBookCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceBookRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Price Book",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/price-books/{price_book_id}/items": {
+      "get": {
+        "operationId": "list_price_items_api_price_books__price_book_id__items_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "price_book_id",
+            "required": true,
+            "schema": {
+              "title": "Price Book Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PriceItemRead"
+                  },
+                  "title": "Response List Price Items Api Price Books  Price Book Id  Items Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Price Items",
+        "tags": [
+          "devis"
+        ]
+      },
+      "post": {
+        "operationId": "create_price_item_api_price_books__price_book_id__items_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "price_book_id",
+            "required": true,
+            "schema": {
+              "title": "Price Book Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceItemCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceItemRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Price Item",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/price-items/{price_item_id}": {
+      "delete": {
+        "operationId": "delete_price_item_api_price_items__price_item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "price_item_id",
+            "required": true,
+            "schema": {
+              "title": "Price Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Price Item",
+        "tags": [
+          "devis"
+        ]
+      },
+      "patch": {
+        "description": "Modifie une ligne de barème.\n\nAucun devis déjà écrit n'en est affecté, y compris un brouillon : la ligne de devis est une\ncopie et ne fait aucune jointure de lecture vers cette table. C'est vérifié par un test.",
+        "operationId": "update_price_item_api_price_items__price_item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "price_item_id",
+            "required": true,
+            "schema": {
+              "title": "Price Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceItemUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceItemRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Price Item",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
     "/api/projects": {
       "get": {
-        "description": "Liste paginée des projets de l'utilisateur.\n\nVue résumée : charger l'arbre complet de chaque projet pour une liste serait un gâchis\nproportionnel à la taille des plans.",
+        "description": "Liste paginée des projets accessibles à l'utilisateur.\n\nVue résumée : charger l'arbre complet de chaque projet pour une liste serait un gâchis\nproportionnel à la taille des plans.\n\nLe filtre porte sur les organisations du compte et non sur `owner_id` : c'est exactement la\nforme que sert `ix_project_organization_updated` (`WHERE organization_id IN (…) ORDER BY\nupdated_at DESC`), et c'est ce qui rend visible à tout un cabinet le chantier ouvert par l'un\nde ses membres.",
         "operationId": "list_projects_api_projects_get",
         "parameters": [
           {
@@ -3068,6 +6433,58 @@
         ]
       }
     },
+    "/api/projects/{project_id}/costings": {
+      "get": {
+        "description": "Rattachements explicites du projet. Ils sont l'exception, pas la règle.",
+        "operationId": "list_face_costings_api_projects__project_id__costings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FaceCostingRead"
+                  },
+                  "title": "Response List Face Costings Api Projects  Project Id  Costings Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Face Costings",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
     "/api/projects/{project_id}/exports/pdf": {
       "post": {
         "description": "Demande un export PDF en tâche de fond.\n\nLa réponse est immédiate : c'est tout l'intérêt du passage à Celery pour un traitement dont\nla durée croît avec la taille du plan.",
@@ -3287,6 +6704,113 @@
         ]
       }
     },
+    "/api/projects/{project_id}/quotes": {
+      "get": {
+        "operationId": "list_project_quotes_api_projects__project_id__quotes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteSummary"
+                  },
+                  "title": "Response List Project Quotes Api Projects  Project Id  Quotes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Project Quotes",
+        "tags": [
+          "devis"
+        ]
+      },
+      "post": {
+        "description": "Crée un devis **brouillon** à partir du métré du projet.\n\nSans numéro : il n'est attribué qu'à l'émission, sinon chaque brouillon abandonné ferait un\ntrou dans une suite qui doit être continue.\n\nLes lignes sont écrites en dur — libellé, prix unitaire, taux — et ne référencent le barème\nque par un code, à titre de trace. Modifier le barème après coup ne les touche pas.",
+        "operationId": "create_quote_api_projects__project_id__quotes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Quote",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
     "/api/projects/{project_id}/rooms": {
       "post": {
         "description": "Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond).",
@@ -3456,7 +6980,7 @@
         ]
       },
       "post": {
-        "description": "Crée un lien de partage sur un projet dont on est propriétaire.",
+        "description": "Crée un lien de partage sur un projet de son organisation.\n\nRéservé aux `editor` : publier un lien fait sortir la géométrie du plan hors du service, ce\nqu'un rôle de simple lecture n'a pas à pouvoir décider.",
         "operationId": "create_shared_view_api_projects__project_id__shared_views_post",
         "parameters": [
           {
@@ -3512,6 +7036,98 @@
         ]
       }
     },
+    "/api/projects/{project_id}/takeoff": {
+      "get": {
+        "description": "Métré complet : par face, par pièce, puis par projet.\n\nLes valeurs que le métré n'a pas su établir sortent à `null` et **jamais à zéro**, chacune\naccompagnée d'une entrée dans `warnings`. Un total est donc partiel dès que `warnings` n'est\npas vide : un client qui produit un devis doit le lire.",
+        "operationId": "read_takeoff_api_projects__project_id__takeoff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeoffRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Takeoff",
+        "tags": [
+          "metre"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/takeoff.csv": {
+      "get": {
+        "description": "Même métré, au format d'un classeur de prix — et export de portabilité RGPD.",
+        "operationId": "download_takeoff_csv_api_projects__project_id__takeoff_csv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {}
+            },
+            "description": "Métré au format tableur"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download Takeoff Csv",
+        "tags": [
+          "metre"
+        ]
+      }
+    },
     "/api/public/views/{token}": {
       "get": {
         "description": "Lecture publique d'une vue partagée. **Aucune authentification.**\n\nLe message d'erreur est le même pour un jeton inexistant, révoqué ou expiré : les distinguer\npermettrait de confirmer qu'un lien a existé.",
@@ -3554,6 +7170,368 @@
         "summary": "Read Public View",
         "tags": [
           "partage"
+        ]
+      }
+    },
+    "/api/quotes": {
+      "get": {
+        "description": "Tous les devis des organisations du compte, le plus récent d'abord.",
+        "operationId": "list_quotes_api_quotes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteSummary"
+                  },
+                  "title": "Response List Quotes Api Quotes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Quotes",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/quotes/{quote_id}": {
+      "get": {
+        "operationId": "read_quote_api_quotes__quote_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Quote",
+        "tags": [
+          "devis"
+        ]
+      },
+      "patch": {
+        "description": "Modifie un devis.\n\nTant qu'il est brouillon, tout est modifiable sauf les lignes — celles-ci se régénèrent en\ncréant un nouveau devis, ce qui évite d'avoir à réconcilier un métré et une saisie manuelle.\n\nDès qu'il est émis, **seul le statut** peut encore changer : le document est parti chez le\nclient, et le corriger silencieusement ferait diverger deux exemplaires du même contrat.",
+        "operationId": "update_quote_api_quotes__quote_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Update Quote",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/quotes/{quote_id}/invoice": {
+      "post": {
+        "description": "Transforme un devis **accepté** en facture, aux mêmes lignes et aux mêmes prix.\n\nAucune ligne n'est recopiée ni recalculée : c'est le même document qui change d'état. Dupliquer\ncréerait deux vérités pour un seul contrat, et l'écart entre les deux est ce qui fait les\nlitiges.",
+        "operationId": "convert_to_invoice_api_quotes__quote_id__invoice_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Convert To Invoice",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/quotes/{quote_id}/invoice.pdf": {
+      "get": {
+        "description": "Facture au format Factur-X : PDF/A-3 lisible avec le XML CII embarqué.\n\nRappel écrit dans le document lui-même : nous **ne sommes pas** une plateforme de\ndématérialisation agréée et nous ne transmettons rien à l'administration. Ce fichier est\nconforme ; sa transmission reste à la charge de l'artisan, avec l'outil de son choix.",
+        "operationId": "download_invoice_pdf_api_quotes__quote_id__invoice_pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "Facture Factur-X (PDF/A-3)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download Invoice Pdf",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/quotes/{quote_id}/invoice.xml": {
+      "get": {
+        "description": "Le XML CII seul, pour l'artisan qui alimente déjà une plateforme avec ses propres outils.",
+        "operationId": "download_invoice_xml_api_quotes__quote_id__invoice_xml_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/xml": {}
+            },
+            "description": "XML CII seul"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download Invoice Xml",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/quotes/{quote_id}/issue": {
+      "post": {
+        "description": "Émet le devis : lui attribue son numéro et le fige.\n\n`admin` et non `editor` : c'est le geste qui engage l'entreprise sur un prix.",
+        "operationId": "issue_quote_api_quotes__quote_id__issue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Issue Quote",
+        "tags": [
+          "devis"
+        ]
+      }
+    },
+    "/api/quotes/{quote_id}/pdf": {
+      "get": {
+        "description": "PDF du devis, avec toutes ses mentions obligatoires et le cadre « bon pour accord ».\n\nPas de XML embarqué : un devis n'est pas une facture, et la norme EN 16931 n'a pas de code de\ntype pour un document non exigible.",
+        "operationId": "download_quote_pdf_api_quotes__quote_id__pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quote_id",
+            "required": true,
+            "schema": {
+              "title": "Quote Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "Devis au format PDF"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Download Quote Pdf",
+        "tags": [
+          "devis"
         ]
       }
     },

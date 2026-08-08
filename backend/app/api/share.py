@@ -25,10 +25,11 @@ from sqlmodel import col, select
 
 from app.api.conflicts import ConflictAwareRoute
 from app.api.deps import CurrentUser, SessionDep
-from app.api.permissions import get_owned_project
+from app.api.permissions import get_owned_project, require_role
 from app.api.scene import scene_for_project
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.models.base import utcnow
+from app.models.organization import OrganizationRole
 from app.models.plan import Project, SharedView
 from app.schemas.share import PublicSceneResponse, SharedViewCreate, SharedViewRead
 
@@ -118,8 +119,12 @@ async def create_shared_view(
     session: SessionDep,
     current_user: CurrentUser,
 ) -> SharedView:
-    """Crée un lien de partage sur un projet dont on est propriétaire."""
-    await get_owned_project(session, project_id, current_user)
+    """Crée un lien de partage sur un projet de son organisation.
+
+    Réservé aux `editor` : publier un lien fait sortir la géométrie du plan hors du service, ce
+    qu'un rôle de simple lecture n'a pas à pouvoir décider.
+    """
+    await get_owned_project(session, project_id, current_user, OrganizationRole.EDITOR)
 
     expires_at = (
         utcnow() + timedelta(days=payload.expires_in_days)
@@ -176,9 +181,12 @@ async def revoke_shared_view(
         )
     ).scalar_one_or_none()
 
-    # 404 et non 403 sur le partage d'autrui : même règle que le reste de l'API.
-    if shared is None or shared.project.owner_id != current_user.id:
+    # 404 et non 403 sur le partage d'une autre organisation : même règle que le reste de
+    # l'API. `owner_id` ne décide plus rien — un lien ouvert par un collègue doit pouvoir être
+    # refermé par n'importe quel éditeur de la même organisation.
+    if shared is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partage introuvable")
+    await require_role(session, shared.project, current_user, OrganizationRole.EDITOR)
 
     if shared.revoked_at is None:
         shared.revoked_at = utcnow()

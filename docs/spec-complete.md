@@ -214,3 +214,60 @@ Ces arbitrages sont tranchés ici pour servir de référence stable — que l'im
 ## 9. Sur l'idée de lancement réel
 
 Ça reste un bonus, pas un objectif — mais concrètement, rien dans cette feuille de route ne t'empêche de déployer publiquement à n'importe quel stade (P12 est volontairement placé tôt dans la séquence). Si l'envie de le sortir revient en cours de route, aucune des décisions ci-dessus n'est à défaire pour ça.
+
+---
+
+## 10. Amendements
+
+*Ce document est le contrat : « toute divergence passe par une modification explicite de ce document, jamais par une décision silencieuse en cours de code ». Les amendements sont donc écrits ici, datés et numérotés, plutôt que réécrits dans les sections d'origine — l'historique des décisions vaut autant que la décision.*
+
+### A1 — Les permissions passent de la propriété à l'appartenance (vague 2, 2026-08-08)
+
+**Amende §7 (P2)** — « Comptes, propriété des projets » — et **complète §5**.
+
+Ce qui autorise l'accès à un projet n'est plus `Project.owner_id == user.id` mais une **appartenance acceptée** à l'organisation qui porte ce projet. Motif : le produit s'adresse à un artisan, donc à une entreprise avec des salariés, un comptable et un remplaçant pendant les congés — pas à un particulier (`strategie-produit.md` §6). Un modèle mono-propriétaire rendait le partage d'un chantier entre deux personnes de la même société littéralement impossible.
+
+Trois tables s'ajoutent au §5 :
+
+```
+Organization                    (identité légale : SIRET, forme juridique, capital
+ │                               en centimes entiers, RCS, adresse, n° de TVA,
+ │                               assureur décennal + n° de police + couverture)
+ ├─ Membership                  (user_id, organization_id, role, accepted_at)
+ └─ Invitation                  (email, role, token_hash, expires_at, accepted_at)
+
+Project
+ └─ organization_id             (NOT NULL — c'est lui qui porte les droits)
+```
+
+Règles figées, non rediscutables sans un nouvel amendement :
+
+- **Quatre rôles ordonnés** : `viewer` < `editor` < `admin` < `owner`. Lecture = `viewer`, écriture du plan = `editor`, suppression d'un projet et gouvernance = `admin`.
+- **Une appartenance n'autorise que si `accepted_at` est renseigné.** Être invité n'est pas être membre.
+- **Hors de l'organisation : 404, jamais 403.** Un 403 confirmerait l'existence de l'objet. À l'intérieur, un rôle insuffisant reçoit 403 : l'intéressé sait déjà que l'objet existe, et un 404 lui ferait croire à une suppression.
+- **`Project.owner_id` subsiste comme trace de création et n'autorise plus rien.** Le comparer à l'utilisateur courant pour décider d'un accès est un défaut, pas un raccourci.
+
+La contre-mesure est exécutable : `backend/tests/test_permissions_locataire.py` confronte la liste des routes exercées au schéma OpenAPI publié, dans les deux sens. Une route de locataire ajoutée sans test de cloisonnement fait échouer la suite ; une route de **liste** — qui ne porte aucun identifiant, et par laquelle une fuite est totale — doit être classée explicitement.
+
+### A2 — Métré, barème, devis et facture Factur-X (vague 2, 2026-08-08)
+
+**Complète §1** (« Génération de devis chiffré ») et **§7**, qui n'en décrivaient que l'intention.
+
+- `app/geometry/quantities.py::build_takeoff(scene_graph)` — fonction **pure**, testée par les fixtures 07 à 10. Elle ne lit jamais `floor_area_cm2` (l'aire de la ligne médiane des murs, surévaluée de 6 à 20 %) mais `net_floor_area_cm2`. Une valeur non établissable sort à `None` avec un avertissement, **jamais à zéro**.
+- Tables `price_book`, `price_item`, `face_costing`, `quote`, `quote_line`, `quote_counter`. **Tout montant est un entier de centimes**, toute quantité un `Numeric(12,3)` : aucun flottant sur le chemin de l'argent.
+- `quote_line` **copie** libellé, prix et taux à l'émission et ne fait aucune jointure de lecture vers `price_item`. En France un devis signé est un contrat : modifier un tarif ne réécrit pas un document déjà émis.
+- Numérotation séquentielle **sans trou, générée en base** et attribuée à l'émission seulement — un brouillon abandonné ne consomme aucun numéro.
+- Factur-X (PDF/A-3 + XML CII, profil BASIC WL) produit entièrement en interne, sans dépendance ajoutée ni appel réseau. Le document porte, dans le PDF **et** dans le XML, la mention qu'on n'est pas une plateforme de dématérialisation agréée et qu'on ne transmet rien à l'administration.
+
+### A3 — L'export PDF devient un dossier d'élévations cotées (vague 2, 2026-08-08)
+
+**Amende §3.5**, qui ne prévoyait qu'« export PDF et image ».
+
+`services/export_pdf.py` produit une page de garde, puis par pièce un plan coté et **une page A4 paysage par mur** : chaînes de cotes, allèges, échelle normalisée écrite sur chaque planche et cartouche. Les surfaces annoncées sont les surfaces **nettes**, calculées par la même fonction que le métré (`geometry.scene.net_floor_area`) — deux documents du même produit ne peuvent pas donner deux surfaces pour la même pièce.
+
+### Questions ouvertes — à trancher par le propriétaire, pas en cours de ticket
+
+1. **`LayingPattern` n'a pas de valeur `diagonal`** alors que le métré porte son taux de chute (12 %). Aucune saisie ne peut donc produire une pose en diagonale. L'ajouter est un amendement de §1 (« motifs de pose avancés ») plus une migration d'énumération.
+2. **Le choix de l'organisation à la création d'un projet** n'existe pas : la règle appliquée est déterministe (l'appartenance acceptée la plus ancienne), mais un compte membre de deux entreprises ne peut pas désigner la cible.
+3. **`Element.face_id` reste obligatoire**, donc tout meuble est adossé à une face : un lit, une table ou un îlot sont impossibles. Le rendre nullable et ajouter un placement dans le repère de la pièce est un amendement de §5 à écrire **avant** de coder.
+4. **Aucune vue de back-office** pour les organisations, appartenances et documents commerciaux. C'est délibéré côté facturation : un `quote_counter` ou une `quote_line` modifiables à la main annulent les deux garanties légales de A2 (numérotation sans trou, ligne figée). Si ces vues sont ajoutées, elles doivent l'être en lecture seule.

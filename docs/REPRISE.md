@@ -3,7 +3,7 @@
 *Document de passation. Une session qui démarre ici doit pouvoir reprendre le travail sans
 refaire l'audit. Mets-le à jour à la fin de chaque vague.*
 
-Dernière mise à jour : 2026-08-08, fin de la vague 1.
+Dernière mise à jour : 2026-08-08, fin de la vague 2 (assemblage compris).
 
 ---
 
@@ -29,7 +29,7 @@ Lire dans l'ordre : `CLAUDE.md`, `docs/spec-complete.md` (le contrat), `docs/str
 
 ## Où on en est
 
-### Fait — vague 1 « stabilisation » (6 lots, livrés et verts sauf une exception ci-dessous)
+### Fait — vague 1 « stabilisation » (6 lots, livrés, refermés et verts)
 
 | Lot | Contenu |
 |---|---|
@@ -40,93 +40,66 @@ Lire dans l'ordre : `CLAUDE.md`, `docs/spec-complete.md` (le contrat), `docs/str
 | **Géométrie** | Cylindre corrigé (il produisait un **cône** dès que largeur ≠ profondeur : 5 recettes fausses), mitrage des murs (fente verticale à chaque angle), normale et altitude du plafond, `variant_params` branché, menuiseries rendues, `net_floor_area_cm2`, fixtures oblique et en L calculées à la main. |
 | **L6** | Rafraîchissement silencieux du jeton (au bout de 30 min d'édition, tout enregistrement échouait en 401 et le travail était perdu), conflits typés, fusion du revêtement (choisir une couleur effaçait matière et motif), touches filtrées, brouillon purgé au changement de pièce, sélecteur de pièce en 3D, découpage du bundle, responsive, **premiers tests de client HTTP et de store**. |
 
-**État vérifié** : frontend **95/95 verts** (59 avant). Backend **~340 tests**, **1 échec connu**
-décrit ci-dessous. `ruff`, `mypy`, `eslint`, `npm run build` verts avant l'interruption.
+### Fait — vague 2 « la valeur payante » (4 lots + assemblage, tous verts)
 
-### La vague 1 n'a pas été refermée
+| Lot | Contenu |
+|---|---|
+| **V2-L1** | `organization` / `membership` / `invitation` avec l'identité légale complète (SIRET, forme juridique, capital en **centimes entiers**, RCS, TVA, **décennale**). Quatre rôles ordonnés `viewer < editor < admin < owner`. `app/api/permissions.py` réécrit : l'appartenance **acceptée** autorise, `Project.owner_id` n'autorise plus rien. Migration avec rétro-remplissage. 10 routes. |
+| **V2-L2** | `build_takeoff(scene_graph)` — fonction pure, 4 fixtures calculées à la main. Surfaces nettes, linéaires au nu intérieur, plinthe amputée des percements qui touchent le sol, calepinage par motif avec entières / coupes / chutes. |
+| **V2-L3** | Élévations vectorielles cotées : une planche A4 paysage par mur, chaînes de cotes, allèges, échelle normalisée **écrite**, cartouche, page de garde. Les 4 routes d'export ont enfin un appelant côté frontend. |
+| **V2-L4** | Barème, devis et facture **Factur-X** (PDF/A-3 + XML CII BASIC WL), produits sans aucune dépendance ajoutée. Numérotation sans trou générée en base et attribuée à l'émission seulement. 19 routes. |
 
-L'agent d'assemblage (7ᵉ) a été **interrompu avant la fin**. Les six lots sont dans l'arbre mais
-n'ont jamais été réconciliés entre eux. C'est la première chose à faire.
+**État vérifié après assemblage** : backend **709 tests** (708 sur SQLite + 1 propre à
+PostgreSQL), frontend **96/96**, `ruff`, `mypy --strict`, `eslint`, `npm run build` verts. **Une
+seule tête Alembic** (`4c1e8b7a92d5`), aller-retour complet jusqu'à `base` sur PostgreSQL 17 sans
+résidu, `alembic check` sans dérive. Instantané OpenAPI à jour (45 chemins).
+
+Les décisions de contrat prises par cette vague sont écrites dans `spec-complete.md` **§10
+(amendements A1 à A3)** — la spec ne décrivait plus la réalité, deux agents l'avaient signalé.
+
+**Le cloisonnement entre locataires est la seule chose à ne jamais casser.** Il est tenu par
+`backend/tests/test_permissions_locataire.py` : 47 routes confrontées à un membre d'une autre
+organisation (404, jamais 403), **plus deux garde-fous de complétude** qui lisent le schéma
+OpenAPI publié. Le second — celui qui classe les routes de *liste*, qui ne portent aucun
+identifiant — a révélé que `GET /api/quotes` n'avait pas de test de non-fuite. Si tu ajoutes une
+route, la suite te forcera à la classer : c'est voulu, ne contourne pas le message d'échec.
+
+### Signalé par la vague 2, délibérément **pas** traité
+
+Ce sont des changements de contrat ou de périmètre : la règle `CLAUDE.md` demande de les signaler,
+pas de les improviser en cours de ticket. Ils sont repris dans `spec-complete.md` §10, section
+« questions ouvertes ».
+
+1. **`LayingPattern` n'a pas de valeur `diagonal`** : le métré porte son taux de chute (12 %) mais
+   aucune saisie ne peut le produire, `Covering.pattern` étant typé sur l'énumération. Une ligne
+   d'énumération, une migration, un amendement de §1.
+2. **Aucun choix de l'organisation à la création d'un projet.** La règle appliquée est
+   déterministe (l'appartenance acceptée la plus ancienne) mais un compte membre de deux
+   entreprises ne peut pas désigner la cible. `ProjectCreate` n'a pas le champ.
+3. **Aucune vue de back-office** pour les 9 nouveaux modèles. Délibéré côté facturation : un
+   `quote_counter` ou une `quote_line` modifiables à la main annulent les deux garanties légales
+   du lot (numérotation sans trou, ligne figée). Si elles sont ajoutées, en lecture seule.
+4. **Le filigrane d'aperçu n'a aucun appelant** : `render_project_pdf(..., watermark=True)` existe,
+   est testé et n'est jamais déclenché — il n'y a pas de modèle d'offre en base avant la vague 5.
+   Il est *keyword-only* et décidé par le serveur : ne l'exposez jamais en paramètre de requête.
+5. **Rien n'achemine les invitations** : la route rend le jeton, aucun service de mail n'existe
+   dans le dépôt. `quote.warnings` n'est pas non plus recalculé si le plan change après coup — le
+   document dit ce qu'on savait à l'instant où il a été établi, et aucune route ne le rafraîchit.
+6. **La conformité PDF/A-3 n'a pas été confrontée à veraPDF** (aucun validateur hors ligne). Les
+   exigences structurelles connues sont satisfaites et testées une par une, mais aucun verdict
+   d'outil n'a été observé : ne le présentez pas comme certifié.
 
 ---
 
 ## À faire, dans cet ordre
 
-### 0. Refermer la vague 1 — commence par là
+### Vague 3 — éditeur professionnel
 
-**a) Un test échoue et c'est un vrai défaut, pas un test à corriger :**
+*Les élévations cotées et le calepinage, qui figuraient ici, ont été livrés par la vague 2.*
 
-```
-tests/test_assemblage.py::test_the_shelf_count_of_an_instance_changes_its_geometry
-assert await shelves({"nb_etageres": 3}) == 3   ->   obtenu 5
-```
-
-Ce qui est **déjà prouvé** (ne le revérifie pas, c'est du temps perdu) :
-
-- le moteur géométrique est **correct en isolation** : `expand_recipe(...)` avec
-  `{"nb_etageres": 3}` renvoie bien 3 étagères ;
-- `resolve_variants` renvoie bien `{('etagere', 'y'): 3}` ;
-- le catalogue déclare bien `variants` sur `bibliotheque`, et il survit à
-  `FurnitureTypeCreate.model_validate(...).model_dump()` ;
-- `ElementCreate` conserve bien l'entier 3 (il n'est pas coercé en `"3"`) ;
-- `api/scene.py` recopie bien `"variants": list(row.variants)` dans le dictionnaire de catalogue ;
-- l'ordre des arguments de `expand_recipe` au point d'appel est correct.
-
-Le défaut est donc **entre l'écriture de l'élément par l'API et la lecture du scene graph**.
-Pistes non encore explorées : la persistance réelle de `variant_params` en base
-(`MutableDict`/JSONB), un validateur de cohérence ajouté en L5 qui viderait le champ, ou le cache
-de scène. Instrumente le trajet réel plutôt que de relire le code.
-
-**b) Puis** : `pytest -q`, `ruff check .`, `mypy .` côté backend ; `npm run test`, `npm run lint`,
-`npm run build` côté frontend. `alembic upgrade head` → `downgrade -1` → `upgrade head` →
-`alembic check`. Régénère l'instantané OpenAPI s'il a dérivé
-(`backend/scripts/dump_openapi.py`).
-
-**c)** Traite les points que les agents ont signalés comme nécessaires mais hors de leur périmètre
-(champ `hors_perimetre` de leurs rapports).
-
-**Interdit** : supprimer ou neutraliser un test pour le faire passer, et modifier une fixture de
-`backend/tests/geometry/fixtures/` (règle `CLAUDE.md`).
-
-### Vague 2 — multi-locataire, métré et devis
-
-C'est la vague qui crée la valeur payante. Détail complet dans `strategie-produit.md` §3.1, §3.2
-et §6.
-
-- `organization` + `membership` (rôles owner/admin/editor/viewer) + invitations, et **les champs
-  d'entreprise** : SIRET, forme juridique, capital, RCS, adresse, TVA, **assureur décennal,
-  numéro de police et couverture** — sans eux aucun devis n'est valable.
-  `owner_id` reste une trace de création et cesse d'autoriser quoi que ce soit.
-  ⚠ Le test « un membre d'une autre organisation reçoit 404 » s'écrit sur **chaque** endpoint
-  **avant** la réécriture des permissions, pas après.
-- `app/geometry/quantities.py` : `build_takeoff(scene_graph)` — fonction **pure**, avec fixtures
-  calculées à la main. Surface brute, surface nette (les `holes` sont déjà émis), linéaire de
-  plinthe, volume, nombre d'unités d'après `unit_width_cm`/`unit_height_cm`.
-  Utiliser `net_floor_area_cm2` et **jamais** `floor_area_cm2` pour chiffrer : ce dernier est
-  l'aire de la ligne médiane des murs, surévaluée de 6 à 20 %.
-- `price_book` / `price_item` par organisation, `quote` / `quote_line`.
-  **Montants en centimes entiers**, jamais en flottants. `quote_line` **copie** libellé, prix et
-  taux de TVA à l'émission et ne fait aucune jointure de lecture : en France un devis signé est un
-  contrat. Numérotation séquentielle sans trou générée **en base**.
-- Une règle de correspondance `Covering.material → price_item` : sans elle, un projet de 12 pièces
-  demande 60 rattachements à la main et la fonctionnalité est belle en démonstration et pénible en
-  production.
-- **Factur-X** (PDF/A-3 + XML CII embarqué), générable entièrement en interne avec reportlab.
-  Écrire noir sur blanc dans l'interface qu'on **n'est pas** une plateforme de dématérialisation
-  agréée et qu'on ne transmet rien à l'administration.
-
-### Vague 3 — livrables de chantier et éditeur professionnel
-
-- **Élévations vectorielles cotées, une page A4 paysage par mur.** `outline` et `holes` sont déjà
-  émis en centimètres au bon format : cette fonctionnalité ne dépend techniquement de **rien**.
-  C'est l'artefact le plus démontrable du produit, et `services/export_pdf.py` imprime aujourd'hui
-  une liste de texte à la place.
-- Bouton d'export dans l'interface : les 4 routes d'export n'ont **aucun appelant** dans le
-  frontend. Un worker Celery, un broker Redis et un volume sont facturés en production pour zéro
-  valeur utilisateur.
-- Calepinage : nombre d'unités, de coupes et taux de chute par motif de pose (~15 % en chevron
-  contre ~8 % en pose droite). C'est le chiffre qui rend le devis crédible auprès d'un homme de
-  métier.
+- **Interface des devis et du barème : rien n'existe.** Les 31 opérations ajoutées par les lots
+  V2-L1 et V2-L4 n'ont **aucun appelant** dans `frontend/src/api/client.ts`. Le produit sait établir un devis
+  Factur-X et ne sait pas le montrer. C'est, de loin, le premier poste de valeur restant.
 - **Glisser-déposer et mobilier non adossé.** Bloqué par le modèle : `Element.face_id` est
   obligatoire, donc tout meuble est collé à une face — un lit, une table, un îlot sont impossibles.
   Rendre `face_id` nullable et ajouter un placement dans le repère de la pièce est un

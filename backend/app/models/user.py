@@ -1,7 +1,11 @@
 """Compte utilisateur.
 
-`docs/spec-complete.md` §7 (P2) : « Comptes, propriété des projets ». La propriété est portée
-par `Project.owner_id`, et les permissions objet en découlent (`app/api/deps.py`).
+`docs/spec-complete.md` §7 (P2) : « Comptes, propriété des projets », amendé en §10 (A1).
+
+Un compte n'autorise plus rien par lui-même. Ce qui ouvre un projet, c'est une **appartenance
+acceptée** à l'organisation qui le porte (`app/models/organization.py`, `app/api/permissions.py`).
+`Project.owner_id` ne reste qu'une trace de création : le comparer à l'utilisateur courant pour
+décider d'un accès rouvrirait le cloisonnement que la vague 2 a fermé.
 """
 
 from datetime import datetime

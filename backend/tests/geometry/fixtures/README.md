@@ -53,3 +53,25 @@ polygone concave n'y sont détectables. Deux pièces s'y ajoutent donc.
 Les champs `axis` (primitives) et `net_floor_area_cm2` (pièce) ont été ajoutés au contrat après
 l'écriture des fixtures 01 à 04. Ils sont figés **ici**, par 05 et 06, plutôt qu'en réécrivant les
 fixtures d'origine.
+
+## Fixtures 07 à 10 — le métré
+
+Elles vérifient `app/geometry/quantities.py::build_takeoff` et non le scene graph. La règle est la
+même — valeurs calculées à la main, `reasoning` obligatoire, fixture jamais ajustée pour faire
+passer un test — mais leur **format diffère**, parce qu'un métré ne se compare pas nœud par nœud :
+
+| Fixture | Ce qu'elle fige | Clés attendues |
+|---|---|---|
+| `07_metre_piece_rectangulaire.json` | Pièce de référence nue : surfaces, linéaires, volume, calepinage en pose droite — et l'écart de l'aire médiane, qui est la raison d'être du champ `net_floor_area_cm2` | `expected`, `expected_median_floor_area_cm2`, `expected_median_overestimate_ratio` |
+| `08_metre_piece_en_L.json` | Contour concave, une porte et une fenêtre. Le sol n'y admet aucune trame : la pièce n'est pas rectangulaire, donc `full_units` / `cut_units` valent `None` et non 0 | `expected_room`, `expected_faces`, `expected_coverings`, `expected_median_floor_area_cm2` |
+| `09_metre_mur_deux_ouvertures.json` | Trame percée, position par position : 40 emplacements, 6 avalés par les percements, 13 coupes, 21 entiers | `expected_room`, `expected_faces`, `expected_trame_positions`, `expected_positions_swallowed_by_openings`, `expected_warning_count` |
+| `10_metre_calepinage_motifs.json` | Les cinq motifs de pose et un motif inconnu sur la même face — taux de chute et repli sur le motif droit | `expected_by_pattern`, `expected_net_area_m2`, `expected_waste_ratio_orders_of_magnitude` |
+
+Leur `input` est un **plan**, pas un scene graph : le test enchaîne `build_scene_graph` puis
+`build_takeoff`, ce qui fait porter la fixture sur la chaîne réelle plutôt que sur une entrée
+intermédiaire qu'aucun appelant ne produit.
+
+Deux conventions à ne pas confondre en les relisant : `None` signifie « non établissable » et
+jamais zéro (il s'accompagne toujours d'un avertissement), et les trois compteurs d'unités sont
+distincts — `units_total` est ce qu'il faut commander, `full_units` ce qui se pose entier,
+`cut_units` ce qu'il faut recouper. Leur somme n'a aucun sens.

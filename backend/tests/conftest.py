@@ -48,6 +48,8 @@ get_settings.cache_clear()
 
 from app.db import get_session  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
+from app.models.base import utcnow  # noqa: E402
+from app.models.organization import Organization  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 ADMIN_PASSWORD = "motdepasse-admin-de-test-2026"
@@ -243,6 +245,49 @@ async def owner(session: AsyncSession) -> User:
     await session.commit()
     await session.refresh(user)
     return user
+
+
+async def personal_organization(session: AsyncSession, user: User) -> Organization:
+    """Organisation personnelle d'un compte de test, avec son appartenance `owner` acceptée.
+
+    Depuis la vague 2, ce sont les organisations qui portent les droits : un `Project` construit
+    directement en base — sans passer par l'API, donc sans `default_organization_id` — doit être
+    rattaché à un locataire, sinon la colonne `NOT NULL` refuse la ligne.
+
+    Idempotente : deux appels pour le même compte rendent la même organisation, là où en créer une
+    seconde violerait `uq_membership_user_organization`.
+    """
+    from sqlmodel import select as sqlmodel_select
+
+    from app.models.organization import Membership, OrganizationRole
+
+    existing = (
+        await session.execute(
+            sqlmodel_select(Organization)
+            .join(Membership, Membership.organization_id == Organization.id)  # type: ignore[arg-type]
+            .where(Membership.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    organization = Organization(name="Entreprise de test", slug=f"entreprise-{user.id or 0}")
+    session.add(organization)
+    await session.flush()
+
+    now = utcnow()
+    session.add(
+        Membership(
+            user_id=user.id or 0,
+            organization_id=organization.id or 0,
+            role=OrganizationRole.OWNER,
+            invited_at=now,
+            accepted_at=now,
+        )
+    )
+    await session.commit()
+    await session.refresh(organization)
+    return organization
 
 
 @pytest.fixture

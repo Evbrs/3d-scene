@@ -398,6 +398,119 @@ export function readSceneGraph(projectId: number): Promise<SceneGraph> {
   return request<SceneGraph>(`/api/projects/${projectId}/scene`)
 }
 
+// --- Export PDF (P9) --------------------------------------------------------------------------
+
+/** Réponse du 202 : la génération part en tâche de fond, la requête rend la main tout de suite. */
+export interface ExportAccepted {
+  task_id: string
+  status: string
+  poll_url: string
+}
+
+/** Descriptif de l'export produit. Le PDF lui-même ne transite jamais par le backend de résultats. */
+export interface ExportResult {
+  project_id: number
+  filename: string
+  size_bytes: number
+  generated_at: string
+}
+
+export interface ExportStatus {
+  task_id: string
+  state: string
+  ready: boolean
+  result: ExportResult | null
+  error: string | null
+}
+
+/** Cadence de sondage et durée au-delà de laquelle on cesse d'attendre, en millisecondes. */
+export const EXPORT_POLL_MS = 1500
+export const EXPORT_TIMEOUT_MS = 60_000
+
+export function requestPdfExport(projectId: number): Promise<ExportAccepted> {
+  return request<ExportAccepted>(`/api/projects/${projectId}/exports/pdf`, {
+    method: 'POST',
+  })
+}
+
+export function readExportStatus(projectId: number, taskId: string): Promise<ExportStatus> {
+  return request<ExportStatus>(
+    `/api/projects/${projectId}/exports/tasks/${encodeURIComponent(taskId)}`,
+  )
+}
+
+/**
+ * URL de téléchargement d'un export.
+ *
+ * Écrite en toutes lettres et à un seul endroit : c'est ce que `contract.spec.ts` confronte au
+ * schéma OpenAPI. Une URL assemblée morceau par morceau échapperait à cette vérification.
+ */
+export function exportDownloadUrl(projectId: number, filename: string): string {
+  return `${API_BASE_URL}/api/projects/${projectId}/exports/${encodeURIComponent(filename)}`
+}
+
+/**
+ * Attend qu'un export soit prêt, en sondant le serveur.
+ *
+ * L'attente est bornée : au-delà de `EXPORT_TIMEOUT_MS`, on rend la main avec un message plutôt
+ * que de sonder indéfiniment. Un worker arrêté ou un broker injoignable laisserait sinon
+ * l'interface tourner en boucle jusqu'à la fermeture de l'onglet, sans jamais rien dire.
+ */
+export async function waitForPdfExport(
+  projectId: number,
+  taskId: string,
+): Promise<ExportResult> {
+  const deadline = Date.now() + EXPORT_TIMEOUT_MS
+
+  while (Date.now() < deadline) {
+    const status = await readExportStatus(projectId, taskId)
+    if (status.ready) {
+      if (status.result) return status.result
+      throw new Error(status.error ?? "La génération du PDF a échoué côté serveur.")
+    }
+    await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_MS))
+  }
+
+  throw new Error(
+    `Le PDF n'est toujours pas prêt après ${EXPORT_TIMEOUT_MS / 1000} s. ` +
+      'La génération continue côté serveur : réessayez dans un instant.',
+  )
+}
+
+/**
+ * Récupère le PDF produit.
+ *
+ * Un simple lien ne suffit pas : la route exige l'en-tête `Authorization`, que le navigateur ne
+ * joint pas à une navigation. Le fichier est donc lu ici, avec le même unique rejeu après
+ * renouvellement du jeton que les autres appels — sans lui, un export lancé en fin de session
+ * échouerait juste après avoir été généré.
+ */
+export async function downloadExport(
+  projectId: number,
+  filename: string,
+  allowRetry = true,
+): Promise<Blob> {
+  const headers = new Headers()
+  const token = storedToken()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(exportDownloadUrl(projectId, filename), { headers })
+
+  if (response.status === 401 && token) {
+    if (allowRetry && (await refreshSession())) {
+      return downloadExport(projectId, filename, false)
+    }
+    clearToken()
+    sessionLostHandler?.()
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, `Erreur HTTP ${response.status}`)
+  }
+  return response.blob()
+}
+
 // --- Partage de vue (P8) --------------------------------------------------------------------
 
 export interface SharedView {

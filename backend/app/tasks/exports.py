@@ -36,7 +36,7 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
 
     from app.api.scene import project_to_plain_dict
     from app.db import get_session_factory
-    from app.models.plan import Face, Project, Room
+    from app.models.plan import Face, FurnitureType, Project, Room
 
     async with get_session_factory()() as session:
         project = (
@@ -54,6 +54,35 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
             return None
         payload = project_to_plain_dict(project)
         payload["name"] = project.name
+
+        # Nom du meuble, en une requête pour tout le projet. Sans lui l'élévation étiquette chaque
+        # meuble « Meuble » : sur une planche de salle de bains qui en porte quatre, le document
+        # cesse de dire lequel va où. `project_to_plain_dict` ne rend que `furniture_type_id`,
+        # parce que le scene graph n'a besoin que de la recette, pas du libellé.
+        referenced = {
+            element["furniture_type_id"]
+            for room in payload["rooms"]
+            for face in room["faces"]
+            for element in face["elements"]
+            if element.get("furniture_type_id") is not None
+        }
+        if referenced:
+            names = {
+                row.id: row.name
+                for row in (
+                    await session.execute(
+                        select(FurnitureType).where(col(FurnitureType.id).in_(referenced))
+                    )
+                )
+                .scalars()
+                .all()
+            }
+            for room in payload["rooms"]:
+                for face in room["faces"]:
+                    for element in face["elements"]:
+                        name = names.get(element.get("furniture_type_id"))
+                        if name:
+                            element["furniture_name"] = name
         return payload
 
 

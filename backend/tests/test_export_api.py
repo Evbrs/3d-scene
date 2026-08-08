@@ -11,8 +11,11 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.services.export_pdf import render_project_pdf
+from app.services.seed import seed_catalog
+from tests.test_export_pdf import _pdf_text
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
 FIXED_DATE = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
@@ -106,6 +109,38 @@ async def test_the_synchronous_export_returns_a_pdf(auth_client: AsyncClient) ->
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
     assert response.content.startswith(b"%PDF-")
+
+
+async def test_the_elevation_names_the_furniture_it_draws(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Le meuble porte son nom de catalogue, pas l'étiquette générique « Meuble ».
+
+    Le chargement de l'export ne lisait que `furniture_type_id` : sur une planche portant
+    plusieurs meubles, le document ne disait plus lequel allait où. Le test passe par la route
+    réelle, seul moyen de prouver que le nom traverse bien la base et pas seulement le rendu.
+    """
+    await seed_catalog(session)
+    project = (await auth_client.post("/api/projects", json={"name": "À nommer"})).json()
+    room = (
+        await auth_client.post(
+            f"/api/projects/{project['id']}/rooms", json={"name": "Salle de bains",
+                                                          "polygon": CARRE}
+        )
+    ).json()
+    meuble = (await auth_client.get("/api/furniture-types/meuble-sous-vasque")).json()
+    face = next(f for f in room["faces"] if f["label"] == "A")
+    posé = await auth_client.post(
+        f"/api/faces/{face['id']}/elements",
+        json={"kind": "furniture", "furniture_type_id": meuble["id"], "x_offset_cm": 20,
+              "y_offset_cm": 0, "width_cm": 120, "height_cm": 90, "depth_cm": 60},
+    )
+    assert posé.status_code == 201, posé.text
+
+    response = await auth_client.get(f"/api/projects/{project['id']}/exports/pdf/direct")
+
+    assert response.status_code == 200
+    assert meuble["name"] in _pdf_text(response.content)
 
 
 async def test_the_export_requires_authentication(client: AsyncClient) -> None:

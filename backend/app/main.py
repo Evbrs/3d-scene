@@ -25,9 +25,12 @@ from app.api.conflicts import stale_data_handler
 from app.api.exports import router as exports_router
 from app.api.furniture import router as furniture_router
 from app.api.health import router as health_router
+from app.api.organizations import router as organizations_router
 from app.api.plan import router as plan_router
+from app.api.quotes import router as quotes_router
 from app.api.scene import router as scene_router
 from app.api.share import router as share_router
+from app.api.takeoff import router as takeoff_router
 from app.core.compression import SelectiveGZipMiddleware
 from app.core.config import Settings, get_settings
 from app.core.limits import BodySizeLimitMiddleware
@@ -126,11 +129,14 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(probes_router)
     app.include_router(auth_router)
+    app.include_router(organizations_router)
     app.include_router(plan_router)
     app.include_router(furniture_router)
     app.include_router(scene_router)
     app.include_router(share_router)
     app.include_router(exports_router)
+    app.include_router(takeoff_router)
+    app.include_router(quotes_router)
     mount_admin(app)
     return app
 

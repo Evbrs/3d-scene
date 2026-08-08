@@ -27,14 +27,17 @@ from app.models import (
     User,
 )
 from app.models.base import utcnow
+from tests.conftest import personal_organization
 
 
 async def _make_plan(session: AsyncSession, owner: User) -> tuple[Project, Room, Face, Element]:
     """Crée l'arbre Project → Room → Face → Element et le persiste."""
+    organization = await personal_organization(session, owner)
     project = Project(
         name="Rénovation appartement",
         description="T3 à rénover",
         owner_id=owner.id or 0,
+        organization_id=organization.id or 0,
     )
     session.add(project)
     await session.flush()
@@ -206,7 +209,11 @@ async def test_optimistic_locking_detects_a_concurrent_write(
     from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
     assert isinstance(engine, AsyncEngine)
-    project = Project(name="Projet partagé", owner_id=owner.id or 0)
+    project = Project(
+        name="Projet partagé",
+        owner_id=owner.id or 0,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.commit()
     assert project.version == 1
@@ -229,7 +236,11 @@ async def test_optimistic_locking_detects_a_concurrent_write(
 async def test_shared_view_state_is_stored_as_json(
     session: AsyncSession, owner: User
 ) -> None:
-    project = Project(name="Projet à partager", owner_id=owner.id or 0)
+    project = Project(
+        name="Projet à partager",
+        owner_id=owner.id or 0,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.flush()
 
@@ -301,7 +312,11 @@ async def _refusal_message(session: AsyncSession, instance: SQLModel) -> str:
 async def test_the_database_refuses_an_impossible_room(
     session: AsyncSession, owner: User, constraint: str, field: str, value: float | str
 ) -> None:
-    project = Project(name="Projet", owner_id=owner.id or 0)
+    project = Project(
+        name="Projet",
+        owner_id=owner.id or 0,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.flush()
 
@@ -414,7 +429,11 @@ async def _room_names(session: AsyncSession, project_id: int) -> list[str]:
 async def test_renaming_a_room_does_not_reshuffle_the_others(
     session: AsyncSession, owner: User
 ) -> None:
-    project = Project(name="Trois pièces", owner_id=owner.id or 0)
+    project = Project(
+        name="Trois pièces",
+        owner_id=owner.id or 0,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.flush()
     for name in ("Salon", "Cuisine", "Chambre"):
@@ -446,9 +465,20 @@ async def test_a_raw_sql_insert_needs_only_the_business_columns(
     — `created_at`, `updated_at` et `version` — que l'auteur de la requête n'a aucune raison de
     connaître. La voie rapide était fermée précisément quand on en a besoin.
     """
+    organization = await personal_organization(session, owner)
+    # `organization_id` est une colonne **métier** au même titre que `owner_id` : qui insère un
+    # projet à la main doit dire à quel locataire il appartient. Ce sont les colonnes de
+    # plomberie — horodatages et version — que ce test exige de pouvoir omettre.
     await session.execute(
-        text("INSERT INTO project (owner_id, name) VALUES (:owner, :name)"),
-        {"owner": owner.id, "name": "Créé en SQL direct"},
+        text(
+            "INSERT INTO project (owner_id, organization_id, name) "
+            "VALUES (:owner, :organization, :name)"
+        ),
+        {
+            "owner": owner.id,
+            "organization": organization.id,
+            "name": "Créé en SQL direct",
+        },
     )
     await session.commit()
 
@@ -502,7 +532,11 @@ async def test_updated_at_moves_without_being_assigned(
     Une correction passée par SQLAdmin, par la CLI ou par Celery laissait donc `updated_at` à sa
     valeur de création — et la liste des projets, triée dessus, mentait.
     """
-    project = Project(name="Projet suivi", owner_id=owner.id or 0)
+    project = Project(
+        name="Projet suivi",
+        owner_id=owner.id or 0,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.commit()
     before = project.updated_at
@@ -520,7 +554,11 @@ async def test_the_expiry_of_a_shared_view_lives_in_a_column(
 
     Elle est désormais une colonne à part entière, comme la révocation et le libellé.
     """
-    project = Project(name="Projet à partager", owner_id=owner.id or 0)
+    project = Project(
+        name="Projet à partager",
+        owner_id=owner.id or 0,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.flush()
 

@@ -1,0 +1,83 @@
+{
+  "description": "Métré d'une pièce en L, avec une porte sur le mur A et une fenêtre sur le mur B : la porte ampute la plinthe, la fenêtre non, et le sol non rectangulaire n'a pas de trame de calepinage.",
+  "reasoning": [
+    "Même contour que la fixture 06 : (0,0) (600,0) (600,200) (200,200) (200,500) (0,500), murs de 10, plafond à 250. Le sommet (200,200) est rentrant.",
+    "Longueurs des murs : A 600, B 200, C 400, D 300, E 200, F 500. Périmètre sur la ligne médiane = 2200 cm = 22 ml.",
+    "Contour au nu intérieur (chaque côté rentre de t/2 = 5) : (5,5) (595,5) (595,195) (195,195) (195,495) (5,495). Le sommet rentrant part vers l'extérieur du L, de (200,200) à (195,195), comme dans la fixture 06.",
+    "  Son aire = barre basse 590 x 190 = 112100, plus aile haute 190 x 300 = 57000, soit 169100 cm² : exactement le `net_floor_area_cm2` du scene graph.",
+    "  Son périmètre = 590 + 190 + 400 + 300 + 190 + 490 = 2160 cm = 21.6 ml. La ligne médiane (22 ml) le surévalue de 1.85 %.",
+    "Sol et plafond : 169100 cm² = 16.91 m² chacun. La ligne médiane (180000 cm²) surévaluerait de 6.4 %.",
+    "Volume = 169100 x 250 = 42275000 cm³ = 42.275 m³.",
+    "Surfaces brutes des murs, toutes à 250 de haut : A 600 x 250 = 150000 = 15 m² ; B 200 x 250 = 50000 = 5 m² ; C 400 x 250 = 100000 = 10 m² ; D 300 x 250 = 75000 = 7.5 m² ; E 5 m² ; F 500 x 250 = 125000 = 12.5 m². Total 55 m².",
+    "Percements. Porte du mur A : u de 100 à 190, v de 0 à 204, soit 90 x 204 = 18360 cm² = 1.836 m². Mur A net = 15 - 1.836 = 13.164 m².",
+    "  Fenêtre du mur B : u de 40 à 160, v de 100 à 210, soit 120 x 110 = 13200 cm² = 1.32 m². Mur B net = 5 - 1.32 = 3.68 m².",
+    "  Total des percements 3.156 m², surface nette de murs 55 - 3.156 = 51.844 m².",
+    "Plinthe. Le bas de la porte est à v = 0 : elle touche le sol et interrompt la plinthe sur ses 90 cm. Le bas de la fenêtre est à v = 100 : son allège ne l'interrompt pas. Plinthe = 21.6 - 0.9 = 20.7 ml.",
+    "  C'est la hauteur du bas du percement qui décide, et non la nature déclarée de l'ouverture : celle-ci n'apparaît dans le scene graph que si le catalogue de menuiseries a été fourni, alors que le trou, lui, y est toujours. Une porte-fenêtre coupe la plinthe comme une porte, ce qui est le bon résultat.",
+    "Corniche = 21.6 ml : aucun percement ne monte au plafond, une porte de 204 sous 250 de plafond n'interrompt pas la moulure.",
+    "Calepinage du sol, carrelage 60 x 60 posé droit. Unité = 3600 cm² = 0.36 m². Chute de 8 %.",
+    "  Commande : 169100 x 1.08 = 182628 cm² = 18.2628 m², arrondi à 18.263 m². Il faut ceil(182628 / 3600) = ceil(50.73) = 51 carreaux.",
+    "  Trame : le contour au nu intérieur a SIX sommets, ce n'est pas un rectangle. Une trame rectangulaire n'y décrirait rien, donc `full_units` et `cut_units` restent nuls — et non pas zéro, qui voudrait dire « aucune coupe » et serait faux.",
+    "Murs et plafond peints : pas de dimension d'unité, pas de calepinage."
+  ],
+  "input": {
+    "project_id": 8,
+    "rooms": [
+      {
+        "id": 80,
+        "name": "Séjour en L",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [600, 0], [600, 200], [200, 200], [200, 500], [0, 500]],
+        "faces": [
+          {"id": 800, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 600, "end_y_cm": 0, "covering": {"material": "peinture"}, "elements": [
+            {"id": 8000, "kind": "door_hinged", "x_offset_cm": 100, "y_offset_cm": 0, "width_cm": 90, "height_cm": 204, "depth_cm": 5, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]},
+          {"id": 801, "label": "B", "kind": "wall", "start_x_cm": 600, "start_y_cm": 0, "end_x_cm": 600, "end_y_cm": 200, "covering": {"material": "peinture"}, "elements": [
+            {"id": 8001, "kind": "window", "x_offset_cm": 40, "y_offset_cm": 100, "width_cm": 120, "height_cm": 110, "depth_cm": 12, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]},
+          {"id": 802, "label": "C", "kind": "wall", "start_x_cm": 600, "start_y_cm": 200, "end_x_cm": 200, "end_y_cm": 200, "covering": {"material": "peinture"}, "elements": []},
+          {"id": 803, "label": "D", "kind": "wall", "start_x_cm": 200, "start_y_cm": 200, "end_x_cm": 200, "end_y_cm": 500, "covering": {"material": "peinture"}, "elements": []},
+          {"id": 804, "label": "E", "kind": "wall", "start_x_cm": 200, "start_y_cm": 500, "end_x_cm": 0, "end_y_cm": 500, "covering": {"material": "peinture"}, "elements": []},
+          {"id": 805, "label": "F", "kind": "wall", "start_x_cm": 0, "start_y_cm": 500, "end_x_cm": 0, "end_y_cm": 0, "covering": {"material": "peinture"}, "elements": []},
+          {"id": 806, "label": "SOL", "kind": "floor", "start_x_cm": null, "start_y_cm": null, "end_x_cm": null, "end_y_cm": null, "covering": {"material": "carrelage", "unit_width_cm": 60, "unit_height_cm": 60, "pattern": "straight"}, "elements": []},
+          {"id": 807, "label": "PLAFOND", "kind": "ceiling", "start_x_cm": null, "start_y_cm": null, "end_x_cm": null, "end_y_cm": null, "covering": {"material": "peinture"}, "elements": []}
+        ]
+      }
+    ]
+  },
+  "expected_room": {
+    "room_id": 80,
+    "name": "Séjour en L",
+    "ceiling_height_m": 2.5,
+    "wall_thickness_m": 0.1,
+    "perimeter_ml": 22.0,
+    "net_perimeter_ml": 21.6,
+    "skirting_ml": 20.7,
+    "cornice_ml": 21.6,
+    "floor_area_m2": 16.91,
+    "ceiling_area_m2": 16.91,
+    "volume_m3": 42.275,
+    "wall_gross_area_m2": 55.0,
+    "wall_openings_area_m2": 3.156,
+    "wall_net_area_m2": 51.844,
+    "opening_count": 2,
+    "door_count": 1,
+    "window_count": 1,
+    "warnings": []
+  },
+  "expected_faces": [
+    {"face_id": 800, "face_label": "A", "kind": "wall", "length_m": 6.0, "height_m": 2.5, "gross_area_m2": 15.0, "openings_area_m2": 1.836, "net_area_m2": 13.164, "opening_count": 1, "door_count": 1, "window_count": 0, "skirting_deduction_ml": 0.9, "material": "peinture", "tiling": null},
+    {"face_id": 801, "face_label": "B", "kind": "wall", "length_m": 2.0, "height_m": 2.5, "gross_area_m2": 5.0, "openings_area_m2": 1.32, "net_area_m2": 3.68, "opening_count": 1, "door_count": 0, "window_count": 1, "skirting_deduction_ml": 0.0, "material": "peinture", "tiling": null},
+    {"face_id": 802, "face_label": "C", "kind": "wall", "length_m": 4.0, "height_m": 2.5, "gross_area_m2": 10.0, "openings_area_m2": 0.0, "net_area_m2": 10.0, "opening_count": 0, "door_count": 0, "window_count": 0, "skirting_deduction_ml": 0.0, "material": "peinture", "tiling": null},
+    {"face_id": 803, "face_label": "D", "kind": "wall", "length_m": 3.0, "height_m": 2.5, "gross_area_m2": 7.5, "openings_area_m2": 0.0, "net_area_m2": 7.5, "opening_count": 0, "door_count": 0, "window_count": 0, "skirting_deduction_ml": 0.0, "material": "peinture", "tiling": null},
+    {"face_id": 804, "face_label": "E", "kind": "wall", "length_m": 2.0, "height_m": 2.5, "gross_area_m2": 5.0, "openings_area_m2": 0.0, "net_area_m2": 5.0, "opening_count": 0, "door_count": 0, "window_count": 0, "skirting_deduction_ml": 0.0, "material": "peinture", "tiling": null},
+    {"face_id": 805, "face_label": "F", "kind": "wall", "length_m": 5.0, "height_m": 2.5, "gross_area_m2": 12.5, "openings_area_m2": 0.0, "net_area_m2": 12.5, "opening_count": 0, "door_count": 0, "window_count": 0, "skirting_deduction_ml": 0.0, "material": "peinture", "tiling": null},
+    {"face_id": 806, "face_label": "SOL", "kind": "floor", "length_m": null, "height_m": null, "gross_area_m2": 16.91, "openings_area_m2": 0.0, "net_area_m2": 16.91, "opening_count": 0, "door_count": 0, "window_count": 0, "skirting_deduction_ml": 0.0, "material": "carrelage", "tiling": {"pattern": "straight", "unit_width_cm": 60.0, "unit_height_cm": 60.0, "unit_area_m2": 0.36, "waste_ratio": 0.08, "ordered_area_m2": 18.263, "units_total": 51, "full_units": null, "cut_units": null}},
+    {"face_id": 807, "face_label": "PLAFOND", "kind": "ceiling", "length_m": null, "height_m": null, "gross_area_m2": 16.91, "openings_area_m2": 0.0, "net_area_m2": 16.91, "opening_count": 0, "door_count": 0, "window_count": 0, "skirting_deduction_ml": 0.0, "material": "peinture", "tiling": null}
+  ],
+  "expected_coverings": [
+    {"material": "carrelage", "pattern": "straight", "unit_width_cm": 60.0, "unit_height_cm": 60.0, "waste_ratio": 0.08, "net_area_m2": 16.91, "ordered_area_m2": 18.263, "units_total": 51, "full_units": null, "cut_units": null}
+  ],
+  "expected_median_floor_area_cm2": 180000.0
+}

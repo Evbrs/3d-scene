@@ -114,9 +114,26 @@ describe('contrat avec le backend', () => {
       '/api/faces/{}/elements',
       '/api/elements/{}',
       '/api/furniture-types',
+      // Les trois routes d'export ont enfin un appelant. Sans elles, le worker Celery, le broker
+      // Redis et le volume d'exports sont facturés en production pour zéro valeur utilisateur.
+      '/api/projects/{}/exports/pdf',
+      '/api/projects/{}/exports/tasks/{}',
+      '/api/projects/{}/exports/{}',
     ]) {
       expect(published.has(path), `${path} absent du schéma OpenAPI`).toBe(true)
     }
+  })
+
+  it('la vérification du verbe en est réellement une', () => {
+    // Le verbe a été comparé un temps à la constante `'any'`, ce qui rendait le test précédent
+    // décoratif : n'importe quelle méthode passait. Cette assertion-ci échoue si l'on y revient,
+    // alors que les trois tests ci-dessus resteraient verts.
+    const operations = schemaOperations()
+
+    expect(operations.get('/api/projects/{}/exports/pdf')?.has('post')).toBe(true)
+    expect(operations.get('/api/projects/{}/exports/pdf')?.has('get')).toBe(false)
+    expect(operations.get('/api/projects/{}/exports/tasks/{}')?.has('get')).toBe(true)
+    expect(operations.get('/api/projects/{}/exports/tasks/{}')?.has('post')).toBe(false)
   })
 
   it('le conflit d’édition est documenté sur les écritures du plan', () => {

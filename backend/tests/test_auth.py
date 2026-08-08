@@ -23,6 +23,7 @@ from app.core.security import (
 )
 from app.models import Project, User
 from app.models.base import utcnow
+from tests.conftest import personal_organization
 
 VALID_PASSWORD = "motdepasse-solide-2026"
 
@@ -527,18 +528,26 @@ async def test_outside_development_the_refresh_token_never_reaches_the_body(
 async def test_object_permissions_hide_another_users_project(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """Un projet d'autrui est introuvable, pas « interdit » (pas d'énumération d'identifiants)."""
+    """Le projet d'une autre organisation est introuvable, pas « interdit ».
+
+    Répondre 403 confirmerait son existence, donc permettrait d'énumérer les identifiants des
+    autres clients. Ce qui autorise est désormais l'appartenance et non `owner_id`.
+    """
     from app.api.permissions import get_owned_project
 
     owner_id = await _register(client, "proprietaire@exemple.fr")
     intruder_id = await _register(client, "intrus@exemple.fr")
 
-    project = Project(name="Projet privé", owner_id=owner_id)
-    session.add(project)
-    await session.commit()
-
     owner = (await session.execute(select(User).where(User.id == owner_id))).scalar_one()
     intruder = (await session.execute(select(User).where(User.id == intruder_id))).scalar_one()
+
+    project = Project(
+        name="Projet privé",
+        owner_id=owner_id,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
+    session.add(project)
+    await session.commit()
 
     assert (await get_owned_project(session, project.id or 0, owner)).id == project.id
 
@@ -564,7 +573,14 @@ async def test_object_permissions_walk_up_from_element_to_owner(
     owner_id = await _register(client, "arbre@exemple.fr")
     intruder_id = await _register(client, "voisin@exemple.fr")
 
-    project = Project(name="Projet arborescent", owner_id=owner_id)
+    owner = (await session.execute(select(User).where(User.id == owner_id))).scalar_one()
+    intruder = (await session.execute(select(User).where(User.id == intruder_id))).scalar_one()
+
+    project = Project(
+        name="Projet arborescent",
+        owner_id=owner_id,
+        organization_id=(await personal_organization(session, owner)).id or 0,
+    )
     session.add(project)
     await session.flush()
     room = Room(project_id=project.id or 0, name="Séjour")
@@ -576,9 +592,6 @@ async def test_object_permissions_walk_up_from_element_to_owner(
     element = Element(face_id=face.id or 0, kind=ElementKind.WINDOW)
     session.add(element)
     await session.commit()
-
-    owner = (await session.execute(select(User).where(User.id == owner_id))).scalar_one()
-    intruder = (await session.execute(select(User).where(User.id == intruder_id))).scalar_one()
 
     assert (await get_owned_room(session, room.id or 0, owner)).id == room.id
     assert (await get_owned_face(session, face.id or 0, owner)).id == face.id
@@ -599,10 +612,15 @@ async def test_deleting_a_user_removes_their_projects(
 ) -> None:
     """RGPD : le droit à l'effacement suppose une suppression en cascade."""
     owner_id = await _register(client, "efface@exemple.fr")
-    session.add(Project(name="À supprimer", owner_id=owner_id))
-    await session.commit()
-
     user = (await session.execute(select(User).where(User.id == owner_id))).scalar_one()
+    session.add(
+        Project(
+            name="À supprimer",
+            owner_id=owner_id,
+            organization_id=(await personal_organization(session, user)).id or 0,
+        )
+    )
+    await session.commit()
     await session.delete(user)
     await session.commit()
 

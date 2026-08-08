@@ -1,0 +1,49 @@
+{
+  "description": "Calepinage du MÊME mur nu de 400 x 250, carrelé en 50 x 50, sous chacun des motifs de pose : c'est le motif, et lui seul, qui fait varier la chute, le nombre d'unités et l'existence même d'une trame.",
+  "reasoning": [
+    "Mur de (0,0) à (400,0), 400 de long, 250 de haut, sans percement : surface nette = 100000 cm² = 10 m². Unité 50 x 50 = 2500 cm² = 0.25 m².",
+    "Les taux de chute sont ceux du métier : ils couvrent les coupes de rive, la casse et le rattrapage de trame. Ce sont les ordres de grandeur que `docs/strategie-produit.md` §3.8 impose de tenir — pose droite autour de 8 %, diagonale autour de 12 %, chevron et bâton rompu autour de 15 %.",
+    "Pose droite, 8 % : commande 10 x 1.08 = 10.8 m², soit ceil(10.8 / 0.25) = ceil(43.2) = 44 carreaux.",
+    "  Trame alignée sur le départ du mur : 400 / 50 = 8 colonnes et 250 / 50 = 5 rangs, tous exacts. 40 positions, 40 entières, 0 coupe. C'est le seul cas où un mur ne demande aucune coupe : les deux dimensions tombent juste.",
+    "Pose décalée, 10 % : commande 10 x 1.10 = 11 m², soit ceil(11 / 0.25) = ceil(44) = 44 carreaux — le même nombre que la pose droite, l'arrondi supérieur absorbant les deux points d'écart.",
+    "  Trame : un rang sur deux recule d'une demi-unité, soit 25. Les rangs 0, 2 et 4 gardent leurs 8 positions entières. Les rangs 1 et 3 commencent par une coupe de 25, enchaînent 7 positions entières (de 25 à 375) et finissent par une coupe de 25 : 7 entières et 2 coupes chacun.",
+    "  Total : 3 x 8 + 2 x 7 = 38 entières et 2 x 2 = 4 coupes. C'est bien la pose décalée qui crée ces coupes, la face n'ayant aucune rive à rattraper.",
+    "Pose en diagonale, 12 % : commande 10 x 1.12 = 11.2 m², soit ceil(11.2 / 0.25) = ceil(44.8) = 45 carreaux.",
+    "  Aucune trame : la pose est à 45°, ses rangs ne sont pas parallèles aux bords de la face, et le découpage en colonnes et rangs ne décrit plus rien. `full_units` et `cut_units` restent nuls plutôt que de porter un décompte inventé.",
+    "Chevron, 15 % : commande 10 x 1.15 = 11.5 m², soit ceil(11.5 / 0.25) = ceil(46) = 46 carreaux. Pas de trame, pour la même raison.",
+    "Bâton rompu, 15 % : même trame à 45°, mêmes coupes de rive, donc mêmes 46 carreaux.",
+    "Motif inconnu (`spirale`) : le métré provisionne la chute d'une pose droite, 8 %, donc 44 carreaux — et le signale dans `warnings`. Il ne pose pas de trame non plus : rien ne dit que ce motif serait aligné sur la face.",
+    "Du plus économe au plus coûteux, l'écart va de 44 à 46 carreaux sur 10 m² : c'est peu ici parce que la face tombe juste, et c'est justement ce qui rend la comparaison lisible."
+  ],
+  "input": {
+    "project_id": 10,
+    "rooms": [
+      {
+        "id": 100,
+        "name": "Cuisine",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {"id": 1000, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0, "covering": {"material": "carrelage", "unit_width_cm": 50, "unit_height_cm": 50, "pattern": "straight"}, "elements": []}
+        ]
+      }
+    ]
+  },
+  "expected_net_area_m2": 10.0,
+  "expected_by_pattern": {
+    "straight": {"pattern": "straight", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.08, "ordered_area_m2": 10.8, "units_total": 44, "full_units": 40, "cut_units": 0},
+    "staggered": {"pattern": "staggered", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.1, "ordered_area_m2": 11.0, "units_total": 44, "full_units": 38, "cut_units": 4},
+    "diagonal": {"pattern": "diagonal", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.12, "ordered_area_m2": 11.2, "units_total": 45, "full_units": null, "cut_units": null},
+    "chevron": {"pattern": "chevron", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.15, "ordered_area_m2": 11.5, "units_total": 46, "full_units": null, "cut_units": null},
+    "herringbone": {"pattern": "herringbone", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.15, "ordered_area_m2": 11.5, "units_total": 46, "full_units": null, "cut_units": null},
+    "spirale": {"pattern": "spirale", "unit_width_cm": 50.0, "unit_height_cm": 50.0, "unit_area_m2": 0.25, "waste_ratio": 0.08, "ordered_area_m2": 10.8, "units_total": 44, "full_units": null, "cut_units": null}
+  },
+  "expected_waste_ratio_orders_of_magnitude": {
+    "straight": 0.08,
+    "staggered": 0.10,
+    "diagonal": 0.12,
+    "chevron": 0.15,
+    "herringbone": 0.15
+  }
+}

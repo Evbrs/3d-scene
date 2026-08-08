@@ -54,17 +54,24 @@ class Project(TimestampedModel, table=True):
 
     __tablename__ = "project"
     # Index composite calqué sur la requête réelle de `GET /api/projects` :
-    # `WHERE owner_id = ? ORDER BY updated_at DESC`. Deux index séparés obligeraient PostgreSQL à
-    # trier après filtrage ; celui-ci sert le filtre *et* l'ordre.
-    __table_args__ = (Index("ix_project_owner_updated", "owner_id", "updated_at"),)
+    # `WHERE organization_id IN (…) ORDER BY updated_at DESC`. Deux index séparés obligeraient
+    # PostgreSQL à trier après filtrage ; celui-ci sert le filtre *et* l'ordre. Il porte
+    # `organization_id` depuis que l'appartenance a remplacé la propriété : indexé sur `owner_id`,
+    # il ne servait plus aucune requête.
+    __table_args__ = (Index("ix_project_organization_updated", "organization_id", "updated_at"),)
 
     # Verrouillage optimiste (spec §8, cas 3) : SQLAlchemy incrémente `version` à chaque UPDATE
     # et lève `StaleDataError` si la ligne a changé entre-temps, au lieu d'écraser silencieusement.
     __mapper_args__: ClassVar[dict[str, Any]] = {"version_id_col": _project_version_column}
 
     id: int | None = Field(default=None, primary_key=True)
-    # Propriétaire du projet : socle des permissions objet (spec §7, P2). Pas d'index dédié :
-    # `ix_project_owner_updated` a `owner_id` en tête, donc sert aussi le filtre seul.
+    # Locataire propriétaire du projet : c'est **lui** qui porte les droits d'accès
+    # (`app/api/permissions.py`). Pas d'index dédié : `ix_project_organization_updated` a
+    # `organization_id` en tête, donc sert aussi le filtre seul.
+    organization_id: int = Field(foreign_key="organization.id", ondelete="CASCADE")
+    # Trace de création, et **rien d'autre**. Comparer `owner_id` à l'utilisateur courant pour
+    # autoriser un accès a été retiré partout : un projet appartient à l'organisation, pas à la
+    # personne qui a cliqué la première (`docs/strategie-produit.md` §6, point 1).
     owner_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
     name: str = Field(max_length=200)
     description: str | None = Field(default=None, max_length=2000)

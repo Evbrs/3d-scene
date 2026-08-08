@@ -231,6 +231,47 @@ async function removeElement(elementId: number): Promise<void> {
   )
 }
 
+/**
+ * Export PDF du dossier (plan coté et une élévation par mur).
+ *
+ * Le fichier est produit par un worker Celery : on demande, on sonde, on télécharge. Le blob est
+ * récupéré par le client HTTP et non par un lien direct, parce que la route exige l'en-tête
+ * `Authorization` que le navigateur ne joint pas à une navigation.
+ */
+const exporting = ref(false)
+const exportMessage = ref<string | null>(null)
+const exportError = ref<string | null>(null)
+
+async function exportPdf(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  exportError.value = null
+  exportMessage.value = 'Génération du dossier PDF en cours…'
+  const projectId = Number(props.projectId)
+
+  try {
+    const accepted = await api.requestPdfExport(projectId)
+    const produced = await api.waitForPdfExport(projectId, accepted.task_id)
+    const blob = await api.downloadExport(projectId, produced.filename)
+
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = produced.filename
+    link.click()
+    // Révoqué au tour suivant seulement : révoquer dans la foulée du clic annule le
+    // téléchargement avant qu'il ait commencé sur plusieurs navigateurs.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+    exportMessage.value = `Dossier téléchargé (${Math.round(produced.size_bytes / 1024)} Ko).`
+  } catch (caught) {
+    exportMessage.value = null
+    exportError.value = `Export impossible : ${messageOf(caught)}`
+  } finally {
+    exporting.value = false
+  }
+}
+
 const savedLabel = computed(() => {
   if (store.saving) return 'Enregistrement…'
   if (!store.savedAt) return 'Aucune modification enregistrée'
@@ -264,6 +305,14 @@ function describe(element: PlanElement): string {
         >
           {{ savedLabel }}
         </p>
+        <button
+          type="button"
+          :disabled="exporting"
+          :aria-busy="exporting"
+          @click="exportPdf"
+        >
+          {{ exporting ? 'Génération…' : '📄 Exporter en PDF' }}
+        </button>
         <RouterLink
           class="bouton-lien"
           :to="`/projets/${props.projectId}/vue-3d`"
@@ -272,6 +321,21 @@ function describe(element: PlanElement): string {
         </RouterLink>
       </div>
     </header>
+
+    <p
+      v-if="exportMessage"
+      class="message export-bloc"
+      aria-live="polite"
+    >
+      {{ exportMessage }}
+    </p>
+    <p
+      v-if="exportError"
+      class="message erreur-bloc"
+      role="alert"
+    >
+      {{ exportError }}
+    </p>
 
     <p
       v-if="store.conflictKind === 'stale'"
@@ -675,6 +739,14 @@ function describe(element: PlanElement): string {
 .erreur-bloc {
   background: #fdecea;
   color: #7a1010;
+  font-weight: 600;
+}
+
+/* Contraste 7:1 minimum sur fond clair (WCAG AAA) : le message d'export est une information
+   d'état, il doit rester lisible pour tout le monde. */
+.export-bloc {
+  background: #e8f1fb;
+  color: #10365e;
   font-weight: 600;
 }
 

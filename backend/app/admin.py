@@ -105,9 +105,13 @@ class ProjectAdmin(PlanAwareModelView, model=Project):
     name = "Projet"
     name_plural = "Projets"
     icon = "fa-solid fa-folder"
+    # `organization_id` figure en tête : c'est lui qui dit à quel client appartient le chantier
+    # depuis la vague 2. `owner_id` reste affiché comme trace de création, mais il n'autorise plus
+    # rien — trier le back-office dessus donnerait une vue fausse du cloisonnement.
     column_list: ClassVar[list[Any]] = [
         Project.id,
         Project.name,
+        Project.organization_id,
         Project.owner_id,
         Project.version,
         Project.created_at,
