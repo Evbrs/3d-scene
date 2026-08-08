@@ -265,9 +265,74 @@ La contre-mesure est exécutable : `backend/tests/test_permissions_locataire.py`
 
 `services/export_pdf.py` produit une page de garde, puis par pièce un plan coté et **une page A4 paysage par mur** : chaînes de cotes, allèges, échelle normalisée écrite sur chaque planche et cartouche. Les surfaces annoncées sont les surfaces **nettes**, calculées par la même fonction que le métré (`geometry.scene.net_floor_area`) — deux documents du même produit ne peuvent pas donner deux surfaces pour la même pièce.
 
+### A4 — Un élément s'ancre à une face **ou** à une pièce (vague 3, 2026-08-08)
+
+**Amende §5**, et répond à la question ouverte n° 3 ci-dessous, qui exigeait cet amendement avant tout code.
+
+Jusqu'ici `Element.face_id` était obligatoire. Chaque élément était donc, par construction, **adossé à une face**. C'est juste pour ce que la spec avait en tête en §3.1 — une ouverture est un percement du mur, une applique et un radiateur sont accrochés — mais c'est faux pour la moitié du catalogue §4.3 : un lit, une table, un canapé, une chaise, un îlot de cuisine ne touchent aucun mur. Ils n'étaient pas seulement mal placés, ils étaient **impossibles** : le modèle obligeait à en coller un contre un mur choisi arbitrairement, et le décalage stocké devenait une coordonnée qui ne voulait rien dire dès que la pièce changeait de forme.
+
+La limitation venait donc du modèle et non de l'interface : aucun travail sur l'éditeur 2D (glisser-déposer, aimantation) ne pouvait la lever. Elle est levée ici.
+
+**Deux ancrages, exactement un par élément.**
+
+```
+Element
+ ├─ face_id      (nullable)  — pose sur une face : décalages x_offset_cm / y_offset_cm
+ └─ room_id      (nullable)  — pose au sol de la pièce : pos_x_cm / pos_y_cm
+```
+
+Règles figées, non rediscutables sans un nouvel amendement :
+
+- **Exactement un des deux ancrages est renseigné**, et la contrainte est posée **en base** (`ck_element_exactly_one_anchor`) et non seulement dans Pydantic. C'est la leçon de la vague 1 : les `Field(...)` de SQLModel sont **inertes** sur les modèles `table=True`, et SQLAdmin, la CLI, Celery et `psql` écrivent sans passer par l'API. La contrainte porte aussi sur les coordonnées, pour qu'aucune ligne ne puisse porter les deux repères à la fois : `face_id` va avec `pos_x_cm` / `pos_y_cm` **nuls**, `room_id` avec ces deux colonnes **renseignées**.
+- **Une ouverture reste ancrée à une face** (`ck_element_opening_needs_a_wall`) : un percement flottant au milieu d'une pièce n'a aucun sens en §3.1, et `services/faces.py` refuse déjà une ouverture sur un sol ou un plafond. La pose sur face n'est donc pas un cas hérité : c'est le cas **obligatoire** des ouvertures et le cas **naturel** de ce qui est accroché au mur. C'est la pose au sol qui s'ajoute, pas l'inverse.
+- **`pos_x_cm` / `pos_y_cm` désignent le centre de l'emprise au sol, dans le repère du plan** — le même que `Room.polygon`, au centimètre. Le centre et non un coin : la rotation est libre autour de la verticale, et tourner autour d'un coin déplacerait le meuble au lieu de l'orienter. C'est aussi le repère que l'éditeur 2D manipule déjà, donc un glisser-déposer n'a aucune conversion à faire.
+- **Le repère de la pièce n'est pas celui du sol-en-tant-que-face.** Un élément posé sur la face `SOL` garde la convention historique : ses décalages partent du coin de la boîte englobante du polygone. Les deux conventions coexistent parce qu'elles décrivent deux choses différentes ; la seconde est celle qui permet de vérifier l'appartenance au polygone, et c'est elle qu'un nouvel outil doit employer.
+- **Un meuble libre doit tenir dans le polygone de la pièce**, emprise comprise : les quatre coins de son rectangle **après rotation** sont testés un par un (appartenance point-dans-polygone), pas seulement son centre. Un contrôle sur le seul centre laisse une table de 2 m traverser un mur. Le refus dit où et de combien ça déborde.
+- **Le changement d'ancrage n'est pas une modification** : passer une applique du mur au sol change de repère, donc de sens des coordonnées. `PATCH /api/elements/{id}` refuse `face_id` et `room_id` ; le client supprime puis recrée. Reste une question ouverte (n° 5) si le geste devient courant.
+
+### A5 — Fond de plan calibré sur la pièce (vague 3, 2026-08-08)
+
+**Complète §5** et **§1** (« Éditeur 2D sans limite artificielle »).
+
+Un artisan de second œuvre n'arrive jamais devant un canevas vide : il arrive avec le plan de l'architecte, un relevé de géomètre ou une photo du plan affiché dans la cage d'escalier. Sans moyen de poser cette image sous le dessin, il ressaisit le logement au mètre, mur par mur, avant d'avoir produit la moindre valeur. C'est le premier frein à l'adoption mesuré par `strategie-produit.md`, et il est structurel : aucun raccourci d'interface ne le compense.
+
+`Room` reçoit donc les colonnes du calage :
+
+```
+Room
+ ├─ background_url                 (nullable — l'image elle-même vit ailleurs)
+ ├─ background_scale_cm_per_px     (nullable tant que le calibrage n'a pas eu lieu)
+ ├─ background_offset_x_cm         (translation, repère du plan)
+ ├─ background_offset_y_cm
+ ├─ background_rotation_deg        (plan photographié de travers)
+ └─ background_opacity             (0 à 1 — le fond doit s'effacer derrière le trait)
+```
+
+- **L'échelle est nullable et le reste tant que le calibrage n'a pas eu lieu.** Une valeur par défaut inventée (« 1 cm par pixel ») serait indiscernable d'un calibrage réel, et l'utilisateur dessinerait un logement faux sans être averti. `NULL` veut dire « image posée, pas encore calibrée ».
+- **Le stockage du fichier et l'outil de calibrage à deux clics ne relèvent pas de cet amendement** : ce sont deux lots distincts. Ce qui est figé ici, c'est le contrat de données et sa validation.
+- **`background_url` est validée côté serveur** : chemin relatif commençant par un seul `/`, ou URL `https://`. Ni `javascript:`, ni `data:`, ni `//hôte` protocol-relative. Le champ est écrit par un client et relu dans un attribut d'image : c'est une entrée utilisateur au sens OWASP A03, et la valider à l'écriture est le seul endroit où elle ne dépend pas de la vigilance du rendu.
+
+### A6 — Écriture en lot du plan (vague 3, 2026-08-08)
+
+**Amende §8, cas 3** (« édition concurrente »), dont le verrouillage optimiste avait une conséquence non anticipée.
+
+Chaque écriture du plan passe par `_claim_project`, qui incrémente `Project.version`. C'est ce qui rend la détection de conflit possible — et c'est aussi ce qui **sérialise** toute modification multiple : déplacer quinze meubles impose quinze allers-retours strictement séquentiels, puisque chacun invalide la version que le client détient. Un glisser-déposer, qui produit naturellement des rafales de modifications, est inutilisable dans ces conditions.
+
+`POST /api/projects/{project_id}/batch` prend **une** version et une liste d'opérations typées (création, modification, suppression d'éléments et de pièces), appliquées dans **une seule transaction** :
+
+- un seul `_claim_project` en tête, un seul `_commit_or_conflict` en fin, donc **une seule** incrémentation de version pour tout le lot ;
+- **tout ou rien** : une opération refusée annule le lot entier et nomme son rang. Un lot partiellement appliqué laisserait le client dans un état qu'il ne peut pas reconstituer ;
+- **le nombre d'opérations est borné** (100) : sans borne, une seule requête tient une transaction ouverte arbitrairement longtemps ;
+- **chaque opération désigne un objet du projet nommé dans l'URL**, revérifié un par un. Un identifiant d'élément appartenant à un autre projet est traité comme inexistant (404) : l'appartenance vérifiée une fois sur le projet ne dit rien des identifiants portés par le corps de la requête ;
+- le résultat de chaque opération est renvoyé **dans l'ordre d'envoi**, avec la nouvelle version du projet.
+
+Les routes unitaires existantes ne sont ni retirées ni dépréciées : un lot est une optimisation du chemin d'écriture, pas un remplacement du modèle CRUD.
+
 ### Questions ouvertes — à trancher par le propriétaire, pas en cours de ticket
 
 1. **`LayingPattern` n'a pas de valeur `diagonal`** alors que le métré porte son taux de chute (12 %). Aucune saisie ne peut donc produire une pose en diagonale. L'ajouter est un amendement de §1 (« motifs de pose avancés ») plus une migration d'énumération.
 2. **Le choix de l'organisation à la création d'un projet** n'existe pas : la règle appliquée est déterministe (l'appartenance acceptée la plus ancienne), mais un compte membre de deux entreprises ne peut pas désigner la cible.
-3. **`Element.face_id` reste obligatoire**, donc tout meuble est adossé à une face : un lit, une table ou un îlot sont impossibles. Le rendre nullable et ajouter un placement dans le repère de la pièce est un amendement de §5 à écrire **avant** de coder.
+3. ~~**`Element.face_id` reste obligatoire**~~ — **tranchée par A4** (vague 3). Conservée ici parce que l'historique des décisions vaut autant que la décision.
 4. **Aucune vue de back-office** pour les organisations, appartenances et documents commerciaux. C'est délibéré côté facturation : un `quote_counter` ou une `quote_line` modifiables à la main annulent les deux garanties légales de A2 (numérotation sans trou, ligne figée). Si ces vues sont ajoutées, elles doivent l'être en lecture seule.
+5. **Le changement d'ancrage d'un élément** (décrocher une applique du mur pour la poser au sol, ou l'inverse) n'existe pas : A4 impose de supprimer puis recréer. C'est délibéré — les deux repères n'ont pas la même signification — mais si le geste devient courant dans l'éditeur, il faudra une opération dédiée qui exige un placement complet dans le nouveau repère, jamais un simple `PATCH` de `face_id`.
+6. **Un meuble libre n'apparaît pas dans le dossier d'élévations.** `services/export_pdf.py` parcourt les éléments **par face** (`face["elements"]`) : ce qui n'est adossé à rien lui est invisible, aussi bien sur les planches d'élévation que dans la colonne « nombre d'éléments » du récapitulatif de pièce, qui le sous-compte donc. Absent d'une élévation de mur, c'est correct ; absent du plan coté de la pièce, ça ne l'est pas. Le métré (`geometry/quantities.py`) est un cas distinct et **non défectueux** : il chiffre des surfaces, des linéaires et du calepinage à partir du scene graph, et n'a jamais itémisé le mobilier — ni libre, ni adossé. Y faire figurer une fourniture est un ajout de périmètre (§4), pas une correction.

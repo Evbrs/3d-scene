@@ -235,10 +235,13 @@ async def get_owned_element(
                 # Même raison que dans `get_owned_face` : déplacer une ouverture doit pouvoir la
                 # confronter aux autres ouvertures du même mur.
                 selectinload(Element.face).selectinload(Face.elements),  # type: ignore[arg-type]
+                # Ancrage à la pièce (spec §10, amendement A4) : un meuble libre n'a pas de face,
+                # et le chemin ci-dessus ne mène alors nulle part.
+                selectinload(Element.room).selectinload(Room.project),  # type: ignore[arg-type]
             )
         )
     ).scalar_one_or_none()
     if element is None:
         raise _NOT_FOUND
-    await require_role(session, element.face.room.project, user, minimum)
+    await require_role(session, element.anchor_room.project, user, minimum)
     return element

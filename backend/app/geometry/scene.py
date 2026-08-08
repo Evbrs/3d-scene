@@ -155,14 +155,21 @@ def _horizontal_node(
 
 def _furniture_node(
     element: dict[str, Any],
-    face: dict[str, Any],
+    face: dict[str, Any] | None,
     room: dict[str, Any],
     furniture_types: dict[int, dict[str, Any]],
     *,
     counter_clockwise: bool,
     polygon: list[list[float]],
 ) -> dict[str, Any] | None:
-    """Un meuble posé sur une face, développé en primitives absolues.
+    """Un meuble développé en primitives absolues, quel que soit son ancrage.
+
+    Trois poses, et elles n'ont pas le même repère (spec §10, amendement A4) :
+
+    - `face` est un mur : le meuble est plaqué contre son parement intérieur ;
+    - `face` est un sol ou un plafond : les décalages partent du coin de la boîte englobante ;
+    - `face` est `None` : le meuble est **libre**, posé au sol dans le repère du plan, et c'est
+      `pos_x_cm` / `pos_y_cm` qui donnent le centre de son emprise.
 
     Renvoie `None` si l'élément référence un type de mobilier absent du catalogue : un meuble
     sans recette n'a rien à afficher, et inventer une boîte grise masquerait le problème.
@@ -175,7 +182,21 @@ def _furniture_node(
     height = float(element["height_cm"])
     depth = float(element["depth_cm"])
 
-    if face["kind"] == WALL:
+    if face is None:
+        # Meuble libre : le repère est celui du plan, le même que `polygon`. C'est ce qui rend le
+        # contrôle d'appartenance au contour possible côté API (`services/faces.py`) — la
+        # convention relative à la boîte englobante, plus bas, ne le permettrait pas.
+        position = np.array(
+            [
+                float(element["pos_x_cm"]),
+                # Posé au sol : la boîte englobante repose sur z = 0, donc son centre est à mi-
+                # hauteur. Un meuble suspendu demandera une altitude explicite, pas une exception.
+                height / 2.0,
+                float(element["pos_y_cm"]),
+            ]
+        )
+        rotation_y = np.radians(float(element["rotation_deg"]))
+    elif face["kind"] == WALL:
         start = [face["start_x_cm"], face["start_y_cm"]]
         end = [face["end_x_cm"], face["end_y_cm"]]
         direction = wall_direction(start, end)
@@ -217,7 +238,9 @@ def _furniture_node(
     return {
         "kind": "furniture",
         "element_id": element["id"],
-        "face_label": face["label"],
+        # Nul pour un meuble libre : il n'appartient à aucun groupe de face, donc l'isolement de
+        # face (spec §3.4) ne le masque pas — il reste visible avec le groupe « mobilier ».
+        "face_label": face["label"] if face is not None else None,
         "furniture_type_slug": furniture_type["slug"],
         "position": round_vector(position, DIGITS),
         "rotation_y": round(float(rotation_y), ANGLE_DIGITS),
@@ -395,6 +418,21 @@ def build_room(room: dict[str, Any], furniture_types: dict[int, dict[str, Any]])
             )
             if node is not None:
                 nodes.append(node)
+
+    # Mobilier libre, ancré à la pièce et non à une face (spec §10, amendement A4). Émis en
+    # dernier, après tout ce qui est adossé : l'ordre du JSON doit rester stable d'un appel à
+    # l'autre pour que le cache de P10 fasse mouche.
+    for element in room.get("elements") or []:
+        free_node = _furniture_node(
+            element,
+            None,
+            room,
+            furniture_types,
+            counter_clockwise=counter_clockwise,
+            polygon=polygon,
+        )
+        if free_node is not None:
+            nodes.append(free_node)
 
     return {
         "id": room["id"],

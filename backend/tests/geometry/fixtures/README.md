@@ -75,3 +75,22 @@ Deux conventions à ne pas confondre en les relisant : `None` signifie « non é
 jamais zéro (il s'accompagne toujours d'un avertissement), et les trois compteurs d'unités sont
 distincts — `units_total` est ce qu'il faut commander, `full_units` ce qui se pose entier,
 `cut_units` ce qu'il faut recouper. Leur somme n'a aucun sens.
+
+## Fixture 11 — le mobilier libre
+
+`11_mobilier_libre.json` reprend la pièce de référence et fige l'amendement A4 (`docs/spec-complete.md`
+§10) : un élément s'ancre à une face **ou** au sol de la pièce. C'est la seule fixture où les deux
+ancrages coexistent — un radiateur adossé au mur A, un lit libre au centre, une table libre tournée
+à 90° — et c'est ce qui lui permet d'attraper les trois confusions possibles entre les deux repères :
+
+- le placement d'un meuble libre est exprimé dans le repère du **plan**, celui de `Room.polygon`, et
+  non relativement au coin de la boîte englobante comme pour un élément posé sur la face SOL ;
+- `face_label` vaut `null` pour un meuble libre, ce qui le tient hors de tout groupe de face — sans
+  quoi l'isolement de face (§3.4) le masquerait alors qu'il n'appartient à aucun mur ;
+- l'**ordre d'émission** est figé : les faces, puis ce qui y est adossé, puis le mobilier libre. Cet
+  ordre est stable par contrat, le cache de scène (P10) s'appuyant sur la sortie octet pour octet.
+
+Elle porte une clé supplémentaire, `expected_footprints` : les quatre coins de l'emprise **après
+rotation**, indexés par identifiant d'élément. Ils appartiennent à la fixture et non au test parce
+que c'est sur eux que se prononce `element_fits_in_room` — la géométrie qui décide si un meuble tient
+dans la pièce est la même que celle qui le dessine, et les faire diverger passerait inaperçu.

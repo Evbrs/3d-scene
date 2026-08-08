@@ -1,0 +1,163 @@
+{
+  "description": "Mobilier libre : deux meubles ancrés à la PIÈCE et non à une face (spec §10, amendement A4), dans la pièce de référence 400 x 300. Un lit au centre sans rotation, une table tournée à 90°. Un radiateur adossé au mur A les accompagne : c'est la seule fixture où les deux ancrages coexistent, et elle fige aussi leur ORDRE d'émission — d'abord les faces, puis ce qui y est posé, puis ce qui est libre.",
+  "reasoning": [
+    "Pièce de référence (voir README) : rectangle (0,0) (400,0) (400,300) (0,300), murs de 10, plafond à 250. Aire du lacet = +120000, donc déjà en sens trigonométrique.",
+    "Aire au sol de la ligne médiane = 400 x 300 = 120000 cm². Aire nette = contour ramené de t/2 = 5 vers l'intérieur, soit 390 x 290 = 113100 cm².",
+    "Mur A : (0,0) -> (400,0). Longueur 400. d = (1,0,0). n = Yup x d = (0,0,-1). rotation_y = atan2(-0, 1) = 0. Origine (0,0,0). Contour local = rectangle 400 x 250. Extrusion : profondeur 10, décalage -5 (le mur est centré sur son axe).",
+    "RADIATEUR, adossé au mur A. x_offset 50, y_offset 20, 80 x 60 x 10. Position = départ du mur + d x (x_offset + largeur/2) + (0, y_offset + hauteur/2, 0) + rentrante x (épaisseur/2 + profondeur/2).",
+    "  - d x (50 + 40) = (90, 0, 0) ; élévation = (0, 20 + 30, 0) = (0, 50, 0) ; rentrante = -n = (0,0,1), et (10/2 + 10/2) = 10, donc (0, 0, 10).",
+    "  - Total (90, 50, 10). rotation_y = 0 (celle du mur) + 0 (celle de l'élément) = 0.",
+    "  - Recette « radiateur » : une boîte pleine, rel_position (0.5,0.5,0.5) et rel_size (1,1,1). Décalage = ((0.5-0.5) x 80, (0.5-0.5) x 60, (0.5-0.5) x 10) = (0,0,0). Taille = (80, 60, 10). Aucune couleur choisie, donc null.",
+    "LIT, libre. pos = (200, 150), 140 x 45 x 200, rotation 0. Le repère est celui du PLAN — le même que le polygone — et non le coin de la boîte englobante comme pour un élément posé sur la face SOL.",
+    "  - Position 3D = (pos_x, hauteur/2, pos_y) = (200, 22.5, 150). Posé au sol : la boîte englobante repose sur y = 0, donc son centre est à mi-hauteur.",
+    "  - rotation_y = radians(0) = 0.",
+    "  - Emprise : demi-largeur 70, demi-profondeur 100, rotation nulle. Coins (130,50) (270,50) (270,250) (130,250) : les quatre sont strictement dans le rectangle 400 x 300.",
+    "  - Recette « lit », deux boîtes. Sommier : rel_size (1, 0.4, 1) -> (140, 18, 200), rel_position (0.5,0.5,0.5) -> décalage (0,0,0). Matelas : rel_size (0.94, 0.4, 0.96) -> (131.6, 18, 192) ; rel_position (0.5, 0.8, 0.5) -> décalage ((0.5-0.5) x 140, (0.8-0.5) x 45, (0.5-0.5) x 200) = (0, 13.5, 0).",
+    "  - L'instance choisit la couleur du sommier (#8b5a2b) et pas celle du matelas : ce dernier reste à null, inventer une couleur la rendrait indiscernable d'un choix.",
+    "TABLE, libre et tournée. pos = (100, 100), 120 x 75 x 80, rotation 90°.",
+    "  - Position 3D = (100, 37.5, 100). rotation_y = radians(90) = pi/2 = 1.570796327.",
+    "  - Emprise tournée : R_y(a) envoie l'axe local +X (la largeur) sur (cos a, 0, -sin a) et l'axe local +Z (la profondeur) sur (sin a, 0, cos a). Relus dans le plan (x = X, y = Z) et pour a = 90° : axe largeur = (0, -1), axe profondeur = (1, 0).",
+    "  - Coins = centre ± 60 x (0,-1) ± 40 x (1,0) = (60,160) (60,40) (140,40) (140,160). Largeur et profondeur ont bien échangé leur direction : sans cette conversion, le contrôle d'encombrement testerait la table dans le mauvais sens.",
+    "  - Recette « table » : une boîte pleine. Décalage (0,0,0), taille (120, 75, 80), aucune couleur choisie.",
+    "ORDRE des nœuds : le scene graph émet d'abord les faces (ici le seul mur A), puis les éléments posés sur ces faces (le radiateur), puis le mobilier libre dans l'ordre des identifiants (le lit puis la table). Cet ordre doit être stable d'un appel à l'autre — c'est ce qui rend le cache de P10 efficace.",
+    "face_label du mobilier libre = null : il n'appartient à aucun groupe de face, donc l'isolement de face (§3.4) ne doit pas le masquer.",
+    "Sol et plafond sont volontairement absents de l'entrée : cette fixture porte sur le placement du mobilier, et le contrôle des faces horizontales est déjà tenu par les fixtures 01 et 05."
+  ],
+  "input": {
+    "project_id": 11,
+    "furniture_types": {
+      "1": {
+        "id": 1,
+        "slug": "lit",
+        "color_slots": ["sommier", "matelas"],
+        "parts": [
+          {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 0.4, 1], "color_slot": "sommier"},
+          {"type": "box", "rel_position": [0.5, 0.8, 0.5], "rel_size": [0.94, 0.4, 0.96], "color_slot": "matelas"}
+        ]
+      },
+      "2": {
+        "id": 2,
+        "slug": "table",
+        "color_slots": ["plateau"],
+        "parts": [
+          {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "plateau"}
+        ]
+      },
+      "3": {
+        "id": 3,
+        "slug": "radiateur",
+        "color_slots": ["corps"],
+        "parts": [
+          {"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "corps"}
+        ]
+      }
+    },
+    "rooms": [
+      {
+        "id": 110,
+        "name": "Chambre",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {
+            "id": 1110, "label": "A", "kind": "wall",
+            "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0,
+            "covering": {},
+            "elements": [
+              {
+                "id": 1120, "kind": "furniture",
+                "x_offset_cm": 50, "y_offset_cm": 20,
+                "pos_x_cm": null, "pos_y_cm": null,
+                "width_cm": 80, "height_cm": 60, "depth_cm": 10,
+                "rotation_deg": 0, "furniture_type_id": 3,
+                "colors": {}, "variant_params": {}
+              }
+            ]
+          }
+        ],
+        "elements": [
+          {
+            "id": 1121, "kind": "furniture",
+            "x_offset_cm": 0, "y_offset_cm": 0,
+            "pos_x_cm": 200, "pos_y_cm": 150,
+            "width_cm": 140, "height_cm": 45, "depth_cm": 200,
+            "rotation_deg": 0, "furniture_type_id": 1,
+            "colors": {"sommier": "#8b5a2b"}, "variant_params": {}
+          },
+          {
+            "id": 1122, "kind": "furniture",
+            "x_offset_cm": 0, "y_offset_cm": 0,
+            "pos_x_cm": 100, "pos_y_cm": 100,
+            "width_cm": 120, "height_cm": 75, "depth_cm": 80,
+            "rotation_deg": 90, "furniture_type_id": 2,
+            "colors": {}, "variant_params": {}
+          }
+        ]
+      }
+    ]
+  },
+  "expected_room": {
+    "floor_area_cm2": 120000.0,
+    "net_floor_area_cm2": 113100.0
+  },
+  "expected_nodes": [
+    {
+      "kind": "wall", "face_id": 1110, "face_label": "A",
+      "length_cm": 400.0, "height_cm": 250.0,
+      "origin": [0.0, 0.0, 0.0],
+      "rotation_y": 0.0,
+      "outward_normal": [0.0, 0.0, -1.0],
+      "outline": [[0.0, 0.0], [400.0, 0.0], [400.0, 250.0], [0.0, 250.0]],
+      "holes": [],
+      "extrude_depth_cm": 10.0,
+      "extrude_offset_cm": -5.0,
+      "covering": {}
+    },
+    {
+      "kind": "furniture", "element_id": 1120, "face_label": "A",
+      "furniture_type_slug": "radiateur",
+      "position": [90.0, 50.0, 10.0],
+      "rotation_y": 0.0,
+      "size_cm": [80.0, 60.0, 10.0],
+      "primitives": [
+        {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [80.0, 60.0, 10.0],
+         "color_slot": "corps", "color": null, "operation": "add", "axis": "y"}
+      ],
+      "requires_csg": false,
+      "variant_params": {}
+    },
+    {
+      "kind": "furniture", "element_id": 1121, "face_label": null,
+      "furniture_type_slug": "lit",
+      "position": [200.0, 22.5, 150.0],
+      "rotation_y": 0.0,
+      "size_cm": [140.0, 45.0, 200.0],
+      "primitives": [
+        {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [140.0, 18.0, 200.0],
+         "color_slot": "sommier", "color": "#8b5a2b", "operation": "add", "axis": "y"},
+        {"type": "box", "offset": [0.0, 13.5, 0.0], "size": [131.6, 18.0, 192.0],
+         "color_slot": "matelas", "color": null, "operation": "add", "axis": "y"}
+      ],
+      "requires_csg": false,
+      "variant_params": {}
+    },
+    {
+      "kind": "furniture", "element_id": 1122, "face_label": null,
+      "furniture_type_slug": "table",
+      "position": [100.0, 37.5, 100.0],
+      "rotation_y": 1.570796327,
+      "size_cm": [120.0, 75.0, 80.0],
+      "primitives": [
+        {"type": "box", "offset": [0.0, 0.0, 0.0], "size": [120.0, 75.0, 80.0],
+         "color_slot": "plateau", "color": null, "operation": "add", "axis": "y"}
+      ],
+      "requires_csg": false,
+      "variant_params": {}
+    }
+  ],
+  "expected_footprints": {
+    "1121": [[130.0, 50.0], [270.0, 50.0], [270.0, 250.0], [130.0, 250.0]],
+    "1122": [[60.0, 160.0], [60.0, 40.0], [140.0, 40.0], [140.0, 160.0]]
+  }
+}

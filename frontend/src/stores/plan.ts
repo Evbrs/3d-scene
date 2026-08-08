@@ -9,8 +9,9 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 
 import * as api from '@/api/client'
-import type { ConflictKind } from '@/api/client'
+import type { BatchOperation, BatchResponse, ConflictKind } from '@/api/client'
 import type { Face, PlanElement, Project, Room } from '@/api/types'
+import { chunkOperations } from '@/editor/operations'
 
 /** Écriture paramétrée par la version du projet connue au moment de l'appel. */
 type WriteAction<T> = (version: number) => Promise<T>
@@ -73,7 +74,14 @@ export const usePlanStore = defineStore('plan', () => {
    * l'interface doit pouvoir distinguer « quelqu'un a modifié le plan » de « cette modification
    * détruirait des éléments ».
    */
-  async function write<T>(action: WriteAction<T>, apply?: (result: T) => void): Promise<T | null> {
+  async function write<T>(
+    action: WriteAction<T>,
+    apply?: (result: T) => void,
+    // `bumpVersion` suppose « une écriture acceptée = une version de plus ». Un lot en applique
+    // cent et n'en consomme qu'une, mais il **renvoie** sa version : le suivi local doit alors
+    // s'effacer devant la valeur reçue plutôt que d'ajouter un cran par-dessus.
+    options: { versionFromServer?: boolean } = {},
+  ): Promise<T | null> {
     if (!project.value) return null
     const projectId = project.value.id
     saving.value = true
@@ -100,7 +108,7 @@ export const usePlanStore = defineStore('plan', () => {
     try {
       if (apply) {
         apply(result)
-        bumpVersion()
+        if (options.versionFromServer !== true) bumpVersion()
       } else {
         await load(projectId)
       }
@@ -150,19 +158,29 @@ export const usePlanStore = defineStore('plan', () => {
     if (index !== -1) room.faces[index] = face
   }
 
+  /**
+   * Intègre un élément renvoyé par le serveur, quel que soit son ancrage.
+   *
+   * `face_id` est le discriminant (spec §10, A4) : nul, l'élément vit dans `Room.free_elements`
+   * et non dans une face. Le chercher malgré tout dans les faces le ferait disparaître de
+   * l'affichage sans la moindre erreur — le meuble serait bien en base, et invisible.
+   */
   function applyElement(element: PlanElement): void {
-    const face = allFaces().find((candidate) => candidate.id === element.face_id)
-    if (!face) return
-    const index = face.elements.findIndex((candidate) => candidate.id === element.id)
-    if (index === -1) face.elements.push(element)
-    else face.elements[index] = element
+    const collection =
+      element.face_id === null
+        ? (project.value?.rooms.find((room) => room.id === element.room_id)?.free_elements ?? null)
+        : (allFaces().find((face) => face.id === element.face_id)?.elements ?? null)
+    if (!collection) return
+    const index = collection.findIndex((candidate) => candidate.id === element.id)
+    if (index === -1) collection.push(element)
+    else collection[index] = element
   }
 
   function dropElement(elementId: number): void {
-    for (const face of allFaces()) {
-      const index = face.elements.findIndex((candidate) => candidate.id === elementId)
+    for (const collection of allElementCollections()) {
+      const index = collection.findIndex((candidate) => candidate.id === elementId)
       if (index !== -1) {
-        face.elements.splice(index, 1)
+        collection.splice(index, 1)
         return
       }
     }
@@ -170,6 +188,74 @@ export const usePlanStore = defineStore('plan', () => {
 
   function allFaces(): Face[] {
     return (project.value?.rooms ?? []).flatMap((room) => room.faces)
+  }
+
+  /** Les deux endroits où vit un élément : les faces, et le mobilier libre de chaque pièce. */
+  function allElementCollections(): PlanElement[][] {
+    return (project.value?.rooms ?? []).flatMap((room) => [
+      ...room.faces.map((face) => face.elements),
+      room.free_elements,
+    ])
+  }
+
+  /**
+   * Applique la réponse d'un lot à l'arbre local.
+   *
+   * La version rendue par le serveur est **la sienne**, pas un incrément deviné : un lot ne
+   * l'augmente que d'un cran quel que soit son nombre d'opérations, et `bumpVersion` — qui
+   * suppose une écriture par requête — donnerait le bon résultat par accident. Écrire la valeur
+   * reçue supprime l'accident.
+   */
+  function applyBatchResponse(response: BatchResponse): void {
+    for (const result of response.results) {
+      if (result.status === 'deleted') {
+        if (result.element_id !== null) dropElement(result.element_id)
+        if (result.room_id !== null) dropRoom(result.room_id)
+        continue
+      }
+      if (result.room) applyRoom(result.room)
+      if (result.element) applyElement(result.element)
+    }
+    if (project.value) project.value.version = response.version
+  }
+
+  function dropRoom(roomId: number): void {
+    if (!project.value) return
+    const index = project.value.rooms.findIndex((room) => room.id === roomId)
+    if (index === -1) return
+    project.value.rooms.splice(index, 1)
+    if (selectedRoomId.value === roomId) {
+      selectedRoomId.value = project.value.rooms[0]?.id ?? null
+      selectedFaceLabel.value = null
+    }
+  }
+
+  /**
+   * Envoie un lot d'opérations, découpé sous la borne du serveur.
+   *
+   * Les paquets partent l'un après l'autre : au-delà de cent opérations, ils ne forment plus une
+   * seule transaction. C'est le prix de la borne, assumé — deux transactions appliquées valent
+   * mieux qu'un lot entier refusé. Chaque paquet part avec la version **mise à jour par le
+   * précédent**, sans quoi le second serait systématiquement périmé.
+   *
+   * Passe par `write` pour hériter du traitement des conflits et du rejeu : un lot refusé se
+   * rejoue comme n'importe quelle écriture.
+   */
+  async function writeBatch(operations: BatchOperation[]): Promise<BatchResponse[] | null> {
+    if (operations.length === 0 || !project.value) return []
+    const projectId = project.value.id
+    const responses: BatchResponse[] = []
+
+    for (const chunk of chunkOperations(operations)) {
+      const response = await write(
+        (version) => api.applyBatch(projectId, chunk, version),
+        (result) => applyBatchResponse(result),
+        { versionFromServer: true },
+      )
+      if (!response) return null
+      responses.push(response)
+    }
+    return responses
   }
 
   function reset(): void {
@@ -195,11 +281,14 @@ export const usePlanStore = defineStore('plan', () => {
     currentRoom,
     load,
     write,
+    writeBatch,
     replayRefused,
     applyRoom,
     applyFace,
     applyElement,
+    applyBatchResponse,
     dropElement,
+    dropRoom,
     reset,
   }
 })

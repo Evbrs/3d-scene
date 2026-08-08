@@ -15,11 +15,13 @@ import type { Face, PlanElement, Project, Room } from '@/api/types'
 import { usePlanStore } from '@/stores/plan'
 
 const readProject = vi.hoisted(() => vi.fn())
+const applyBatch = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/client', async (importOriginal) => ({
   // `ApiError` doit rester la vraie classe : le store la reconnaît par `instanceof`.
   ...(await importOriginal<typeof import('@/api/client')>()),
   readProject,
+  applyBatch,
 }))
 
 function face(id: number, roomId: number, label: string): Face {
@@ -50,7 +52,14 @@ function room(id: number): Room {
       [400, 300],
       [0, 300],
     ],
+    background_url: null,
+    background_scale_cm_per_px: null,
+    background_offset_x_cm: 0,
+    background_offset_y_cm: 0,
+    background_rotation_deg: 0,
+    background_opacity: 1,
     faces: [face(10, id, 'A'), face(11, id, 'B')],
+    free_elements: [],
   }
 }
 
@@ -77,6 +86,7 @@ function conflict(code: string | undefined, currentVersion = 9): ApiError {
 beforeEach(() => {
   setActivePinia(createPinia())
   readProject.mockReset()
+  applyBatch.mockReset()
   readProject.mockResolvedValue(project())
 })
 
@@ -122,9 +132,12 @@ describe('écriture acceptée', () => {
     const element: PlanElement = {
       id: 42,
       face_id: 10,
+      room_id: null,
       kind: 'window',
       x_offset_cm: 20,
       y_offset_cm: 95,
+      pos_x_cm: null,
+      pos_y_cm: null,
       width_cm: 120,
       height_cm: 110,
       depth_cm: 12,
@@ -213,6 +226,133 @@ describe('conflit 409', () => {
 
     expect(store.conflictKind).toBeNull()
     expect(store.error).toBe('Panne serveur')
+  })
+})
+
+/**
+ * Écriture en lot (spec §10, amendement A6).
+ *
+ * Le piège central : un lot n'incrémente la version qu'**une fois**, quel que soit son nombre
+ * d'opérations, et il renvoie la sienne. Le suivi local — « une écriture acceptée = une version
+ * de plus » — doit donc s'effacer devant la valeur reçue au lieu d'ajouter un cran par-dessus.
+ */
+describe('écriture en lot', () => {
+  const element = (id: number, faceId: number | null, roomId: number | null): PlanElement => ({
+    id,
+    face_id: faceId,
+    room_id: roomId,
+    kind: 'furniture',
+    x_offset_cm: 10,
+    y_offset_cm: 0,
+    pos_x_cm: roomId === null ? null : 120,
+    pos_y_cm: roomId === null ? null : 90,
+    width_cm: 60,
+    height_cm: 80,
+    depth_cm: 40,
+    rotation_deg: 0,
+    furniture_type_id: 2,
+    colors: {},
+    variant_params: {},
+  })
+
+  it('prend la version rendue par le serveur au lieu de l’incrémenter', async () => {
+    const store = usePlanStore()
+    await store.load(1)
+    applyBatch.mockResolvedValue({ version: 4, results: [] })
+
+    await store.writeBatch([{ op: 'delete_element', element_id: 1 }])
+
+    expect(applyBatch).toHaveBeenCalledWith(1, [{ op: 'delete_element', element_id: 1 }], 3)
+    // 4 et non 5 : le lot en consomme une, `bumpVersion` en ajouterait une seconde.
+    expect(store.project?.version).toBe(4)
+  })
+
+  it('range un meuble libre dans la pièce et non dans une face', async () => {
+    const store = usePlanStore()
+    await store.load(1)
+    const libre = element(42, null, 5)
+    applyBatch.mockResolvedValue({
+      version: 4,
+      results: [
+        { op: 'create_room_element', status: 'created', element_id: 42, room_id: null, element: libre, room: null },
+      ],
+    })
+
+    await store.writeBatch([
+      { op: 'create_room_element', room_id: 5, element: { pos_x_cm: 120, pos_y_cm: 90 } },
+    ])
+
+    // Le chercher dans les faces le ferait disparaître de l'affichage sans la moindre erreur :
+    // le meuble serait bien en base, et invisible.
+    expect(store.project?.rooms[0]?.free_elements).toEqual([libre])
+    expect(store.project?.rooms[0]?.faces.flatMap((candidate) => candidate.elements)).toEqual([])
+  })
+
+  it('retire un élément supprimé, quel que soit son ancrage', async () => {
+    const store = usePlanStore()
+    await store.load(1)
+    store.applyElement(element(7, 10, null))
+    store.applyElement(element(8, null, 5))
+    applyBatch.mockResolvedValue({
+      version: 4,
+      results: [
+        { op: 'delete_element', status: 'deleted', element_id: 7, room_id: null, element: null, room: null },
+        { op: 'delete_element', status: 'deleted', element_id: 8, room_id: null, element: null, room: null },
+      ],
+    })
+
+    await store.writeBatch([
+      { op: 'delete_element', element_id: 7 },
+      { op: 'delete_element', element_id: 8 },
+    ])
+
+    expect(store.project?.rooms[0]?.faces[0]?.elements).toEqual([])
+    expect(store.project?.rooms[0]?.free_elements).toEqual([])
+  })
+
+  it('découpe au-delà de cent opérations et enchaîne sur la version reçue', async () => {
+    const store = usePlanStore()
+    await store.load(1)
+    applyBatch
+      .mockResolvedValueOnce({ version: 4, results: [] })
+      .mockResolvedValueOnce({ version: 5, results: [] })
+
+    const operations = Array.from({ length: 150 }, (_, index) => ({
+      op: 'delete_element' as const,
+      element_id: index + 1,
+    }))
+    const responses = await store.writeBatch(operations)
+
+    expect(responses).toHaveLength(2)
+    expect(applyBatch.mock.calls[0]?.[1]).toHaveLength(100)
+    expect(applyBatch.mock.calls[1]?.[1]).toHaveLength(50)
+    // Le second paquet part avec la version que le premier a rendue, sinon il est périmé d'office.
+    expect(applyBatch.mock.calls[1]?.[2]).toBe(4)
+    expect(store.project?.version).toBe(5)
+  })
+
+  it('abandonne les paquets suivants dès qu’un lot est refusé', async () => {
+    const store = usePlanStore()
+    await store.load(1)
+    applyBatch.mockRejectedValue(conflict('stale_version'))
+
+    const operations = Array.from({ length: 150 }, (_, index) => ({
+      op: 'delete_element' as const,
+      element_id: index + 1,
+    }))
+
+    expect(await store.writeBatch(operations)).toBeNull()
+    expect(applyBatch).toHaveBeenCalledTimes(1)
+    expect(store.conflictKind).toBe('stale')
+    expect(store.project?.version).toBe(3)
+  })
+
+  it('n’appelle pas le serveur pour un lot vide', async () => {
+    const store = usePlanStore()
+    await store.load(1)
+
+    expect(await store.writeBatch([])).toEqual([])
+    expect(applyBatch).not.toHaveBeenCalled()
   })
 })
 

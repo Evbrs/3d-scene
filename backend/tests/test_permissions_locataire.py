@@ -69,6 +69,21 @@ TENANT_ROUTES: tuple[tuple[str, str, dict[str, Any] | None], ...] = (
     ("PATCH", "/api/rooms/{room_id}", {"name": "Renommée par un tiers"}),
     ("DELETE", "/api/rooms/{room_id}", None),
     ("GET", "/api/rooms/{room_id}/faces", None),
+    # Mobilier libre (spec §10, amendement A4) : l'ancrage à la pièce ouvre une seconde porte
+    # d'écriture sur le plan, et elle doit être cloisonnée comme celle des faces.
+    (
+        "POST",
+        "/api/rooms/{room_id}/elements",
+        {"kind": "furniture", "pos_x_cm": 100, "pos_y_cm": 100, "width_cm": 80,
+         "depth_cm": 60, "height_cm": 70},
+    ),
+    # Écriture en lot (spec §10, amendement A6) : c'est la route la plus dense en identifiants
+    # fournis par le client, donc celle où une vérification manquante coûterait le plus cher.
+    (
+        "POST",
+        "/api/projects/{project_id}/batch",
+        {"operations": [{"op": "create_room", "room": {"name": "Pièce volée", "polygon": CARRE}}]},
+    ),
     ("PATCH", "/api/faces/{face_id}", {"covering": {"color": "#123456"}}),
     (
         "POST",

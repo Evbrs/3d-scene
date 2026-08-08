@@ -83,8 +83,15 @@ def _project_id_of(model: Any) -> int | None:
             room = session.get(Room, model.room_id)
             return room.project_id if room else None
         if isinstance(model, Element):
-            face = session.get(Face, model.face_id)
-            room = session.get(Room, face.room_id) if face else None
+            # Deux ancrages depuis l'amendement A4 (spec §10) : une face, **ou** directement la
+            # pièce. Interroger `Face` avec un `face_id` nul ne lève pas — cela rend `None`, donc
+            # un projet introuvable, donc un cache jamais purgé : corriger un meuble libre depuis
+            # le back-office laissait servir l'ancienne scène pendant toute la durée du cache.
+            room_id = model.room_id
+            if model.face_id is not None:
+                face = session.get(Face, model.face_id)
+                room_id = face.room_id if face else None
+            room = session.get(Room, room_id) if room_id is not None else None
             return room.project_id if room else None
     return None
 
@@ -139,9 +146,12 @@ class ElementAdmin(PlanAwareModelView, model=Element):
     name = "Élément"
     name_plural = "Éléments"
     icon = "fa-solid fa-cube"
+    # Les deux ancrages figurent côte à côte (spec §10, A4) : exactement une des deux colonnes est
+    # renseignée, et la seule `face_id` laissait la moitié des lignes sans rattachement visible.
     column_list: ClassVar[list[Any]] = [
         Element.id,
         Element.face_id,
+        Element.room_id,
         Element.kind,
         Element.furniture_type_id,
     ]

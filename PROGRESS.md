@@ -684,3 +684,85 @@ avec deux garde-fous de complétude qui lisent le schéma OpenAPI publié :
 
 Suite : **709 tests backend** (708 sur SQLite, le 709ᵉ ne s'exécutant que sur PostgreSQL), **96
 tests frontend**, `ruff`, `mypy --strict`, `eslint` et `npm run build` verts.
+
+---
+
+## Vague 3 — éditeur professionnel : mobilier libre, fidélité 3D, relevé au clavier et à la souris · **fait**
+
+Trois lots en parallèle, propriété exclusive des fichiers, puis assemblage. Les décisions de
+contrat sont écrites dans `docs/spec-complete.md` §10, **amendements A4, A5 et A6, rédigés avant
+le code** comme `CLAUDE.md` l'exige.
+
+| Lot | Contenu |
+|---|---|
+| **V3-L1** | **Le verrou du modèle sauté.** `Element.face_id` devient nullable, `room_id` / `pos_x_cm` / `pos_y_cm` apparaissent : un lit, une table, un îlot n'étaient pas mal placés, ils étaient **impossibles**. Trois `CheckConstraint` en base — exactement un ancrage, coordonnées comprises ; une ouverture exige une face ; position bornée — parce que les `Field` de SQLModel sont inertes sur `table=True` et que SQLAdmin, Celery et `psql` écrivent sans passer par Pydantic. Propriété `Element.anchor_room` comme point de passage unique : `element.face.room.project` était partout et lève un `AttributeError` sur le premier meuble libre venu. Fond de plan calibré sur `Room` (6 colonnes, `background_url` validée côté serveur — OWASP A03). Route de lot `POST /projects/{id}/batch`. |
+| **V3-L2** | **Ce qui est rendu correspond enfin à ce qui est modélisé.** CSG branché (`three-bvh-csg`, importé dynamiquement et uniquement si la scène contient un nœud `requires_csg`), étanchéité de la géométrie vérifiée **avant** évaluation, repli sur la primitive pleine plutôt qu'un résultat troué. Éclairage ACES et environnement PMREM procédural, ombres portées. Textures de revêtement générées par motif de pose. Isolement multi-faces, coupe horizontale, masquage des murs qui font écran. Mode logement complet. `ResourcePool` qui possède et libère tout : les fuites GPU étaient réelles et mesurées. |
+| **V3-L3** | **L'éditeur devient un outil de relevé.** Glisser-déposer depuis une palette métier, l'ancrage se décidant à la dépose. Annuler/refaire exprimé en **appels serveur inverses**. Magnétisme à trois priorités avec guides, saisie numérique des cotes, longueurs de mur éditables. Sélection multiple et gestes groupés, tous par la route de lot. Fond de plan et calibrage à deux clics. Chaque geste souris a son pendant clavier (WCAG AAA). |
+
+**Ce que la route de lot change vraiment.** Déplacer quinze meubles imposait quinze allers-retours
+strictement sériels, chacun invalidant la version détenue par le client. Le lot est **une**
+transaction et **une** incrémentation de version : sept opérations en union discriminée sur `op`,
+bornées à 100, tout ou rien, résultats rendus dans l'ordre d'envoi. Une opération refusée annule le
+lot et **nomme son rang**. Chaque identifiant du corps est revérifié contre le projet de l'URL en
+deux requêtes de préchargement — pas de N+1, et surtout pas de porte dérobée : c'est la route la
+plus dense en identifiants fournis par le client, donc celle où une vérification manquante
+coûterait le plus cher.
+
+**La fixture 11 fige ce que le code ne peut pas prouver seul.** `11_mobilier_libre.json` est la
+seule fixture où les deux ancrages coexistent — un radiateur adossé au mur A, un lit libre au
+centre, une table libre tournée à 90° — calculée à la main avec son `reasoning`. Elle attrape les
+trois confusions possibles entre les repères : le placement d'un meuble libre est exprimé dans le
+repère du **plan** et non relativement au coin de la boîte englobante comme sur la face SOL ;
+`face_label` vaut `null`, ce qui le tient hors de tout groupe de face et donc hors de l'isolement ;
+et l'**ordre d'émission** est stable, le cache de scène (P10) s'appuyant sur la sortie octet pour
+octet. Aucune fixture existante n'a été modifiée.
+
+**Quatre défauts trouvés par les agents dans leur propre travail, et corrigés.** Le test
+d'intersection segment/segment refusait un meuble poussé **pile contre** le mur — le geste le plus
+courant du métier — parce qu'un test d'intersection ordinaire compte un contact comme un
+croisement ; remplacé par le croisement franc, miroir exact de `_segments_cross` côté backend. Un
+sommet en cours de déplacement figurait dans ses propres candidats d'accroche et devenait
+incorrigible. Un seuil d'adossement fixe à 45 cm couvrait toute la surface d'un couloir de 90 cm,
+rendant la pose libre impossible dans un couloir — cas banal en rénovation. Et une annulation
+refusée par le serveur faisait glisser son entrée dans la branche « refaire », proposant de rejouer
+un geste que le serveur venait de refuser.
+
+### Assemblage — ce que la réconciliation a corrigé
+
+- **Le back-office ne purgeait pas le cache de scène d'un meuble libre.** `admin.py::_project_id_of`
+  remontait au projet par `Element.face_id` seul ; nul sur un meuble libre, `session.get(Face, None)`
+  rend `None` **sans lever** — seulement un `SAWarning`. Corriger un meuble libre depuis
+  l'administration laissait donc servir l'ancienne scène pendant toute la durée du cache. C'est le
+  genre de défaut que rien ne signale : il a été trouvé parce que **deux agents l'ont signalé sans
+  pouvoir y toucher**. Le test qui le couvre a été vérifié en le rejouant contre le code fautif,
+  où il échoue bien. `Element.room_id` rejoint aussi la liste du back-office, qui n'affichait que
+  `face_id` et laissait la moitié des lignes sans rattachement visible.
+- **Les types du lot promettaient au compilateur ce que le serveur refuse.** Les corps d'opération
+  sont validés en `extra="forbid"` : un `version` glissé dans le corps d'un élément n'aurait pas
+  été ignoré, il aurait fait refuser le lot entier en 422. `BatchOperation` retire désormais
+  `version` de chaque variante — et `force` de `create_room`, que seul `RoomPatch` accepte. Aucun
+  appelant ne les envoyait ; la règle est maintenant tenue par le compilateur et non par la
+  vigilance.
+- **L'énoncé de la question ouverte n° 6 était faux** et aurait envoyé quelqu'un corriger du code
+  correct : le métré ne « parcourt » pas les éléments par face, il ne les lit pas du tout. Il
+  chiffre des surfaces, des linéaires et du calepinage, et n'a jamais itémisé de mobilier, libre ou
+  adossé. Le vrai manque est le dossier d'élévations, dont le récapitulatif de pièce **sous-compte**
+  les éléments. La question a été réécrite pour dire cela.
+- Instantané OpenAPI régénéré et diffé à vide (**47 chemins**, 2 nouveaux), fixture 11 documentée
+  dans `tests/geometry/fixtures/README.md`.
+- **Une seule tête Alembic** (`e7b3c05f1a62`), `upgrade` → `downgrade` → `upgrade` rejoué sans
+  résidu et `alembic check` sans dérive aux deux extrémités. Le `downgrade` **refuse de s'exécuter**
+  s'il reste du mobilier libre, et donne les identifiants : remettre `face_id NOT NULL` en
+  supprimant les meubles en silence est une perte de données, pas une migration.
+- **Les deux nouvelles routes sont classées** dans `tests/test_permissions_locataire.py` : 49 routes
+  confrontées à un membre d'une autre organisation, plus 3 collections et 9 routes globales. Le
+  garde-fou de complétude qui lit l'OpenAPI publié est repassé au vert de lui-même.
+
+**Ce qui n'a pas été vérifié, et qu'il ne faut pas présenter comme fait** : aucun pixel n'a été
+observé. Il n'y a pas de navigateur dans cet environnement, donc le tone mapping, les ombres, les
+textures, le glisser-déposer, les guides d'aimantation et le fond de plan calibré n'ont **jamais
+été vus**. Les tests couvrent la logique et le montage, pas le rendu WebGL ni les évènements
+pointeur réels de Konva. C'est le premier point de la reprise (`docs/REPRISE.md`).
+
+Suite : **787 tests backend** (786 sur SQLite, le 787ᵉ ne s'exécutant que sur PostgreSQL), **368
+tests frontend** sur 23 fichiers, `ruff`, `mypy --strict`, `eslint` et `npm run build` verts.

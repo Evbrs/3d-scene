@@ -21,12 +21,23 @@ export interface Covering {
   pattern?: LayingPattern | null
 }
 
+/**
+ * Élément du plan, ancré à une face **ou** à une pièce (spec §10, amendement A4).
+ *
+ * `face_id` est le discriminant : non nul, l'élément est adossé et ce sont `x_offset_cm` /
+ * `y_offset_cm` qui font foi ; nul, `room_id` l'est forcément et le meuble est posé au sol en
+ * `pos_x_cm` / `pos_y_cm` — le **centre** de son emprise, dans le repère de `Room.polygon`. Les
+ * décalages valent alors 0 et ne veulent rien dire : ne pas les lire.
+ */
 export interface PlanElement {
   id: number
-  face_id: number
+  face_id: number | null
+  room_id: number | null
   kind: ElementKind
   x_offset_cm: number
   y_offset_cm: number
+  pos_x_cm: number | null
+  pos_y_cm: number | null
   width_cm: number
   height_cm: number
   depth_cm: number
@@ -34,6 +45,13 @@ export interface PlanElement {
   furniture_type_id: number | null
   colors: Record<string, string>
   variant_params: Record<string, string | number | boolean | null>
+}
+
+/** Un meuble posé au sol : `face_id` nul garantit que le placement est celui de la pièce. */
+export function isFreeElement(
+  element: PlanElement,
+): element is PlanElement & { room_id: number; pos_x_cm: number; pos_y_cm: number } {
+  return element.face_id === null && element.room_id !== null
 }
 
 export interface Face {
@@ -56,7 +74,22 @@ export interface Room {
   wall_thickness_cm: number
   ceiling_height_cm: number
   polygon: number[][]
+  /**
+   * Fond de plan calibré (spec §10, amendement A5).
+   *
+   * `background_scale_cm_per_px` à `null` veut dire « image posée, pas encore calibrée » — jamais
+   * « échelle 1 ». Dessiner par-dessus une image non calibrée produit un logement faux : c'est
+   * l'outil de calibrage à deux clics qui renseigne cette colonne, rien d'autre.
+   */
+  background_url: string | null
+  background_scale_cm_per_px: number | null
+  background_offset_x_cm: number
+  background_offset_y_cm: number
+  background_rotation_deg: number
+  background_opacity: number
   faces: Face[]
+  /** Mobilier posé au sol. Liste à part : le fondre dans les faces compterait tout deux fois. */
+  free_elements: PlanElement[]
 }
 
 export interface ProjectSummary {
@@ -135,7 +168,8 @@ export interface Primitive {
 export interface FurnitureNode {
   kind: 'furniture'
   element_id: number
-  face_label: string
+  /** Nul pour un meuble libre : aucun groupe de face ne doit le masquer (spec §10, A4). */
+  face_label: string | null
   furniture_type_slug: string
   position: [number, number, number]
   rotation_y: number

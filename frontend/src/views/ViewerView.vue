@@ -1,26 +1,45 @@
 <script setup lang="ts">
 /**
- * Viewer 3D (ticket P7) : caméras, isolement de face, transparence, capture, partage.
+ * Viewer 3D (ticket P7) : caméras, isolement de faces, transparence, coupe, capture, partage.
  *
  * Toute la géométrie vient du scene graph calculé par le backend (spec §3.1). Cette vue
- * n'orchestre que l'affichage.
+ * n'orchestre que l'affichage — l'assemblage Three.js vit dans `viewer/build.ts`, l'éclairage
+ * dans `viewer/ViewerStage.vue`.
  */
 import { OrbitControls } from '@tresjs/cientos'
 import { TresCanvas } from '@tresjs/core'
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { ACESFilmicToneMapping, type Camera, type Group, Vector3 } from 'three'
+import { computed, onMounted, ref, shallowRef, watch, watchEffect } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import * as api from '@/api/client'
-import type { CameraPreset, SceneGraph } from '@/api/types'
+import type { CameraPreset, SceneGraph, SceneRoom } from '@/api/types'
 import SceneRenderer from '@/viewer/SceneRenderer.vue'
+import ViewerStage from '@/viewer/ViewerStage.vue'
+import { type Framing, boundsOf, frameBox, wallFacings } from '@/viewer/build'
+import {
+  type ColorOverrides,
+  type ColorTarget,
+  applyColorOverrides,
+  colorTargets,
+  effectiveColor,
+  mergedColors,
+} from '@/viewer/colors'
+import { capturePlan, captureFileName, downloadDataUrl, nextFrames } from '@/viewer/capture'
 import { vec3 } from '@/viewer/vectors'
 import {
   VISIBILITY_LABELS,
   type FaceVisibility,
+  effectiveVisibility,
+  faceKey,
+  faceLabelOf,
+  horizontalCut,
   isolate,
   nextVisibility,
   showEverything,
+  toggleSelection,
   toViewState,
+  unscope,
 } from '@/viewer/visibility'
 
 const props = defineProps<{ projectId: string }>()
@@ -31,33 +50,123 @@ const scene = shallowRef<SceneGraph | null>(null)
 const roomIndex = ref(0)
 const activeCamera = ref('isometrique')
 const visibility = ref<Record<string, FaceVisibility>>({})
+const selection = ref<string[]>([])
 const error = ref<string | null>(null)
 const loading = ref(false)
 const canvasHost = ref<HTMLElement | null>(null)
 const shareUrl = ref<string | null>(null)
 
+/** Vue d'une pièce, ou du logement entier — les coordonnées du scene graph sont déjà absolues. */
+const wholeDwelling = ref(false)
+const autoHideFacing = ref(true)
+const cutHeightCm = ref(Number.POSITIVE_INFINITY)
+const colorOverrides = ref<ColorOverrides>({})
+const cameraPosition = ref<[number, number, number] | null>(null)
+
 const room = computed(() => scene.value?.rooms[roomIndex.value] ?? null)
 
-const faceLabels = computed(() => {
-  const labels: string[] = []
-  room.value?.nodes.forEach((node) => {
-    if ('face_label' in node && node.face_label && !labels.includes(node.face_label)) {
-      labels.push(node.face_label)
-    }
-  })
-  // Murs d'abord, dans l'ordre alphabétique, puis sol et plafond.
-  return labels.sort((a, b) => {
-    const horizontal = (label: string): number => (label === 'SOL' || label === 'PLAFOND' ? 1 : 0)
-    if (horizontal(a) !== horizontal(b)) return horizontal(a) - horizontal(b)
-    return a.localeCompare(b)
+/** Ce qui est effectivement construit : une pièce, ou toutes. */
+const shownRooms = computed<SceneRoom[]>(() => {
+  if (!scene.value) return []
+  return wholeDwelling.value ? [...scene.value.rooms] : room.value ? [room.value] : []
+})
+
+const renderedRooms = computed(() => applyColorOverrides(shownRooms.value, colorOverrides.value))
+
+/** Les étiquettes de face ne sont uniques que dans une pièce : on les préfixe dès qu'il y en a plusieurs. */
+const roomScoped = computed(() => wholeDwelling.value)
+
+interface FaceRow {
+  key: string
+  label: string
+  roomName: string
+}
+
+/**
+ * Les faces à lister, pièce par pièce.
+ *
+ * Le tri se fait **dans** chaque pièce puis les listes sont concaténées : un comparateur qui
+ * renverrait 0 pour deux faces de pièces différentes ne serait pas transitif, et l'ordre obtenu
+ * dépendrait de l'algorithme de tri.
+ */
+const faceRows = computed<FaceRow[]>(() => {
+  const horizontal = (label: string): number => (label === 'SOL' || label === 'PLAFOND' ? 1 : 0)
+  return shownRooms.value.flatMap((current) => {
+    const seen = new Set<string>()
+    const rows: FaceRow[] = []
+    current.nodes.forEach((node) => {
+      if (!('face_label' in node) || !node.face_label || seen.has(node.face_label)) return
+      seen.add(node.face_label)
+      rows.push({
+        key: faceKey(node.face_label, roomScoped.value ? current.id : undefined),
+        label: node.face_label,
+        roomName: current.name,
+      })
+    })
+    // Murs d'abord, dans l'ordre alphabétique, puis sol et plafond.
+    return rows.sort((first, second) =>
+      horizontal(first.label) !== horizontal(second.label)
+        ? horizontal(first.label) - horizontal(second.label)
+        : first.label.localeCompare(second.label),
+    )
   })
 })
 
-const camera = computed<CameraPreset | null>(
-  () => room.value?.cameras.find((preset) => preset.name === activeCamera.value) ?? null,
+const faceKeys = computed(() => faceRows.value.map((row) => row.key))
+
+const walls = computed(() => wallFacings(shownRooms.value, roomScoped.value))
+
+/**
+ * L'état réellement appliqué : les réglages de l'utilisateur, plus le masquage automatique des
+ * murs qui font écran. C'est une surcouche — les trois positions choisies restent intactes.
+ */
+const appliedVisibility = computed(() =>
+  effectiveVisibility(
+    visibility.value,
+    walls.value,
+    autoHideFacing.value ? cameraPosition.value : null,
+  ),
 )
 
-const isOrbit = computed(() => activeCamera.value === 'orbite')
+/** Vrai si la face n'est masquée que parce qu'elle fait écran, et non par choix. */
+function hiddenByCamera(key: string): boolean {
+  return appliedVisibility.value[key] === 'hidden' && visibility.value[key] !== 'hidden'
+}
+
+const ceilingHeightCm = computed(() => {
+  const heights = shownRooms.value.map((current) => current.ceiling_height_cm)
+  return heights.length > 0 ? Math.max(...heights) : 250
+})
+
+const cut = computed(() => horizontalCut(cutHeightCm.value, ceilingHeightCm.value))
+
+// --- Caméras --------------------------------------------------------------------------------
+
+const overview = shallowRef<Framing | null>(null)
+const focus = shallowRef<[number, number, number]>([0, 0, 0])
+const radiusCm = shallowRef(400)
+const cameraInstance = shallowRef<Camera | null>(null)
+
+const preset = computed<CameraPreset | null>(
+  () => room.value?.cameras.find((entry) => entry.name === activeCamera.value) ?? null,
+)
+
+/** En logement complet, aucun preset backend ne convient : on cadre l'emprise réellement construite. */
+const camera = computed<CameraPreset | null>(() => {
+  if (!wholeDwelling.value) return preset.value
+  if (!overview.value) return null
+  return {
+    name: 'ensemble',
+    kind: 'perspective',
+    position: overview.value.position,
+    target: overview.value.target,
+    up: [0, 1, 0],
+    face_label: null,
+    fov_deg: 50,
+  }
+})
+
+const isOrbit = computed(() => wholeDwelling.value || activeCamera.value === 'orbite')
 
 const cameraLabels: Record<string, string> = {
   dessus: 'Vue du dessus',
@@ -65,9 +174,50 @@ const cameraLabels: Record<string, string> = {
   orbite: 'Orbite libre',
 }
 
-function labelFor(preset: CameraPreset): string {
-  return cameraLabels[preset.name] ?? `Élévation ${preset.face_label}`
+function labelFor(entry: CameraPreset): string {
+  return cameraLabels[entry.name] ?? `Élévation ${entry.face_label}`
 }
+
+/**
+ * Recadre la scène sur ce qui vient d'être construit.
+ *
+ * L'emprise sert à deux choses : la caméra d'ensemble du mode logement, et le dimensionnement de
+ * la carte d'ombre. La mesurer sur les objets construits évite de supposer quoi que ce soit des
+ * cotes du plan.
+ */
+function onBuilt(group: Group): void {
+  const box = boundsOf(group)
+  if (box.isEmpty()) return
+  const centre = box.getCenter(new Vector3())
+  focus.value = [centre.x, centre.y, centre.z]
+  radiusCm.value = Math.max(100, box.getSize(new Vector3()).length() / 2)
+  overview.value = frameBox(box, 50, aspectRatio())
+}
+
+function aspectRatio(): number {
+  const host = canvasHost.value
+  return host && host.clientHeight > 0 ? host.clientWidth / host.clientHeight : 1.6
+}
+
+/**
+ * Applique le point de vue à la caméra montée.
+ *
+ * Le canevas portait un `:key` sur la caméra active : chaque clic détruisait le contexte WebGL et
+ * faisait recompiler tous les shaders. Sans lui, la même caméra est réutilisée — encore faut-il
+ * lui pousser sa nouvelle position, ce que fait cet effet. L'orbite est exclue : les contrôles y
+ * sont propriétaires de la caméra.
+ */
+watchEffect(() => {
+  const instance = cameraInstance.value
+  const target = camera.value
+  if (!instance || !target || isOrbit.value) return
+  instance.position.set(target.position[0], target.position[1], target.position[2])
+  instance.up.set(target.up[0], target.up[1], target.up[2])
+  instance.lookAt(new Vector3(target.target[0], target.target[1], target.target[2]))
+  instance.updateMatrixWorld()
+})
+
+// --- Chargement -----------------------------------------------------------------------------
 
 /**
  * Charge la scène.
@@ -84,10 +234,14 @@ async function load(preserveVisibility = false): Promise<void> {
     // La pièce demandée peut avoir disparu ou l'URL être bricolée : sans borne, `room` devient
     // `undefined` et la vue reste bloquée sur « Chargement de la scène… ».
     roomIndex.value = clampRoomIndex(readRoomIndexFromUrl() ?? roomIndex.value)
-    const labels = faceLabels.value
+    // Les couleurs choisies ont été écrites : la réponse du serveur fait désormais foi.
+    colorOverrides.value = {}
+    const keys = faceKeys.value
     visibility.value = preserveVisibility
-      ? Object.fromEntries(labels.map((label) => [label, previous[label] ?? 'visible']))
-      : defaultVisibility(labels)
+      ? Object.fromEntries(keys.map((key) => [key, previous[key] ?? 'visible']))
+      : defaultVisibility(keys)
+    selection.value = []
+    cutHeightCm.value = ceilingHeightCm.value
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : String(caught)
   } finally {
@@ -109,19 +263,27 @@ function readRoomIndexFromUrl(): number | null {
 /**
  * Change de pièce.
  *
- * `roomIndex` n'était jamais réaffecté : le viewer restait figé sur la première pièce, et un
- * projet de plusieurs pièces n'était visible qu'au tiers. La sélection passe par l'URL pour
- * survivre à un rechargement et pour qu'un lien désigne bien la pièce montrée.
+ * La sélection passe par l'URL pour survivre à un rechargement et pour qu'un lien désigne bien la
+ * pièce montrée.
  */
 function selectRoom(index: number): void {
   roomIndex.value = clampRoomIndex(index)
   // Les étiquettes de face et les élévations appartiennent à la pièce : les reprendre telles
   // quelles masquerait des murs au hasard dans la nouvelle.
-  visibility.value = defaultVisibility(faceLabels.value)
-  if (!room.value?.cameras.some((preset) => preset.name === activeCamera.value)) {
+  resetVisibility()
+  cutHeightCm.value = ceilingHeightCm.value
+  if (!room.value?.cameras.some((entry) => entry.name === activeCamera.value)) {
     activeCamera.value = 'isometrique'
   }
   void router.replace({ query: { ...route.query, piece: roomIndex.value } })
+}
+
+function toggleWholeDwelling(): void {
+  wholeDwelling.value = !wholeDwelling.value
+  // Les clés changent de forme en passant d'un mode à l'autre : un état repris tel quel
+  // masquerait des faces au hasard.
+  resetVisibility()
+  cutHeightCm.value = ceilingHeightCm.value
 }
 
 /**
@@ -131,9 +293,11 @@ function selectRoom(index: number): void {
  * ressemble à un bloc plein. Retirer le plafond est la convention des vues de plan 3D, et il
  * reste réaffichable en un clic.
  */
-function defaultVisibility(labels: string[]): Record<string, FaceVisibility> {
-  const state = showEverything(labels)
-  if ('PLAFOND' in state) state.PLAFOND = 'hidden'
+function defaultVisibility(keys: string[]): Record<string, FaceVisibility> {
+  const state = showEverything(keys)
+  keys.forEach((key) => {
+    if (faceLabelOf(key) === 'PLAFOND') state[key] = 'hidden'
+  })
   return state
 }
 
@@ -141,22 +305,77 @@ onMounted(() => load())
 
 // Passer d'un projet à l'autre réutilise le composant : sans ça, la scène du projet précédent
 // resterait affichée. Volontairement sur le projet et non sur l'URL complète, dont la chaîne de
-// requête porte maintenant la pièce sélectionnée — la relire déclencherait un rechargement
-// complet de la scène à chaque changement de pièce.
+// requête porte maintenant la pièce sélectionnée.
 watch(() => props.projectId, () => load(true))
 
-function cycle(label: string): void {
-  visibility.value = { ...visibility.value, [label]: nextVisibility(visibility.value[label]) }
+// --- Visibilité -----------------------------------------------------------------------------
+
+function cycle(key: string): void {
+  visibility.value = { ...visibility.value, [key]: nextVisibility(visibility.value[key]) }
 }
 
-function isolateFace(label: string): void {
-  visibility.value = isolate([label], faceLabels.value)
-  const preset = room.value?.cameras.find((entry) => entry.face_label === label)
-  if (preset) activeCamera.value = preset.name
+function toggleSelected(key: string): void {
+  selection.value = toggleSelection(selection.value, key)
+}
+
+/**
+ * Isole la sélection : une face, deux, ou davantage (spec §3.4 — « la face A, ou A+B, ou
+ * l'ensemble »). `isolate` acceptait déjà un tableau ; personne ne lui en donnait jamais qu'un.
+ */
+function isolateSelection(): void {
+  visibility.value = isolate(selection.value, faceKeys.value)
+  if (selection.value.length === 1) {
+    const only = faceLabelOf(selection.value[0]!)
+    const elevation = room.value?.cameras.find((entry) => entry.face_label === only)
+    if (elevation && !wholeDwelling.value) activeCamera.value = elevation.name
+  }
 }
 
 function resetVisibility(): void {
-  visibility.value = defaultVisibility(faceLabels.value)
+  visibility.value = defaultVisibility(faceKeys.value)
+  selection.value = []
+}
+
+// --- Couleurs -------------------------------------------------------------------------------
+
+const paletteTargets = computed<ColorTarget[]>(() => colorTargets(shownRooms.value))
+
+function slotColor(target: ColorTarget, slot: string): string {
+  return effectiveColor(target, slot, colorOverrides.value) ?? '#9aa0a6'
+}
+
+/** Aperçu immédiat, sans attendre le serveur : c'est ce qui rend le choix d'une teinte utilisable. */
+function previewColor(target: ColorTarget, slot: string, color: string): void {
+  colorOverrides.value = {
+    ...colorOverrides.value,
+    [target.elementId]: { ...(colorOverrides.value[target.elementId] ?? {}), [slot]: color },
+  }
+}
+
+/**
+ * Enregistre la teinte choisie.
+ *
+ * Le scene graph ne publie pas la version du projet : l'écriture part donc sans numéro de
+ * version. Le serveur ne peut alors pas refuser une écriture périmée, mais il incrémente bien la
+ * version — un éditeur ouvert en parallèle recevra son 409 à son prochain enregistrement, ce qui
+ * est le comportement voulu.
+ */
+async function saveColor(target: ColorTarget, slot: string, color: string): Promise<void> {
+  previewColor(target, slot, color)
+  error.value = null
+  try {
+    await api.updateElement(target.elementId, {
+      colors: mergedColors(target, colorOverrides.value),
+    })
+  } catch (caught) {
+    error.value = `Couleur non enregistrée : ${caught instanceof Error ? caught.message : String(caught)}`
+  }
+}
+
+// --- Captures et export ---------------------------------------------------------------------
+
+function canvasElement(): HTMLCanvasElement | null {
+  return canvasHost.value?.querySelector('canvas') ?? null
 }
 
 /**
@@ -166,12 +385,41 @@ function resetVisibility(): void {
  * rendu et `toDataURL` renvoie une image noire.
  */
 function capture(): void {
-  const canvas = canvasHost.value?.querySelector('canvas')
+  const canvas = canvasElement()
   if (!canvas) return
-  const link = document.createElement('a')
-  link.download = `${room.value?.name ?? 'vue'}-${activeCamera.value}.png`
-  link.href = canvas.toDataURL('image/png')
-  link.click()
+  const name = wholeDwelling.value ? 'logement' : (room.value?.name ?? 'vue')
+  downloadDataUrl(captureFileName(name, activeCamera.value), canvas.toDataURL('image/png'))
+}
+
+const capturing = ref(false)
+
+/**
+ * Une capture par mur (spec §3.5 : « ce mécanisme, appliqué à chaque vue par face, te donne
+ * gratuitement les images pour l'export PDF détaillé par mur »).
+ *
+ * Chaque prise attend deux trames : changer de caméra ne redessine pas le canevas dans la foulée,
+ * et lire le tampon trop tôt renverrait l'image précédente.
+ */
+async function captureFaces(): Promise<void> {
+  const current = room.value
+  const canvas = canvasElement()
+  if (!current || !canvas || capturing.value) return
+
+  capturing.value = true
+  const restoreCamera = activeCamera.value
+  const restoreVisibility = { ...visibility.value }
+  try {
+    for (const shot of capturePlan(current.name, current.cameras)) {
+      activeCamera.value = shot.cameraName
+      visibility.value = isolate(shot.faceLabel ? [shot.faceLabel] : [], faceKeys.value)
+      await nextFrames(3)
+      downloadDataUrl(shot.fileName, canvas.toDataURL('image/png'))
+    }
+  } finally {
+    activeCamera.value = restoreCamera
+    visibility.value = restoreVisibility
+    capturing.value = false
+  }
 }
 
 /**
@@ -214,11 +462,23 @@ async function exportPdf(): Promise<void> {
   }
 }
 
+/**
+ * L'état à partager, toujours en étiquettes nues.
+ *
+ * La page publique n'affiche qu'une pièce et relit des étiquettes sans préfixe : partager depuis
+ * le mode logement complet lui enverrait des clés « 12:A » qu'elle ne reconnaîtrait dans aucune
+ * de ses listes, et elle masquerait tout.
+ */
+function shareableVisibility(): Record<string, FaceVisibility> {
+  const current = room.value
+  return wholeDwelling.value && current ? unscope(visibility.value, current.id) : visibility.value
+}
+
 async function share(): Promise<void> {
   error.value = null
   try {
     const created = await api.createSharedView(Number(props.projectId), {
-      ...toViewState(visibility.value, activeCamera.value),
+      ...toViewState(shareableVisibility(), activeCamera.value),
       room_index: roomIndex.value,
     })
     shareUrl.value = `${window.location.origin}/partage/${created.token}`
@@ -232,7 +492,7 @@ async function share(): Promise<void> {
   <section v-if="room">
     <header class="entete">
       <div>
-        <h1>{{ room.name }}</h1>
+        <h1>{{ wholeDwelling ? 'Logement complet' : room.name }}</h1>
         <p class="sous-titre">
           Vue 3D · {{ (room.floor_area_cm2 / 10000).toFixed(2) }} m² au sol
         </p>
@@ -259,15 +519,20 @@ async function share(): Promise<void> {
         ref="canvasHost"
         class="scene"
       >
+        <!-- Aucun `:key` sur le canevas : il détruisait le contexte WebGL à chaque changement de
+             point de vue, et faisait recompiler tous les shaders. -->
         <TresCanvas
           v-if="camera"
-          :key="activeCamera"
           clear-color="#eef1f5"
           :preserve-drawing-buffer="true"
           :window-size="false"
+          :shadows="true"
+          :tone-mapping="ACESFilmicToneMapping"
+          :tone-mapping-exposure="1"
         >
           <TresPerspectiveCamera
             v-if="camera.kind === 'perspective'"
+            ref="cameraInstance"
             :position="vec3(camera.position)"
             :look-at="vec3(camera.target)"
             :fov="camera.fov_deg ?? 50"
@@ -276,6 +541,7 @@ async function share(): Promise<void> {
           />
           <TresOrthographicCamera
             v-else
+            ref="cameraInstance"
             :position="vec3(camera.position)"
             :look-at="vec3(camera.target)"
             :up="vec3(camera.up)"
@@ -293,19 +559,20 @@ async function share(): Promise<void> {
             :enable-damping="true"
           />
 
-          <TresAmbientLight :intensity="1.4" />
-          <TresDirectionalLight
-            :position="vec3([600, 1200, 900])"
-            :intensity="2"
-          />
-          <TresDirectionalLight
-            :position="vec3([-600, 500, -400])"
-            :intensity="0.8"
+          <ViewerStage
+            :focus="focus"
+            :radius-cm="radiusCm"
+            :cut-height-cm="cut"
+            :shadows="true"
+            @camera-moved="cameraPosition = $event"
           />
 
           <SceneRenderer
-            :room="room"
-            :visibility="visibility"
+            :rooms="renderedRooms"
+            :visibility="appliedVisibility"
+            :room-scoped="roomScoped"
+            :shadows="true"
+            @built="onBuilt"
           />
         </TresCanvas>
       </div>
@@ -319,6 +586,7 @@ async function share(): Promise<void> {
           <select
             id="piece-3d"
             :value="roomIndex"
+            :disabled="wholeDwelling"
             @change="selectRoom(Number(($event.target as HTMLSelectElement).value))"
           >
             <option
@@ -331,18 +599,34 @@ async function share(): Promise<void> {
           </select>
         </div>
 
+        <p
+          v-if="scene && scene.rooms.length > 1"
+          class="champ"
+        >
+          <button
+            type="button"
+            :aria-pressed="wholeDwelling"
+            @click="toggleWholeDwelling"
+          >
+            🏠 Logement complet
+          </button>
+        </p>
+
         <h2>Point de vue</h2>
-        <ul class="cameras">
+        <ul
+          v-if="!wholeDwelling"
+          class="cameras"
+        >
           <li
-            v-for="preset in room.cameras"
-            :key="preset.name"
+            v-for="entry in room.cameras"
+            :key="entry.name"
           >
             <button
               type="button"
-              :aria-pressed="preset.name === activeCamera"
-              @click="activeCamera = preset.name"
+              :aria-pressed="entry.name === activeCamera"
+              @click="activeCamera = entry.name"
             >
-              {{ labelFor(preset) }}
+              {{ labelFor(entry) }}
             </button>
           </li>
         </ul>
@@ -353,50 +637,89 @@ async function share(): Promise<void> {
           Glisser pour tourner, molette pour zoomer.
         </p>
 
+        <h2>Coupe et murs</h2>
+        <div class="champ">
+          <label for="coupe">
+            Coupe horizontale :
+            {{ cut === null ? 'aucune' : `${Math.round(cut)} cm` }}
+          </label>
+          <input
+            id="coupe"
+            v-model.number="cutHeightCm"
+            type="range"
+            min="20"
+            :max="ceilingHeightCm"
+            step="5"
+          >
+          <p class="aide">
+            Tout ce qui dépasse cette hauteur est retiré du rendu. Poussée au maximum, la coupe est
+            débranchée.
+          </p>
+        </div>
+        <div class="champ">
+          <label class="case">
+            <input
+              v-model="autoHideFacing"
+              type="checkbox"
+            >
+            Masquer les murs qui font face à la caméra
+          </label>
+          <p class="aide">
+            Réglage d'affichage seulement : vos trois positions restent celles du tableau.
+          </p>
+        </div>
+
         <h2>Faces</h2>
         <p class="aide">
           Trois états : visible, transparente, masquée. La transparence garde le contexte spatial
-          au lieu de le supprimer. Le plafond est masqué au départ pour laisser voir l'intérieur.
+          au lieu de le supprimer. Cochez plusieurs faces pour les isoler ensemble.
         </p>
         <table>
           <thead>
             <tr>
+              <th scope="col">
+                <span class="sr">Sélection</span>
+              </th>
               <th scope="col">
                 Face
               </th>
               <th scope="col">
                 État
               </th>
-              <th scope="col">
-                <span class="sr">Action</span>
-              </th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="label in faceLabels"
-              :key="label"
+              v-for="row in faceRows"
+              :key="row.key"
             >
+              <td>
+                <input
+                  :id="`selection-${row.key}`"
+                  type="checkbox"
+                  :checked="selection.includes(row.key)"
+                  :aria-label="`Sélectionner la face ${row.label}${wholeDwelling ? ` de ${row.roomName}` : ''}`"
+                  @change="toggleSelected(row.key)"
+                >
+              </td>
               <th scope="row">
-                {{ label }}
+                <label :for="`selection-${row.key}`">
+                  {{ row.label }}
+                  <small v-if="wholeDwelling">{{ row.roomName }}</small>
+                  <!-- Le masquage automatique ne change pas l'état choisi : on le signale au lieu
+                       de laisser croire que le réglage a bougé tout seul. -->
+                  <small v-if="hiddenByCamera(row.key)">fait écran, masqué</small>
+                </label>
               </th>
               <td>
                 <button
                   type="button"
                   class="etat"
-                  :data-etat="visibility[label] ?? 'visible'"
-                  :aria-label="`Face ${label} : ${VISIBILITY_LABELS[visibility[label] ?? 'visible']}. Changer d'état.`"
-                  @click="cycle(label)"
+                  :data-etat="visibility[row.key] ?? 'visible'"
+                  :aria-label="`Face ${row.label} : ${VISIBILITY_LABELS[visibility[row.key] ?? 'visible']}. Changer d'état.`"
+                  @click="cycle(row.key)"
                 >
-                  {{ VISIBILITY_LABELS[visibility[label] ?? 'visible'] }}
-                </button>
-              </td>
-              <td>
-                <button
-                  type="button"
-                  @click="isolateFace(label)"
-                >
-                  Isoler
+                  {{ VISIBILITY_LABELS[visibility[row.key] ?? 'visible'] }}
                 </button>
               </td>
             </tr>
@@ -406,16 +729,66 @@ async function share(): Promise<void> {
         <div class="actions">
           <button
             type="button"
+            data-variant="primary"
+            :disabled="selection.length === 0"
+            @click="isolateSelection"
+          >
+            Isoler la sélection ({{ selection.length }})
+          </button>
+          <button
+            type="button"
             @click="resetVisibility"
           >
             Réinitialiser
           </button>
+        </div>
+
+        <template v-if="paletteTargets.length > 0">
+          <h2>Couleurs</h2>
+          <p class="aide">
+            Une teinte par emplacement du meuble. Le changement s'applique tout de suite et est
+            enregistré au relâchement.
+          </p>
+          <ul class="palette">
+            <li
+              v-for="target in paletteTargets"
+              :key="target.elementId"
+            >
+              <span class="palette-nom">{{ target.label }}</span>
+              <span
+                v-for="entry in target.slots"
+                :key="entry.slot"
+                class="palette-slot"
+              >
+                <label :for="`couleur-${target.elementId}-${entry.slot}`">{{ entry.slot }}</label>
+                <input
+                  :id="`couleur-${target.elementId}-${entry.slot}`"
+                  type="color"
+                  :value="slotColor(target, entry.slot)"
+                  @input="previewColor(target, entry.slot, ($event.target as HTMLInputElement).value)"
+                  @change="saveColor(target, entry.slot, ($event.target as HTMLInputElement).value)"
+                >
+              </span>
+            </li>
+          </ul>
+        </template>
+
+        <h2>Sortie</h2>
+        <div class="actions">
           <button
             type="button"
             data-variant="primary"
             @click="capture"
           >
             📷 Capturer
+          </button>
+          <button
+            type="button"
+            :disabled="capturing || wholeDwelling"
+            :aria-busy="capturing"
+            @click="captureFaces"
+          >
+            {{ capturing ? 'Captures…' : '🖼 Une image par mur' }}
           </button>
           <button
             type="button"
@@ -534,6 +907,16 @@ async function share(): Promise<void> {
   margin-bottom: 1rem;
 }
 
+.champ input[type='range'] {
+  width: 100%;
+}
+
+.case {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .cameras {
   list-style: none;
   padding: 0;
@@ -561,6 +944,12 @@ td {
   text-align: left;
 }
 
+th small {
+  display: block;
+  font-weight: 400;
+  color: var(--texte-doux);
+}
+
 .etat[data-etat='visible'] {
   border-color: #0a5c2c;
   color: #0a5c2c;
@@ -579,6 +968,41 @@ td {
 .aide {
   color: var(--texte-doux);
   font-size: 0.9rem;
+}
+
+.palette {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.palette li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--bordure);
+}
+
+.palette-nom {
+  flex: 1 1 8rem;
+  font-weight: 600;
+}
+
+.palette-slot {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.palette-slot input[type='color'] {
+  width: 2.2rem;
+  height: 1.8rem;
+  padding: 0;
+  border: 1px solid var(--bordure);
+  border-radius: 0.25rem;
 }
 
 .actions {

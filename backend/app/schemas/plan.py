@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.models.base import ElementKind, FaceKind, LayingPattern
 from app.services.faces import (
+    OPENING_KINDS,
     polygon_area,
     polygon_crosses_itself,
     shortest_side_length,
@@ -48,6 +49,10 @@ VariantValue = (
 )
 ColorSlots = Annotated[dict[BlobKey, HexColor], Field(max_length=24)]
 VariantParams = Annotated[dict[BlobKey, VariantValue], Field(max_length=32)]
+
+# Un lot borné (spec §10, amendement A6) : sans borne, une seule requête tient une transaction
+# ouverte aussi longtemps qu'elle veut, et le verrou de version du projet avec elle.
+MAX_BATCH_OPERATIONS = 100
 
 
 class PartialUpdate(BaseModel):
@@ -97,12 +102,17 @@ class Covering(BaseModel):
 # --- Element ----------------------------------------------------------------------------------
 
 
-class ElementBase(BaseModel):
+class ElementShape(BaseModel):
+    """Ce qu'un élément est, indépendamment de l'endroit où il est posé.
+
+    Séparé de son placement depuis l'amendement A4 : un élément s'ancre à une face **ou** au sol
+    d'une pièce, et les deux repères n'ont ni le même nom de champ ni la même signification.
+    Faire hériter les deux ancrages d'une base commune évite de dupliquer les bornes.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     kind: ElementKind = ElementKind.FURNITURE
-    x_offset_cm: Coordinate = 0.0
-    y_offset_cm: Coordinate = 0.0
     width_cm: Centimeters = 100.0
     height_cm: Centimeters = 100.0
     depth_cm: Centimeters = 50.0
@@ -112,39 +122,101 @@ class ElementBase(BaseModel):
     variant_params: VariantParams = Field(default_factory=dict)
 
 
+class ElementBase(ElementShape):
+    """Élément adossé à une face : les décalages sont mesurés dans le plan de cette face."""
+
+    x_offset_cm: Coordinate = 0.0
+    y_offset_cm: Coordinate = 0.0
+
+
 class ElementCreate(ElementBase):
     version: int | None = Field(default=None, ge=1)
 
 
-class ElementUpdate(PartialUpdate):
+class RoomElementBody(ElementShape):
+    """Meuble posé au sol, ancré à la pièce et non à une face (spec §10, amendement A4).
+
+    `pos_x_cm` / `pos_y_cm` sont le **centre** de l'emprise, dans le repère du plan — celui de
+    `Room.polygon`, celui que l'éditeur 2D manipule déjà. Ils sont obligatoires : un meuble libre
+    sans position n'a pas d'endroit où être dessiné, et une valeur par défaut le poserait
+    silencieusement à l'origine du plan, souvent hors de la pièce.
+    """
+
+    pos_x_cm: Coordinate
+    pos_y_cm: Coordinate
+
+    @model_validator(mode="after")
+    def _refuse_an_opening_without_a_wall(self) -> "RoomElementBody":
+        """Une ouverture est un percement du mur (spec §3.1) : elle ne flotte pas dans la pièce.
+
+        La contrainte existe aussi en base (`ck_element_opening_needs_a_face`) ; la doubler ici
+        n'est pas de la redondance mais la différence entre un 422 explicite et une 500.
+        """
+        if self.kind in OPENING_KINDS:
+            raise ValueError(
+                f"une ouverture ({self.kind.value}) doit être posée sur un mur : "
+                "utilisez POST /api/faces/{face_id}/elements"
+            )
+        return self
+
+
+class RoomElementCreate(RoomElementBody):
+    version: int | None = Field(default=None, ge=1)
+
+
+class ElementPatch(PartialUpdate):
+    """Modification d'un élément, **sans** verrouillage : la version est portée par le lot.
+
+    Le changement d'ancrage est volontairement absent (spec §10, A4) : `face_id` et `room_id`
+    n'y figurent pas. Passer d'un repère à l'autre change le sens des coordonnées, donc exige un
+    placement complet — c'est une suppression suivie d'une création, pas une modification.
+    """
+
     # `furniture_type_id: null` détache l'élément du catalogue, `colors`/`variant_params: null`
     # les vident — comme `covering: null` sur une face. Les trois sont donc des nuls porteurs de
     # sens, contrairement aux dimensions.
     NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset(
-        {"version", "furniture_type_id", "colors", "variant_params"}
+        {"furniture_type_id", "colors", "variant_params"}
     )
 
     kind: ElementKind | None = None
     x_offset_cm: Coordinate | None = None
     y_offset_cm: Coordinate | None = None
+    pos_x_cm: Coordinate | None = None
+    pos_y_cm: Coordinate | None = None
     width_cm: Centimeters | None = None
     height_cm: Centimeters | None = None
     depth_cm: Centimeters | None = None
     rotation_deg: Annotated[float, Field(ge=-360, le=360)] | None = None
     furniture_type_id: int | None = None
-    # Mêmes types que sur `ElementBase`. Redéclarer `dict[str, str]` ici contournait la validation
-    # des couleurs : la valeur invalide était écrite en base, puis faisait échouer la
+    # Mêmes types que sur `ElementShape`. Redéclarer `dict[str, str]` ici contournait la
+    # validation des couleurs : la valeur invalide était écrite en base, puis faisait échouer la
     # sérialisation de *toutes* les lectures traversant cet élément (500 permanent).
     colors: ColorSlots | None = None
     variant_params: VariantParams | None = None
+
+
+class ElementUpdate(ElementPatch):
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = ElementPatch.NULLABLE_FIELDS | {"version"}
+
     version: int | None = Field(default=None, ge=1)
 
 
 class ElementRead(ElementBase):
+    """Vue d'un élément, les deux ancrages exposés tels quels.
+
+    Le discriminant est `face_id` : quand il est nul, l'élément est posé au sol de `room_id` et
+    ce sont `pos_x_cm` / `pos_y_cm` qui font foi. `x_offset_cm` / `y_offset_cm` gardent alors
+    leur valeur par défaut et ne veulent rien dire — ne pas les lire.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    face_id: int
+    face_id: int | None
+    room_id: int | None
+    pos_x_cm: float | None
+    pos_y_cm: float | None
 
 
 # --- Face -------------------------------------------------------------------------------------
@@ -182,6 +254,11 @@ class FaceRead(BaseModel):
 
 Polygon = Annotated[list[Annotated[list[Coordinate], Field(min_length=2, max_length=2)]], Field()]
 
+# Échelle du fond de plan. Bornée haut comme bas : à 1e-6 cm/px une image de 2 000 px couvrirait
+# deux millimètres, et le calibrage à deux clics rendrait un plan invisible sans dire pourquoi.
+BackgroundScale = Annotated[float, Field(gt=0, le=10_000)]
+Opacity = Annotated[float, Field(ge=0, le=1)]
+
 
 class RoomBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -190,6 +267,44 @@ class RoomBase(BaseModel):
     wall_thickness_cm: Centimeters = 10.0
     ceiling_height_cm: Centimeters = 250.0
     polygon: Polygon = Field(default_factory=list)
+
+    # --- Fond de plan (spec §10, amendement A5) ---
+    # L'échelle reste nulle tant que le calibrage n'a pas eu lieu : « image posée, pas encore
+    # calibrée » est un état réel, et une valeur inventée serait indiscernable d'une mesure.
+    background_url: Annotated[str, Field(max_length=500)] | None = None
+    background_scale_cm_per_px: BackgroundScale | None = None
+    background_offset_x_cm: Coordinate = 0.0
+    background_offset_y_cm: Coordinate = 0.0
+    background_rotation_deg: Annotated[float, Field(ge=-360, le=360)] = 0.0
+    background_opacity: Opacity = 1.0
+
+    @field_validator("background_url")
+    @classmethod
+    def _validate_background_url(cls, value: str | None) -> str | None:
+        """Refuse tout ce qui n'est pas un chemin du site ou une URL `https://` (spec §10, A5).
+
+        Ce champ est écrit par un client et relu dans un attribut d'image côté navigateur : c'est
+        une entrée utilisateur au sens OWASP A03, et l'écriture est le seul endroit où sa
+        validation ne dépend pas de la vigilance du rendu. Trois formes sont explicitement
+        écartées :
+
+        - `javascript:` et les autres schémas actifs, qui s'exécutent selon l'attribut d'accueil ;
+        - `data:`, qui ferait porter des mégaoctets d'image à une colonne de 500 caractères ;
+        - `//hôte/chemin`, protocol-relative, qui ressemble à un chemin local et désigne un tiers.
+          `/\\hôte` est écarté au même titre : plusieurs navigateurs le lisent comme `//`.
+        """
+        if value is None:
+            return None
+        if any(character.isspace() or ord(character) < 0x20 for character in value):
+            raise ValueError("l'adresse du fond de plan ne peut contenir ni espace ni contrôle")
+        if value.startswith("/") and not value.startswith(("//", "/\\")):
+            return value
+        if value.startswith("https://") and len(value) > len("https://"):
+            return value
+        raise ValueError(
+            "adresse de fond de plan refusée : attendu un chemin du site commençant par « / » "
+            "ou une URL « https:// »"
+        )
 
     @field_validator("polygon")
     @classmethod
@@ -232,17 +347,39 @@ class RoomCreate(RoomBase):
     version: int | None = Field(default=None, ge=1)
 
 
-class RoomUpdate(PartialUpdate):
+class RoomPatch(PartialUpdate):
+    """Modification d'une pièce, **sans** verrouillage : la version est portée par le lot."""
+
+    # `background_url: null` retire le fond de plan, `background_scale_cm_per_px: null` annule le
+    # calibrage sans retirer l'image : les deux colonnes sont nullables et ces nuls ont un sens.
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"background_url", "background_scale_cm_per_px"}
+    )
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     wall_thickness_cm: Centimeters | None = None
     ceiling_height_cm: Centimeters | None = None
     polygon: Polygon | None = None
-    # Verrouillage optimiste : version du projet lue par le client (voir `ProjectUpdate`).
-    version: int | None = Field(default=None, ge=1)
+    background_url: Annotated[str, Field(max_length=500)] | None = None
+    background_scale_cm_per_px: BackgroundScale | None = None
+    background_offset_x_cm: Coordinate | None = None
+    background_offset_y_cm: Coordinate | None = None
+    background_rotation_deg: Annotated[float, Field(ge=-360, le=360)] | None = None
+    background_opacity: Opacity | None = None
     # Confirme explicitement la suppression de murs portant des éléments (perte de données).
     force: bool = False
 
     _validate_polygon = field_validator("polygon")(RoomBase._validate_polygon.__func__)  # type: ignore[attr-defined]
+    _validate_background_url = field_validator("background_url")(
+        RoomBase._validate_background_url.__func__  # type: ignore[attr-defined]
+    )
+
+
+class RoomUpdate(RoomPatch):
+    NULLABLE_FIELDS: ClassVar[frozenset[str]] = RoomPatch.NULLABLE_FIELDS | {"version"}
+
+    # Verrouillage optimiste : version du projet lue par le client (voir `ProjectUpdate`).
+    version: int | None = Field(default=None, ge=1)
 
 
 class RoomRead(BaseModel):
@@ -254,7 +391,16 @@ class RoomRead(BaseModel):
     wall_thickness_cm: float
     ceiling_height_cm: float
     polygon: list[list[float]]
+    background_url: str | None = None
+    background_scale_cm_per_px: float | None = None
+    background_offset_x_cm: float = 0.0
+    background_offset_y_cm: float = 0.0
+    background_rotation_deg: float = 0.0
+    background_opacity: float = 1.0
     faces: list[FaceRead] = Field(default_factory=list)
+    # Mobilier posé au sol, adossé à aucune face (spec §10, A4). Une liste à part et non fondue
+    # dans les faces : le client doit pouvoir distinguer ce qui est accroché de ce qui est posé.
+    free_elements: list[ElementRead] = Field(default_factory=list)
 
 
 # --- Project ----------------------------------------------------------------------------------
@@ -311,6 +457,107 @@ class Page(BaseModel):
 
 class ProjectPage(Page):
     items: list[ProjectSummary]
+
+
+# --- Écriture en lot (spec §10, amendement A6) --------------------------------------------------
+
+
+class BatchOperationBase(BaseModel):
+    """Base des opérations d'un lot.
+
+    Aucune ne porte de `version` : le lot en a **une**, en tête de requête, et c'est tout l'objet
+    de l'amendement A6. Une version par opération réintroduirait la sérialisation qu'on supprime.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreateFaceElementOp(BatchOperationBase):
+    op: Literal["create_face_element"]
+    face_id: int = Field(ge=1)
+    element: ElementBase
+
+
+class CreateRoomElementOp(BatchOperationBase):
+    op: Literal["create_room_element"]
+    room_id: int = Field(ge=1)
+    element: RoomElementBody
+
+
+class UpdateElementOp(BatchOperationBase):
+    op: Literal["update_element"]
+    element_id: int = Field(ge=1)
+    changes: ElementPatch
+
+
+class DeleteElementOp(BatchOperationBase):
+    op: Literal["delete_element"]
+    element_id: int = Field(ge=1)
+
+
+class CreateRoomOp(BatchOperationBase):
+    op: Literal["create_room"]
+    room: RoomBase
+
+
+class UpdateRoomOp(BatchOperationBase):
+    op: Literal["update_room"]
+    room_id: int = Field(ge=1)
+    changes: RoomPatch
+
+
+class DeleteRoomOp(BatchOperationBase):
+    op: Literal["delete_room"]
+    room_id: int = Field(ge=1)
+
+
+# Union discriminée sur `op` : sans discriminant, Pydantic essaie les variantes une par une et
+# rend l'erreur de la dernière, ce qui rendrait le message d'un lot refusé illisible.
+BatchOperation = Annotated[
+    CreateFaceElementOp
+    | CreateRoomElementOp
+    | UpdateElementOp
+    | DeleteElementOp
+    | CreateRoomOp
+    | UpdateRoomOp
+    | DeleteRoomOp,
+    Field(discriminator="op"),
+]
+
+
+class BatchRequest(BaseModel):
+    """Un lot d'écritures du plan, appliqué dans une seule transaction.
+
+    Aucune opération ne peut désigner ce qu'une autre vient de créer : les identifiants d'un lot
+    sont ceux que le client détient déjà. Un chaînage exigerait des identifiants temporaires, donc
+    un protocole que rien ne réclame aujourd'hui.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Verrouillage optimiste, une fois pour tout le lot (spec §8, cas 3).
+    version: int | None = Field(default=None, ge=1)
+    operations: list[BatchOperation] = Field(min_length=1, max_length=MAX_BATCH_OPERATIONS)
+
+
+class BatchOperationResult(BaseModel):
+    """Résultat d'une opération, rendu au **même rang** que l'opération d'origine.
+
+    Les identifiants sont répétés hors de l'objet rendu : après une suppression il n'y a plus
+    d'objet, et c'est pourtant là que le client a le plus besoin de savoir ce qui a disparu.
+    """
+
+    op: str
+    status: Literal["created", "updated", "deleted"]
+    element_id: int | None = None
+    room_id: int | None = None
+    element: ElementRead | None = None
+    room: RoomRead | None = None
+
+
+class BatchResponse(BaseModel):
+    version: int
+    results: list[BatchOperationResult]
 
 
 ConflictCode = Literal["stale_version", "destructive_change"]

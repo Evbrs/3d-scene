@@ -1,6 +1,159 @@
 {
   "components": {
     "schemas": {
+      "BatchOperationResult": {
+        "description": "Résultat d'une opération, rendu au **même rang** que l'opération d'origine.\n\nLes identifiants sont répétés hors de l'objet rendu : après une suppression il n'y a plus\nd'objet, et c'est pourtant là que le client a le plus besoin de savoir ce qui a disparu.",
+        "properties": {
+          "element": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElementRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "element_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Element Id"
+          },
+          "op": {
+            "title": "Op",
+            "type": "string"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "status": {
+            "enum": [
+              "created",
+              "updated",
+              "deleted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "status"
+        ],
+        "title": "BatchOperationResult",
+        "type": "object"
+      },
+      "BatchRequest": {
+        "additionalProperties": false,
+        "description": "Un lot d'écritures du plan, appliqué dans une seule transaction.\n\nAucune opération ne peut désigner ce qu'une autre vient de créer : les identifiants d'un lot\nsont ceux que le client détient déjà. Un chaînage exigerait des identifiants temporaires, donc\nun protocole que rien ne réclame aujourd'hui.",
+        "properties": {
+          "operations": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "create_face_element": "#/components/schemas/CreateFaceElementOp",
+                  "create_room": "#/components/schemas/CreateRoomOp",
+                  "create_room_element": "#/components/schemas/CreateRoomElementOp",
+                  "delete_element": "#/components/schemas/DeleteElementOp",
+                  "delete_room": "#/components/schemas/DeleteRoomOp",
+                  "update_element": "#/components/schemas/UpdateElementOp",
+                  "update_room": "#/components/schemas/UpdateRoomOp"
+                },
+                "propertyName": "op"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/CreateFaceElementOp"
+                },
+                {
+                  "$ref": "#/components/schemas/CreateRoomElementOp"
+                },
+                {
+                  "$ref": "#/components/schemas/UpdateElementOp"
+                },
+                {
+                  "$ref": "#/components/schemas/DeleteElementOp"
+                },
+                {
+                  "$ref": "#/components/schemas/CreateRoomOp"
+                },
+                {
+                  "$ref": "#/components/schemas/UpdateRoomOp"
+                },
+                {
+                  "$ref": "#/components/schemas/DeleteRoomOp"
+                }
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Operations",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "title": "BatchRequest",
+        "type": "object"
+      },
+      "BatchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BatchOperationResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "results"
+        ],
+        "title": "BatchResponse",
+        "type": "object"
+      },
       "Body_login_api_auth_token_post": {
         "properties": {
           "client_id": {
@@ -162,6 +315,226 @@
         "title": "Covering",
         "type": "object"
       },
+      "CreateFaceElementOp": {
+        "additionalProperties": false,
+        "properties": {
+          "element": {
+            "$ref": "#/components/schemas/ElementBase"
+          },
+          "face_id": {
+            "minimum": 1.0,
+            "title": "Face Id",
+            "type": "integer"
+          },
+          "op": {
+            "const": "create_face_element",
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "face_id",
+          "element"
+        ],
+        "title": "CreateFaceElementOp",
+        "type": "object"
+      },
+      "CreateRoomElementOp": {
+        "additionalProperties": false,
+        "properties": {
+          "element": {
+            "$ref": "#/components/schemas/RoomElementBody"
+          },
+          "op": {
+            "const": "create_room_element",
+            "title": "Op",
+            "type": "string"
+          },
+          "room_id": {
+            "minimum": 1.0,
+            "title": "Room Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op",
+          "room_id",
+          "element"
+        ],
+        "title": "CreateRoomElementOp",
+        "type": "object"
+      },
+      "CreateRoomOp": {
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "create_room",
+            "title": "Op",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/components/schemas/RoomBase"
+          }
+        },
+        "required": [
+          "op",
+          "room"
+        ],
+        "title": "CreateRoomOp",
+        "type": "object"
+      },
+      "DeleteElementOp": {
+        "additionalProperties": false,
+        "properties": {
+          "element_id": {
+            "minimum": 1.0,
+            "title": "Element Id",
+            "type": "integer"
+          },
+          "op": {
+            "const": "delete_element",
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "element_id"
+        ],
+        "title": "DeleteElementOp",
+        "type": "object"
+      },
+      "DeleteRoomOp": {
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "const": "delete_room",
+            "title": "Op",
+            "type": "string"
+          },
+          "room_id": {
+            "minimum": 1.0,
+            "title": "Room Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op",
+          "room_id"
+        ],
+        "title": "DeleteRoomOp",
+        "type": "object"
+      },
+      "ElementBase": {
+        "additionalProperties": false,
+        "description": "Élément adossé à une face : les décalages sont mesurés dans le plan de cette face.",
+        "properties": {
+          "colors": {
+            "additionalProperties": {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            "maxProperties": 24,
+            "propertyNames": {
+              "maxLength": 50
+            },
+            "title": "Colors",
+            "type": "object"
+          },
+          "depth_cm": {
+            "default": 50.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Depth Cm",
+            "type": "number"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Height Cm",
+            "type": "number"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ElementKind",
+            "default": "furniture"
+          },
+          "rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Rotation Deg",
+            "type": "number"
+          },
+          "variant_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "maximum": 1000000.0,
+                  "minimum": -1000000.0,
+                  "type": "integer"
+                },
+                {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
+                  "type": "number"
+                },
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 32,
+            "propertyNames": {
+              "maxLength": 50
+            },
+            "title": "Variant Params",
+            "type": "object"
+          },
+          "width_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Width Cm",
+            "type": "number"
+          },
+          "x_offset_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "X Offset Cm",
+            "type": "number"
+          },
+          "y_offset_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Y Offset Cm",
+            "type": "number"
+          }
+        },
+        "title": "ElementBase",
+        "type": "object"
+      },
       "ElementCreate": {
         "additionalProperties": false,
         "properties": {
@@ -293,8 +666,200 @@
         "title": "ElementKind",
         "type": "string"
       },
+      "ElementPatch": {
+        "additionalProperties": false,
+        "description": "Modification d'un élément, **sans** verrouillage : la version est portée par le lot.\n\nLe changement d'ancrage est volontairement absent (spec §10, A4) : `face_id` et `room_id`\nn'y figurent pas. Passer d'un repère à l'autre change le sens des coordonnées, donc exige un\nplacement complet — c'est une suppression suivie d'une création, pas une modification.",
+        "properties": {
+          "colors": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "type": "string"
+                },
+                "maxProperties": 24,
+                "propertyNames": {
+                  "maxLength": 50
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Colors"
+          },
+          "depth_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depth Cm"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height Cm"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElementKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pos_x_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos X Cm"
+          },
+          "pos_y_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos Y Cm"
+          },
+          "rotation_deg": {
+            "anyOf": [
+              {
+                "maximum": 360.0,
+                "minimum": -360.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rotation Deg"
+          },
+          "variant_params": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "maximum": 1000000.0,
+                      "minimum": -1000000.0,
+                      "type": "integer"
+                    },
+                    {
+                      "maximum": 1000000000.0,
+                      "minimum": -1000000000.0,
+                      "type": "number"
+                    },
+                    {
+                      "maxLength": 100,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxProperties": 32,
+                "propertyNames": {
+                  "maxLength": 50
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Params"
+          },
+          "width_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width Cm"
+          },
+          "x_offset_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Offset Cm"
+          },
+          "y_offset_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y Offset Cm"
+          }
+        },
+        "title": "ElementPatch",
+        "type": "object"
+      },
       "ElementRead": {
         "additionalProperties": false,
+        "description": "Vue d'un élément, les deux ancrages exposés tels quels.\n\nLe discriminant est `face_id` : quand il est nul, l'élément est posé au sol de `room_id` et\nce sont `pos_x_cm` / `pos_y_cm` qui font foi. `x_offset_cm` / `y_offset_cm` gardent alors\nleur valeur par défaut et ne veulent rien dire — ne pas les lire.",
         "properties": {
           "colors": {
             "additionalProperties": {
@@ -316,8 +881,15 @@
             "type": "number"
           },
           "face_id": {
-            "title": "Face Id",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Id"
           },
           "furniture_type_id": {
             "anyOf": [
@@ -344,6 +916,39 @@
           "kind": {
             "$ref": "#/components/schemas/ElementKind",
             "default": "furniture"
+          },
+          "pos_x_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos X Cm"
+          },
+          "pos_y_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos Y Cm"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
           },
           "rotation_deg": {
             "default": 0.0,
@@ -408,7 +1013,10 @@
         },
         "required": [
           "id",
-          "face_id"
+          "face_id",
+          "room_id",
+          "pos_x_cm",
+          "pos_y_cm"
         ],
         "title": "ElementRead",
         "type": "object"
@@ -481,6 +1089,32 @@
                 "type": "null"
               }
             ]
+          },
+          "pos_x_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos X Cm"
+          },
+          "pos_y_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos Y Cm"
           },
           "rotation_deg": {
             "anyOf": [
@@ -3847,9 +4481,159 @@
         "title": "RegistrationAccepted",
         "type": "object"
       },
+      "RoomBase": {
+        "additionalProperties": false,
+        "properties": {
+          "background_offset_x_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Background Offset X Cm",
+            "type": "number"
+          },
+          "background_offset_y_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Background Offset Y Cm",
+            "type": "number"
+          },
+          "background_opacity": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Background Opacity",
+            "type": "number"
+          },
+          "background_rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Background Rotation Deg",
+            "type": "number"
+          },
+          "background_scale_cm_per_px": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Scale Cm Per Px"
+          },
+          "background_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Url"
+          },
+          "ceiling_height_cm": {
+            "default": 250.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Ceiling Height Cm",
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "polygon": {
+            "items": {
+              "items": {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "title": "Polygon",
+            "type": "array"
+          },
+          "wall_thickness_cm": {
+            "default": 10.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Wall Thickness Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RoomBase",
+        "type": "object"
+      },
       "RoomCreate": {
         "additionalProperties": false,
         "properties": {
+          "background_offset_x_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Background Offset X Cm",
+            "type": "number"
+          },
+          "background_offset_y_cm": {
+            "default": 0.0,
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Background Offset Y Cm",
+            "type": "number"
+          },
+          "background_opacity": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Background Opacity",
+            "type": "number"
+          },
+          "background_rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Background Rotation Deg",
+            "type": "number"
+          },
+          "background_scale_cm_per_px": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Scale Cm Per Px"
+          },
+          "background_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Url"
+          },
           "ceiling_height_cm": {
             "default": 250.0,
             "exclusiveMinimum": 0.0,
@@ -3903,8 +4687,433 @@
         "title": "RoomCreate",
         "type": "object"
       },
+      "RoomElementBody": {
+        "additionalProperties": false,
+        "description": "Meuble posé au sol, ancré à la pièce et non à une face (spec §10, amendement A4).\n\n`pos_x_cm` / `pos_y_cm` sont le **centre** de l'emprise, dans le repère du plan — celui de\n`Room.polygon`, celui que l'éditeur 2D manipule déjà. Ils sont obligatoires : un meuble libre\nsans position n'a pas d'endroit où être dessiné, et une valeur par défaut le poserait\nsilencieusement à l'origine du plan, souvent hors de la pièce.",
+        "properties": {
+          "colors": {
+            "additionalProperties": {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            "maxProperties": 24,
+            "propertyNames": {
+              "maxLength": 50
+            },
+            "title": "Colors",
+            "type": "object"
+          },
+          "depth_cm": {
+            "default": 50.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Depth Cm",
+            "type": "number"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Height Cm",
+            "type": "number"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ElementKind",
+            "default": "furniture"
+          },
+          "pos_x_cm": {
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Pos X Cm",
+            "type": "number"
+          },
+          "pos_y_cm": {
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Pos Y Cm",
+            "type": "number"
+          },
+          "rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Rotation Deg",
+            "type": "number"
+          },
+          "variant_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "maximum": 1000000.0,
+                  "minimum": -1000000.0,
+                  "type": "integer"
+                },
+                {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
+                  "type": "number"
+                },
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 32,
+            "propertyNames": {
+              "maxLength": 50
+            },
+            "title": "Variant Params",
+            "type": "object"
+          },
+          "width_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Width Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "pos_x_cm",
+          "pos_y_cm"
+        ],
+        "title": "RoomElementBody",
+        "type": "object"
+      },
+      "RoomElementCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "colors": {
+            "additionalProperties": {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            "maxProperties": 24,
+            "propertyNames": {
+              "maxLength": 50
+            },
+            "title": "Colors",
+            "type": "object"
+          },
+          "depth_cm": {
+            "default": 50.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Depth Cm",
+            "type": "number"
+          },
+          "furniture_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Type Id"
+          },
+          "height_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Height Cm",
+            "type": "number"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ElementKind",
+            "default": "furniture"
+          },
+          "pos_x_cm": {
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Pos X Cm",
+            "type": "number"
+          },
+          "pos_y_cm": {
+            "maximum": 100000.0,
+            "minimum": -100000.0,
+            "title": "Pos Y Cm",
+            "type": "number"
+          },
+          "rotation_deg": {
+            "default": 0.0,
+            "maximum": 360.0,
+            "minimum": -360.0,
+            "title": "Rotation Deg",
+            "type": "number"
+          },
+          "variant_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "maximum": 1000000.0,
+                  "minimum": -1000000.0,
+                  "type": "integer"
+                },
+                {
+                  "maximum": 1000000000.0,
+                  "minimum": -1000000000.0,
+                  "type": "number"
+                },
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 32,
+            "propertyNames": {
+              "maxLength": 50
+            },
+            "title": "Variant Params",
+            "type": "object"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "width_cm": {
+            "default": 100.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Width Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "pos_x_cm",
+          "pos_y_cm"
+        ],
+        "title": "RoomElementCreate",
+        "type": "object"
+      },
+      "RoomPatch": {
+        "additionalProperties": false,
+        "description": "Modification d'une pièce, **sans** verrouillage : la version est portée par le lot.",
+        "properties": {
+          "background_offset_x_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Offset X Cm"
+          },
+          "background_offset_y_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Offset Y Cm"
+          },
+          "background_opacity": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Opacity"
+          },
+          "background_rotation_deg": {
+            "anyOf": [
+              {
+                "maximum": 360.0,
+                "minimum": -360.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Rotation Deg"
+          },
+          "background_scale_cm_per_px": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Scale Cm Per Px"
+          },
+          "background_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Url"
+          },
+          "ceiling_height_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ceiling Height Cm"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "polygon": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "maximum": 100000.0,
+                    "minimum": -100000.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polygon"
+          },
+          "wall_thickness_cm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Thickness Cm"
+          }
+        },
+        "title": "RoomPatch",
+        "type": "object"
+      },
       "RoomRead": {
         "properties": {
+          "background_offset_x_cm": {
+            "default": 0.0,
+            "title": "Background Offset X Cm",
+            "type": "number"
+          },
+          "background_offset_y_cm": {
+            "default": 0.0,
+            "title": "Background Offset Y Cm",
+            "type": "number"
+          },
+          "background_opacity": {
+            "default": 1.0,
+            "title": "Background Opacity",
+            "type": "number"
+          },
+          "background_rotation_deg": {
+            "default": 0.0,
+            "title": "Background Rotation Deg",
+            "type": "number"
+          },
+          "background_scale_cm_per_px": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Scale Cm Per Px"
+          },
+          "background_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Url"
+          },
           "ceiling_height_cm": {
             "title": "Ceiling Height Cm",
             "type": "number"
@@ -3914,6 +5123,13 @@
               "$ref": "#/components/schemas/FaceRead"
             },
             "title": "Faces",
+            "type": "array"
+          },
+          "free_elements": {
+            "items": {
+              "$ref": "#/components/schemas/ElementRead"
+            },
+            "title": "Free Elements",
             "type": "array"
           },
           "id": {
@@ -3957,6 +5173,83 @@
       "RoomUpdate": {
         "additionalProperties": false,
         "properties": {
+          "background_offset_x_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Offset X Cm"
+          },
+          "background_offset_y_cm": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": -100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Offset Y Cm"
+          },
+          "background_opacity": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Opacity"
+          },
+          "background_rotation_deg": {
+            "anyOf": [
+              {
+                "maximum": 360.0,
+                "minimum": -360.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Rotation Deg"
+          },
+          "background_scale_cm_per_px": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Scale Cm Per Px"
+          },
+          "background_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Url"
+          },
           "ceiling_height_cm": {
             "anyOf": [
               {
@@ -4252,6 +5545,56 @@
           "access_token"
         ],
         "title": "TokenPair",
+        "type": "object"
+      },
+      "UpdateElementOp": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "$ref": "#/components/schemas/ElementPatch"
+          },
+          "element_id": {
+            "minimum": 1.0,
+            "title": "Element Id",
+            "type": "integer"
+          },
+          "op": {
+            "const": "update_element",
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "element_id",
+          "changes"
+        ],
+        "title": "UpdateElementOp",
+        "type": "object"
+      },
+      "UpdateRoomOp": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "$ref": "#/components/schemas/RoomPatch"
+          },
+          "op": {
+            "const": "update_room",
+            "title": "Op",
+            "type": "string"
+          },
+          "room_id": {
+            "minimum": 1.0,
+            "title": "Room Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op",
+          "room_id",
+          "changes"
+        ],
+        "title": "UpdateRoomOp",
         "type": "object"
       },
       "UserCreate": {
@@ -6433,6 +7776,74 @@
         ]
       }
     },
+    "/api/projects/{project_id}/batch": {
+      "post": {
+        "description": "Applique un lot d'écritures du plan en une transaction (spec §10, amendement A6).\n\nLe verrouillage optimiste sérialise les écritures : chacune incrémente `Project.version` et\npérime celle que le client détient. Déplacer quinze meubles imposait donc quinze allers-retours\nstrictement séquentiels, ce qui rend un glisser-déposer inutilisable. Ici, **une** version en\ntête, **une** incrémentation, **un** commit.\n\nTout ou rien : la première opération refusée annule le lot entier et nomme son rang. Un lot\nà moitié appliqué laisserait le client dans un état qu'il ne peut pas reconstituer — c'est\nexactement la perte silencieuse que la spec §8 écarte.\n\nLes identifiants du corps sont **tous** revérifiés contre le projet de l'URL : l'appartenance\nvérifiée une fois ne dit rien de ce que le client a mis dans sa charge utile.\n\nLes opérations sont appliquées **dans l'ordre d'envoi**, et aucune ne peut désigner ce qu'une\nautre vient de créer. Désigner ce qu'une opération précédente a supprimé — modifier un élément\nd'une pièce effacée plus haut dans le même lot — rend un 409 : la ligne visée n'existe plus, et\nc'est la base qui le constate. Ordonnez le lot du plus fin au plus large.",
+        "operationId": "apply_batch_api_projects__project_id__batch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Apply Batch",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
     "/api/projects/{project_id}/costings": {
       "get": {
         "description": "Rattachements explicites du projet. Ils sont l'exception, pas la règle.",
@@ -7708,6 +9119,74 @@
           }
         ],
         "summary": "Update Room",
+        "tags": [
+          "plan"
+        ]
+      }
+    },
+    "/api/rooms/{room_id}/elements": {
+      "post": {
+        "description": "Pose un meuble au sol de la pièce, adossé à aucune face (spec §10, amendement A4).\n\nC'est la route qui rend un lit, une table ou un îlot possibles. Elle est distincte de\n`POST /faces/{face_id}/elements` et non un mode de celle-ci : le placement n'est pas exprimé\ndans le même repère, et une route qui accepterait les deux ne saurait pas lequel valider.",
+        "operationId": "create_room_element_api_rooms__room_id__elements_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "room_id",
+            "required": true,
+            "schema": {
+              "title": "Room Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomElementCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictDetail"
+                }
+              }
+            },
+            "description": "Le plan a été modifié entre-temps (verrouillage optimiste, spec §8)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Room Element",
         "tags": [
           "plan"
         ]

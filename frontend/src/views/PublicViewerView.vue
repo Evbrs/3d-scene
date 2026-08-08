@@ -7,14 +7,19 @@
  * propriétaire du projet.
  *
  * C'est la vitrine du produit, et son visiteur est le client de l'artisan : il l'ouvre depuis un
- * SMS, sur un téléphone. La mise en page en tient compte.
+ * SMS, sur un téléphone. La mise en page en tient compte, et le rendu doit y être aussi fidèle
+ * que dans l'éditeur — c'est sur cette image que le devis se signe.
  */
+import { OrbitControls } from '@tresjs/cientos'
 import { TresCanvas } from '@tresjs/core'
+import { ACESFilmicToneMapping, type Group, Vector3 } from 'three'
 import { computed, onMounted, ref, shallowRef } from 'vue'
 
 import * as api from '@/api/client'
 import type { CameraPreset, SceneGraph } from '@/api/types'
 import SceneRenderer from '@/viewer/SceneRenderer.vue'
+import ViewerStage from '@/viewer/ViewerStage.vue'
+import { boundsOf } from '@/viewer/build'
 import { vec3 } from '@/viewer/vectors'
 import { type FaceVisibility, fromViewState, showEverything, type ViewState } from '@/viewer/visibility'
 
@@ -28,10 +33,24 @@ const roomIndex = ref(0)
 const error = ref<string | null>(null)
 const loading = ref(true)
 
+const focus = shallowRef<[number, number, number]>([0, 0, 0])
+const radiusCm = shallowRef(400)
+
 const room = computed(() => scene.value?.rooms[roomIndex.value] ?? null)
+const rooms = computed(() => (room.value ? [room.value] : []))
 const camera = computed<CameraPreset | null>(
   () => room.value?.cameras.find((preset) => preset.name === cameraName.value) ?? null,
 )
+const isOrbit = computed(() => cameraName.value === 'orbite')
+
+/** L'emprise réelle dimensionne la lumière et sa carte d'ombre : rien n'est supposé du plan. */
+function onBuilt(group: Group): void {
+  const box = boundsOf(group)
+  if (box.isEmpty()) return
+  const centre = box.getCenter(new Vector3())
+  focus.value = [centre.x, centre.y, centre.z]
+  radiusCm.value = Math.max(100, box.getSize(new Vector3()).length() / 2)
+}
 
 onMounted(async () => {
   try {
@@ -80,6 +99,9 @@ onMounted(async () => {
         clear-color="#f0f2f5"
         :preserve-drawing-buffer="true"
         :window-size="false"
+        :shadows="true"
+        :tone-mapping="ACESFilmicToneMapping"
+        :tone-mapping-exposure="1"
       >
         <TresPerspectiveCamera
           v-if="camera.kind === 'perspective'"
@@ -103,14 +125,24 @@ onMounted(async () => {
           :near="0.1"
           :far="20000"
         />
-        <TresAmbientLight :intensity="1.1" />
-        <TresDirectionalLight
-          :position="vec3([400, 800, 600])"
-          :intensity="1.4"
+
+        <OrbitControls
+          v-if="isOrbit"
+          :target="camera.target"
+          :enable-damping="true"
         />
+
+        <ViewerStage
+          :focus="focus"
+          :radius-cm="radiusCm"
+          :shadows="true"
+        />
+
         <SceneRenderer
-          :room="room"
+          :rooms="rooms"
           :visibility="visibility"
+          :shadows="true"
+          @built="onBuilt"
         />
       </TresCanvas>
     </div>

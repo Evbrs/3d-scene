@@ -39,9 +39,12 @@ function element(kind: string, overrides: Partial<PlanElement> = {}): PlanElemen
   return {
     id: 1,
     face_id: 65,
+    room_id: null,
     kind: kind as PlanElement['kind'],
     x_offset_cm: 100,
     y_offset_cm: 0,
+    pos_x_cm: null,
+    pos_y_cm: null,
     width_cm: 90,
     height_cm: 200,
     depth_cm: 40,

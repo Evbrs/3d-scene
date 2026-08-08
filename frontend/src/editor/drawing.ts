@@ -8,6 +8,7 @@
 
 import type { Face, PlanElement } from '@/api/types'
 import { type Point, type Viewport, planToScreen, segmentLength } from '@/editor/geometry'
+import { freeFootprint } from '@/editor/placement'
 
 export interface WallGeometry {
   face: Face
@@ -122,6 +123,14 @@ export interface OpeningSymbol {
   /** Arc de débattement d'une porte battante, en degrés. */
   arc: { x: number; y: number; radius: number; from: number; to: number } | null
   labelAt: Point
+  /**
+   * Milieu de la trémie, sur l'axe du mur.
+   *
+   * Distinct de `labelAt`, qui est déporté à l'extérieur pour rester lisible : encadrer une
+   * ouverture au rectangle de sélection doit répondre à l'endroit où elle est percée, pas à
+   * l'endroit où son étiquette a été poussée.
+   */
+  center: Point
 }
 
 const OPENING_KINDS = new Set<string>(['door_hinged', 'door_sliding', 'window'])
@@ -214,6 +223,7 @@ export function openingSymbol(
     strokes,
     arc,
     labelAt: pointOnWall(wall, (start + end) / 2, half + thicknessCm * 1.2),
+    center: pointOnWall(wall, (start + end) / 2, 0),
   }
 }
 
@@ -263,6 +273,33 @@ export function furnitureFootprint(
   }
 }
 
+/**
+ * Emprise au sol d'un meuble **libre**, posé dans le repère de la pièce (spec §10, A4).
+ *
+ * Rien de commun avec `furnitureFootprint` : il n'y a pas de mur porteur, la position est le
+ * centre de l'emprise et la rotation est libre autour de la verticale. Les quatre coins viennent
+ * de `placement.footprintCorners`, qui applique **exactement** la convention du backend — le plan
+ * et la 3D doivent montrer le même meuble au même endroit.
+ */
+export function freeFurnitureFootprint(
+  element: PlanElement,
+  viewport: Viewport,
+  label: string,
+): FurnitureFootprint | null {
+  const footprint = freeFootprint(element)
+  if (!footprint) return null
+
+  return {
+    element,
+    outline: footprint.corners.flatMap((corner) => {
+      const screen = planToScreen(corner, viewport)
+      return [screen.x, screen.y]
+    }),
+    center: footprint.center,
+    label,
+  }
+}
+
 /** Cote déportée à l'extérieur du mur, avec ses lignes d'attache. */
 export function dimensionLine(
   wall: WallGeometry,
@@ -304,4 +341,29 @@ export function gridLines(
   for (let y = firstY; y < heightPx; y += stepPx) lines.push([0, y, widthPx, y])
 
   return lines
+}
+
+/**
+ * Grille à deux niveaux : le pas de saisie, et le mètre.
+ *
+ * Un seul niveau oblige à choisir entre « je vois où j'accroche » (pas fin, illisible dès qu'on
+ * dézoome) et « je vois l'échelle » (pas large, magnétisme aveugle). Deux niveaux tranchent : le
+ * trait fin disparaît quand il devient un aplat, le trait fort reste et donne le mètre — la seule
+ * référence dont on a besoin pour juger d'un coup d'œil qu'une pièce fait bien 4 m de long.
+ */
+export const COARSE_GRID_CM = 100
+
+export function twoLevelGrid(
+  widthPx: number,
+  heightPx: number,
+  viewport: Viewport,
+  stepCm: number,
+): { fine: number[][]; coarse: number[][] } {
+  const fine = gridLines(widthPx, heightPx, viewport, stepCm)
+  // Inutile de superposer deux fois le même quadrillage quand le pas de saisie est déjà le mètre.
+  const coarse =
+    stepCm >= COARSE_GRID_CM
+      ? []
+      : gridLines(widthPx, heightPx, viewport, COARSE_GRID_CM)
+  return { fine, coarse }
 }

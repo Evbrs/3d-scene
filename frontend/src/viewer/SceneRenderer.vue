@@ -3,160 +3,106 @@
  * Traduction du scene graph en objets Three.js (ticket P7).
  *
  * Ce composant ne calcule **aucune** géométrie métier : il consomme le JSON produit par le
- * backend (`docs/spec-complete.md` §3.1). Les seules opérations ici sont la construction des
- * `THREE.Shape` à partir des contours reçus et l'application des états de visibilité.
+ * backend (`docs/spec-complete.md` §3.1). L'assemblage lui-même vit dans `viewer/build.ts`, où il
+ * est testable sans WebGL ; il ne reste ici que le cycle de vie.
  *
- * La scène est organisée en groupes par face, chacun taggé avec son étiquette dans `userData`
- * (§3.4) : c'est ce qui rend l'isolement et la transparence possibles sans reconstruire la
- * géométrie.
+ * Ce cycle de vie est le point important. Les géométries naissaient dans des `computed`, donc
+ * hors de l'arbre TresJS, que son nettoyage ne couvre pas : chaque rechargement de scène
+ * abandonnait un jeu complet de tampons sur la carte graphique. Un `shallowRef` piloté par un
+ * `watch` qui libère l'ancien lot, plus un `onUnmounted`, referment la question.
  */
-import * as THREE from 'three'
-import { computed } from 'vue'
+import type { Group } from 'three'
+import { nextTick, onUnmounted, shallowRef, watch } from 'vue'
 
-import type {
-  FurnitureNode,
-  HorizontalNode,
-  JoineryNode,
-  SceneNode,
-  SceneRoom,
-  WallNode,
-} from '@/api/types'
+import type { SceneRoom } from '@/api/types'
+import { applyVisibility, buildScene, needsCsg } from '@/viewer/build'
+import { ensureCsgReady, isCsgReady, releaseCarvedCache, retainCarvedCache } from '@/viewer/csg'
+import { ResourcePool } from '@/viewer/resources'
 import type { FaceVisibility } from '@/viewer/visibility'
-import { buildShape, primitiveGeometry } from '@/viewer/geometry'
-import { vec3 } from '@/viewer/vectors'
-import { isVisible, materialFor, opacityFor } from '@/viewer/visibility'
 
-const props = defineProps<{
-  room: SceneRoom
-  visibility: Record<string, FaceVisibility>
-}>()
-
-const doubleSide = THREE.DoubleSide
-
-function isWall(node: SceneNode): node is WallNode {
-  return node.kind === 'wall'
-}
-
-function isHorizontal(node: SceneNode): node is HorizontalNode {
-  return node.kind === 'floor' || node.kind === 'ceiling'
-}
-
-// Menuiseries et meubles se rendent à l'identique : une recette développée en primitives, posée
-// puis tournée. Seule leur provenance diffère — d'où un seul groupe de rendu, et non deux blocs
-// jumeaux. Les ignorer, comme c'était le cas, ne plantait pas : la porte manquait simplement.
-function isPlacedObject(node: SceneNode): node is FurnitureNode | JoineryNode {
-  return node.kind === 'furniture' || node.kind === 'joinery'
-}
-
-const walls = computed(() =>
-  props.room.nodes.filter(isWall).map((node) => ({
-    node,
-    geometry: (() => {
-      const geometry = new THREE.ExtrudeGeometry(buildShape(node.outline, node.holes), {
-        depth: node.extrude_depth_cm,
-        bevelEnabled: false,
-      })
-      geometry.translate(0, 0, node.extrude_offset_cm)
-      return geometry
-    })(),
-  })),
+const props = withDefaults(
+  defineProps<{
+    rooms: readonly SceneRoom[]
+    visibility: Record<string, FaceVisibility>
+    /** Préfixe les clés de face par la pièce : nécessaire dès qu'on montre le logement entier. */
+    roomScoped?: boolean
+    shadows?: boolean
+  }>(),
+  { roomScoped: false, shadows: true },
 )
 
-const horizontals = computed(() =>
-  props.room.nodes.filter(isHorizontal).map((node) => ({
-    node,
-    geometry: new THREE.ShapeGeometry(buildShape(node.outline, node.holes)),
-  })),
+const emit = defineEmits<{ built: [Group] }>()
+
+let pool = new ResourcePool()
+const root = shallowRef<Group | null>(null)
+
+/**
+ * Numéro de la construction en cours.
+ *
+ * Le chargement du CSG est asynchrone : sans ce compteur, une scène demandée pendant l'attente
+ * serait écrasée par la précédente au retour de la promesse.
+ */
+let generation = 0
+
+retainCarvedCache()
+
+async function rebuild(): Promise<void> {
+  const mine = ++generation
+
+  // La librairie booléenne n'est chargée que si la scène en a l'usage, et **avant** la
+  // construction : la charger après ferait passer les meubles de pleins à creusés sous les yeux
+  // de l'utilisateur.
+  if (needsCsg(props.rooms) && !isCsgReady()) {
+    await ensureCsgReady()
+    if (mine !== generation) return
+  }
+
+  const stale = pool
+  pool = new ResourcePool()
+  const built = buildScene(props.rooms, {
+    pool,
+    roomScoped: props.roomScoped,
+    shadows: props.shadows,
+  })
+  applyVisibility(built, props.visibility)
+  root.value = built
+  emit('built', built)
+
+  // L'ancienne scène reste montée jusqu'au prochain flush de Vue. Libérer ses ressources tout de
+  // suite ferait dessiner une trame avec des tampons déjà rendus au pilote — écran noir et
+  // erreurs WebGL. On attend donc que le remplacement soit effectif.
+  await nextTick()
+  stale.dispose()
+}
+
+// La reconstruction ne dépend que de ce qui change la géométrie. La visibilité, elle, n'en
+// change aucune : elle bascule des matériaux déjà construits (voir `applyVisibility`).
+watch(
+  () => [props.rooms, props.roomScoped, props.shadows],
+  () => void rebuild(),
+  { immediate: true },
 )
 
-const furniture = computed(() =>
-  props.room.nodes.filter(isPlacedObject).map((node) => ({
-    node,
-    // Les primitives soustraites sont ignorées tant que le CSG n'est pas activé : les afficher
-    // en plein donnerait un volume faux (une baignoire pleine au lieu de creuse).
-    parts: node.primitives
-      .filter((primitive) => primitive.operation === 'add')
-      .map((primitive) => ({
-        primitive,
-        geometry: primitiveGeometry(primitive.size, primitive.type, primitive.axis),
-      })),
-  })),
+watch(
+  () => props.visibility,
+  (visibility) => {
+    if (root.value) applyVisibility(root.value, visibility)
+  },
 )
+
+onUnmounted(() => {
+  // Invalide une construction encore en vol : elle ne doit pas ressusciter un pool libéré.
+  generation += 1
+  pool.dispose()
+  // Les géométries creusées survivent volontairement aux reconstructions de scène (l'évaluation
+  // booléenne est chère) ; plus aucune scène montée, plus de raison de les garder.
+  releaseCarvedCache()
+})
 </script>
 
 <template>
-  <TresGroup name="piece">
-    <TresGroup
-      v-for="wall in walls"
-      :key="`mur-${wall.node.face_id}`"
-      :name="`face-${wall.node.face_label}`"
-      :visible="isVisible(visibility[wall.node.face_label])"
-      :user-data="{ faceLabel: wall.node.face_label }"
-    >
-      <!-- `extrude_offset_cm` recule l'extrusion d'une demi-épaisseur : sans lui le mur est
-           posé d'un seul côté de son axe, et les angles de la pièce ne se rejoignent pas. -->
-      <TresMesh
-        :position="vec3(wall.node.origin)"
-        :rotation-y="wall.node.rotation_y"
-        :geometry="wall.geometry"
-      >
-        <TresMeshStandardMaterial
-          :color="materialFor(wall.node.covering.color, '#e4e4e4')"
-          :transparent="opacityFor(visibility[wall.node.face_label]) < 1"
-          :opacity="opacityFor(visibility[wall.node.face_label])"
-          :side="doubleSide"
-        />
-      </TresMesh>
-    </TresGroup>
-
-    <TresGroup
-      v-for="surface in horizontals"
-      :key="`plan-${surface.node.face_id}`"
-      :name="`face-${surface.node.face_label}`"
-      :visible="isVisible(visibility[surface.node.face_label])"
-      :user-data="{ faceLabel: surface.node.face_label }"
-    >
-      <TresMesh
-        :position="vec3(surface.node.origin)"
-        :rotation-x="surface.node.rotation_x"
-        :geometry="surface.geometry"
-      >
-        <TresMeshStandardMaterial
-          :color="
-            materialFor(
-              surface.node.covering.color,
-              surface.node.kind === 'floor' ? '#b09371' : '#f2f2f2',
-            )
-          "
-          :transparent="opacityFor(visibility[surface.node.face_label]) < 1"
-          :opacity="opacityFor(visibility[surface.node.face_label])"
-          :side="doubleSide"
-        />
-      </TresMesh>
-    </TresGroup>
-
-    <!-- Le mobilier suit la visibilité de la face qui le porte. -->
-    <TresGroup
-      v-for="item in furniture"
-      :key="`meuble-${item.node.element_id}`"
-      :name="`mobilier-${item.node.element_id}`"
-      :position="vec3(item.node.position)"
-      :rotation-y="item.node.rotation_y"
-      :visible="isVisible(visibility[item.node.face_label])"
-      :user-data="{ faceLabel: item.node.face_label, requiresCsg: item.node.requires_csg }"
-    >
-      <TresMesh
-        v-for="(part, index) in item.parts"
-        :key="index"
-        :position="vec3(part.primitive.offset)"
-        :geometry="part.geometry"
-      >
-        <TresMeshStandardMaterial
-          :color="materialFor(part.primitive.color, '#9aa0a6')"
-          :transparent="opacityFor(visibility[item.node.face_label]) < 1"
-          :opacity="opacityFor(visibility[item.node.face_label])"
-        />
-      </TresMesh>
-    </TresGroup>
-  </TresGroup>
+  <primitive
+    v-if="root"
+    :object="root"
+  />
 </template>

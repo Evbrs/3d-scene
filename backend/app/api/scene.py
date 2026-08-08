@@ -28,6 +28,10 @@ def _element_to_dict(element: Element) -> dict[str, Any]:
         "kind": element.kind.value,
         "x_offset_cm": element.x_offset_cm,
         "y_offset_cm": element.y_offset_cm,
+        # Centre de l'emprise d'un meuble libre, dans le repère du plan (spec §10, A4). Nuls pour
+        # tout ce qui est adossé à une face, où ce sont les décalages ci-dessus qui font foi.
+        "pos_x_cm": element.pos_x_cm,
+        "pos_y_cm": element.pos_y_cm,
         "width_cm": element.width_cm,
         "height_cm": element.height_cm,
         "depth_cm": element.depth_cm,
@@ -74,6 +78,12 @@ def project_to_plain_dict(project: Project) -> dict[str, Any]:
                 "faces": [
                     _face_to_dict(face) for face in sorted(room.faces, key=lambda f: f.id or 0)
                 ],
+                # Mobilier libre : ancré à la pièce, donc absent de toutes les faces (spec §10,
+                # amendement A4). Sans cette clé, un lit ou un îlot n'atteint jamais la 3D.
+                "elements": [
+                    _element_to_dict(element)
+                    for element in sorted(room.free_elements, key=lambda e: e.id or 0)
+                ],
             }
             for room in sorted(project.rooms, key=lambda r: r.id or 0)
         ],
@@ -91,7 +101,8 @@ async def load_scene_inputs(
             .options(
                 selectinload(Project.rooms)  # type: ignore[arg-type]
                 .selectinload(Room.faces)  # type: ignore[arg-type]
-                .selectinload(Face.elements)  # type: ignore[arg-type]
+                .selectinload(Face.elements),  # type: ignore[arg-type]
+                selectinload(Project.rooms).selectinload(Room.free_elements),  # type: ignore[arg-type]
             )
         )
     ).scalar_one_or_none()
@@ -104,8 +115,10 @@ async def load_scene_inputs(
     referenced = {
         element.furniture_type_id
         for room in project.rooms
-        for face in room.faces
-        for element in face.elements
+        for element in [
+            *(item for face in room.faces for item in face.elements),
+            *room.free_elements,
+        ]
         if element.furniture_type_id is not None
     }
 

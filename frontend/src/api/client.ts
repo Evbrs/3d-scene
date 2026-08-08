@@ -313,6 +313,18 @@ export interface RoomPayload {
   polygon?: number[][]
   wall_thickness_cm?: number
   ceiling_height_cm?: number
+  /**
+   * Fond de plan (spec §10, A5). `background_url` n'accepte qu'un chemin du site commençant par
+   * un seul `/` ou une URL `https://` : le serveur refuse tout le reste en 422, et
+   * `editor/calibration.ts` applique la même règle avant l'envoi pour ne pas faire un
+   * aller-retour rien que pour apprendre qu'un `data:` est refusé.
+   */
+  background_url?: string | null
+  background_scale_cm_per_px?: number | null
+  background_offset_x_cm?: number
+  background_offset_y_cm?: number
+  background_rotation_deg?: number
+  background_opacity?: number
   version?: number
   force?: boolean
 }
@@ -351,10 +363,9 @@ export function updateFaceCovering(
   })
 }
 
-export interface ElementPayload {
-  kind: string
-  x_offset_cm?: number
-  y_offset_cm?: number
+/** Ce qu'un élément **est**, sans dire où il est posé : commun aux deux ancrages (spec §10, A4). */
+export interface ElementShape {
+  kind?: string
   width_cm?: number
   height_cm?: number
   depth_cm?: number
@@ -362,6 +373,26 @@ export interface ElementPayload {
   furniture_type_id?: number | null
   colors?: Record<string, string>
   variant_params?: Record<string, unknown>
+}
+
+/** Élément adossé à une face : les décalages sont mesurés dans le plan de cette face. */
+export interface ElementPayload extends ElementShape {
+  kind: string
+  x_offset_cm?: number
+  y_offset_cm?: number
+  version?: number
+}
+
+/**
+ * Meuble posé au sol de la pièce.
+ *
+ * `pos_x_cm` / `pos_y_cm` sont obligatoires et désignent le **centre** de l'emprise dans le
+ * repère du plan. Les décalages de face y sont refusés par le serveur (`extra=forbid`) : ce ne
+ * sont pas les mêmes coordonnées, et les accepter en silence poserait le meuble ailleurs.
+ */
+export interface RoomElementPayload extends ElementShape {
+  pos_x_cm: number
+  pos_y_cm: number
   version?: number
 }
 
@@ -372,9 +403,27 @@ export function createElement(faceId: number, payload: ElementPayload): Promise<
   })
 }
 
+/** Pose un meuble libre au sol d'une pièce (spec §10, A4). */
+export function createRoomElement(
+  roomId: number,
+  payload: RoomElementPayload,
+): Promise<PlanElement> {
+  return request<PlanElement>(`/api/rooms/${roomId}/elements`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * Modification d'un élément.
+ *
+ * `pos_x_cm` / `pos_y_cm` ne valent que pour un meuble libre, `x_offset_cm` / `y_offset_cm` que
+ * pour un élément adossé : mélanger les deux rend un 422. `face_id` et `room_id` ne sont pas
+ * modifiables — changer d'ancrage, c'est supprimer puis recréer (spec §10, A4).
+ */
 export function updateElement(
   elementId: number,
-  payload: Partial<ElementPayload>,
+  payload: Partial<ElementPayload & RoomElementPayload>,
 ): Promise<PlanElement> {
   return request<PlanElement>(`/api/elements/${elementId}`, {
     method: 'PATCH',
@@ -384,6 +433,76 @@ export function updateElement(
 
 export function deleteElement(elementId: number): Promise<void> {
   return request<void>(`/api/elements/${elementId}`, { method: 'DELETE' })
+}
+
+// --- Écriture en lot (spec §10, amendement A6) --------------------------------------------------
+
+/**
+ * Borne du serveur, répétée ici pour découper les gestes qui la dépassent.
+ *
+ * Sélectionner 150 meubles et les déplacer d'un coup est un geste banal ; le serveur refuse le
+ * lot entier au-delà de 100 opérations. `editor/operations.ts` découpe donc en paquets successifs
+ * plutôt que de laisser l'utilisateur découvrir la limite par un 422.
+ */
+export const MAX_BATCH_OPERATIONS = 100
+
+/**
+ * Aucune opération ne porte de `version` : c'est le lot qui la porte, une fois.
+ *
+ * Ce n'est pas un détail de style. Les corps d'opération sont validés par des modèles Pydantic en
+ * `extra="forbid"` : un `version` oublié dans le corps d'un élément ne serait pas ignoré, il
+ * ferait refuser le lot entier en 422. Le retirer ici fait porter cette règle au compilateur
+ * plutôt qu'à la vigilance de l'appelant.
+ */
+type WithoutVersion<T> = Omit<T, 'version'>
+
+export type BatchOperation =
+  | { op: 'create_face_element'; face_id: number; element: WithoutVersion<ElementPayload> }
+  | { op: 'create_room_element'; room_id: number; element: WithoutVersion<RoomElementPayload> }
+  | {
+      op: 'update_element'
+      element_id: number
+      changes: Partial<WithoutVersion<ElementPayload & RoomElementPayload>>
+    }
+  | { op: 'delete_element'; element_id: number }
+  // `force` non plus : il confirme la suppression de murs portant des éléments, ce qu'une
+  // création de pièce ne fait jamais. `RoomBase` le refuse, `RoomPatch` l'accepte.
+  | { op: 'create_room'; room: WithoutVersion<Omit<RoomPayload, 'force'>> }
+  | { op: 'update_room'; room_id: number; changes: Partial<WithoutVersion<RoomPayload>> }
+  | { op: 'delete_room'; room_id: number }
+
+export interface BatchOperationResult {
+  op: string
+  status: 'created' | 'updated' | 'deleted'
+  element_id: number | null
+  room_id: number | null
+  element: PlanElement | null
+  room: Room | null
+}
+
+export interface BatchResponse {
+  /** Nouvelle version du projet : **une seule** incrémentation pour tout le lot. */
+  version: number
+  /** Même longueur et même ordre que les opérations envoyées. */
+  results: BatchOperationResult[]
+}
+
+/**
+ * Applique un lot d'écritures en une transaction.
+ *
+ * Tout ou rien : une opération refusée annule le lot, nomme son rang (base 1) et n'écrit rien.
+ * C'est ce qui rend un glisser-déposer de quinze meubles possible — quinze appels unitaires
+ * seraient strictement sériels, chacun invalidant la version que le client détient.
+ */
+export function applyBatch(
+  projectId: number,
+  operations: BatchOperation[],
+  version?: number,
+): Promise<BatchResponse> {
+  return request<BatchResponse>(`/api/projects/${projectId}/batch`, {
+    method: 'POST',
+    body: JSON.stringify({ version, operations }),
+  })
 }
 
 // --- Catalogue et scène ---------------------------------------------------------------------------

@@ -46,7 +46,10 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
                 .options(
                     selectinload(Project.rooms)  # type: ignore[arg-type]
                     .selectinload(Room.faces)  # type: ignore[arg-type]
-                    .selectinload(Face.elements)  # type: ignore[arg-type]
+                    .selectinload(Face.elements),  # type: ignore[arg-type]
+                    # Mobilier libre (spec §10, amendement A4) : il n'est sous aucune face, et
+                    # `project_to_plain_dict` le lit désormais.
+                    selectinload(Project.rooms).selectinload(Room.free_elements),  # type: ignore[arg-type]
                 )
             )
         ).scalar_one_or_none()

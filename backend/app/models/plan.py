@@ -47,6 +47,10 @@ def _cascade(order_by: str) -> dict[str, Any]:
 # passer par Pydantic, et SQLModel désactive la validation sur les modèles `table=True`.
 MAX_CENTIMETERS = 10_000
 MAX_FURNITURE_CENTIMETERS = 1_000
+# Étendue du plan lui-même : `app/schemas/plan.py::Coordinate` accepte un sommet entre -100 000 et
+# +100 000 cm, soit un kilomètre de part et d'autre de l'origine. Les positions du mobilier libre
+# vivent dans ce même repère et sont donc bornées à l'identique.
+MAX_PLAN_COORDINATE = 100_000
 
 
 class Project(TimestampedModel, table=True):
@@ -106,6 +110,30 @@ class Room(TimestampedModel, table=True):
         # (`min_length=1`). Une contrainte plus stricte que l'API transformerait une requête
         # aujourd'hui acceptée en erreur 500.
         CheckConstraint("length(name) > 0", name="ck_room_name_not_empty"),
+        # --- Fond de plan (spec §10, amendement A5) ---
+        # `NULL` veut dire « image posée, pas encore calibrée ». Une valeur par défaut inventée
+        # serait indiscernable d'un calibrage réel, et l'artisan dessinerait un logement faux
+        # sans en être averti.
+        CheckConstraint(
+            "background_scale_cm_per_px IS NULL OR (background_scale_cm_per_px > 0 "
+            f"AND background_scale_cm_per_px <= {MAX_CENTIMETERS})",
+            name="ck_room_background_scale_bounded",
+        ),
+        CheckConstraint(
+            "background_opacity >= 0 AND background_opacity <= 1",
+            name="ck_room_background_opacity_bounded",
+        ),
+        CheckConstraint(
+            "background_rotation_deg >= -360 AND background_rotation_deg <= 360",
+            name="ck_room_background_rotation_deg_bounded",
+        ),
+        CheckConstraint(
+            f"background_offset_x_cm >= -{MAX_PLAN_COORDINATE} "
+            f"AND background_offset_x_cm <= {MAX_PLAN_COORDINATE} "
+            f"AND background_offset_y_cm >= -{MAX_PLAN_COORDINATE} "
+            f"AND background_offset_y_cm <= {MAX_PLAN_COORDINATE}",
+            name="ck_room_background_offsets_bounded",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -123,9 +151,34 @@ class Room(TimestampedModel, table=True):
         ),
     )
 
+    # --- Fond de plan calibré (spec §10, amendement A5) ---------------------------------------
+    # L'image elle-même vit ailleurs (stockage de fichiers) : la pièce n'en porte que le calage,
+    # exprimé dans le repère du plan. Le téléversement et l'outil de calibrage à deux clics sont
+    # des lots distincts ; ce qui est figé ici, c'est le contrat de données.
+    background_url: str | None = Field(default=None, max_length=500)
+    background_scale_cm_per_px: float | None = Field(default=None)
+    background_offset_x_cm: float = Field(
+        default=0.0, sa_column_kwargs={"server_default": text("0")}
+    )
+    background_offset_y_cm: float = Field(
+        default=0.0, sa_column_kwargs={"server_default": text("0")}
+    )
+    background_rotation_deg: float = Field(
+        default=0.0, sa_column_kwargs={"server_default": text("0")}
+    )
+    background_opacity: float = Field(
+        default=1.0, sa_column_kwargs={"server_default": text("1")}
+    )
+
     project: Project = Relationship(back_populates="rooms")
     faces: list["Face"] = Relationship(
         back_populates="room", sa_relationship_kwargs=_cascade("Face.id")
+    )
+    # Mobilier posé au sol, adossé à aucune face (spec §10, amendement A4). Nommée `free_elements`
+    # et non `elements` : `room.faces[*].elements` existe déjà et désigne autre chose — confondre
+    # les deux listes ferait compter deux fois le mobilier d'une pièce.
+    free_elements: list["Element"] = Relationship(
+        back_populates="room", sa_relationship_kwargs=_cascade("Element.id")
     )
 
 
@@ -232,10 +285,20 @@ class FurnitureType(TimestampedModel, table=True):
 
 
 class Element(TimestampedModel, table=True):
-    """Un élément posé sur une face : ouverture ou meuble.
+    """Un élément du plan : ouverture ou meuble, ancré à une face **ou** à une pièce.
 
-    `x_offset_cm` / `y_offset_cm` sont les coordonnées 2D déjà utilisées par l'éditeur, projetées
-    en profondeur selon l'épaisseur du mur lors du calcul du scene graph (spec §3.1).
+    Deux ancrages, exactement un par ligne (spec §10, amendement A4) :
+
+    - `face_id` — pose sur une face. `x_offset_cm` / `y_offset_cm` sont les coordonnées 2D déjà
+      utilisées par l'éditeur, projetées en profondeur selon l'épaisseur du mur lors du calcul du
+      scene graph (spec §3.1). C'est le cas **obligatoire** des ouvertures et le cas naturel de ce
+      qui est accroché au mur ;
+    - `room_id` — pose au sol de la pièce. `pos_x_cm` / `pos_y_cm` donnent le **centre** de
+      l'emprise dans le repère du plan, celui de `Room.polygon`. Sans lui, un lit, une table ou un
+      îlot étaient littéralement impossibles : le modèle obligeait à les coller contre un mur.
+
+    Le centre et non un coin : la rotation autour de la verticale est libre, et tourner autour
+    d'un coin déplacerait le meuble au lieu de l'orienter.
     """
 
     __tablename__ = "element"
@@ -257,16 +320,56 @@ class Element(TimestampedModel, table=True):
         CheckConstraint(
             "x_offset_cm >= 0 AND y_offset_cm >= 0", name="ck_element_offsets_not_negative"
         ),
+        # --- Ancrage (spec §10, amendement A4) ---
+        # Exactement un des deux repères, et jamais les deux à la fois. En base et pas seulement
+        # dans Pydantic : SQLAdmin, la CLI, Celery et `psql` écrivent sans passer par l'API, et
+        # les `Field(...)` de SQLModel sont **inertes** sur un modèle `table=True` (leçon de la
+        # vague 1). Les coordonnées sont incluses dans la contrainte : une ligne qui porterait à
+        # la fois un décalage de face et une position de pièce n'aurait pas de repère décidable.
+        CheckConstraint(
+            "(face_id IS NOT NULL AND room_id IS NULL "
+            "AND pos_x_cm IS NULL AND pos_y_cm IS NULL) "
+            "OR (face_id IS NULL AND room_id IS NOT NULL "
+            "AND pos_x_cm IS NOT NULL AND pos_y_cm IS NOT NULL)",
+            name="ck_element_exactly_one_anchor",
+        ),
+        # Une ouverture est un percement du mur (spec §3.1) : un trou qui flotte au milieu d'une
+        # pièce ne veut rien dire. `kind` est stocké sous sa valeur (`value_enum`), d'où le
+        # littéral en minuscules.
+        CheckConstraint(
+            "kind = 'furniture' OR face_id IS NOT NULL",
+            name="ck_element_opening_needs_a_face",
+        ),
+        CheckConstraint(
+            f"(pos_x_cm IS NULL OR (pos_x_cm >= -{MAX_PLAN_COORDINATE} "
+            f"AND pos_x_cm <= {MAX_PLAN_COORDINATE})) "
+            f"AND (pos_y_cm IS NULL OR (pos_y_cm >= -{MAX_PLAN_COORDINATE} "
+            f"AND pos_y_cm <= {MAX_PLAN_COORDINATE}))",
+            name="ck_element_position_bounded",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    face_id: int = Field(foreign_key="face.id", index=True, ondelete="CASCADE")
+    face_id: int | None = Field(
+        default=None, foreign_key="face.id", index=True, ondelete="CASCADE"
+    )
+    # Ancrage au sol de la pièce, exclusif de `face_id`. Indexé : c'est par lui que le calcul du
+    # scene graph et la suppression en cascade retrouvent le mobilier libre d'une pièce.
+    room_id: int | None = Field(
+        default=None, foreign_key="room.id", index=True, ondelete="CASCADE"
+    )
     kind: ElementKind = Field(  # type: ignore[call-overload]
         default=ElementKind.FURNITURE, sa_type=value_enum(ElementKind, "elementkind")
     )
 
+    # Renseignés pour un élément ancré à une face, et pour lui seul. Ils gardent leur valeur par
+    # défaut sur un meuble libre, où ils ne sont lus par personne : le discriminant est `face_id`.
     x_offset_cm: float = Field(default=0.0)
     y_offset_cm: float = Field(default=0.0)
+    # Centre de l'emprise au sol, dans le repère du plan — renseignés pour un meuble libre, et
+    # pour lui seul.
+    pos_x_cm: float | None = Field(default=None)
+    pos_y_cm: float | None = Field(default=None)
     width_cm: float = Field(default=100.0, gt=0)
     height_cm: float = Field(default=100.0, gt=0)
     depth_cm: float = Field(default=50.0, gt=0)
@@ -289,8 +392,26 @@ class Element(TimestampedModel, table=True):
         ),
     )
 
-    face: Face = Relationship(back_populates="elements")
+    face: Face | None = Relationship(back_populates="elements")
+    room: Room | None = Relationship(back_populates="free_elements")
     furniture_type: FurnitureType | None = Relationship(back_populates="elements")
+
+    @property
+    def anchor_room(self) -> Room:
+        """La pièce qui porte l'élément, quel que soit son ancrage.
+
+        Point de passage unique depuis l'amendement A4 : `element.face.room` était partout, et
+        lève désormais un `AttributeError` — donc une 500 — sur le premier meuble libre venu.
+
+        Les deux relations doivent avoir été chargées d'avance par l'appelant : sous session
+        asynchrone, un chargement paresseux ici lèverait `MissingGreenlet`. La contrainte
+        `ck_element_exactly_one_anchor` garantit qu'exactement une des deux est renseignée, d'où
+        le refus explicite du cas impossible plutôt qu'un `None` propagé plus loin.
+        """
+        room = self.room if self.face is None else self.face.room
+        if room is None:
+            raise ValueError(f"élément {self.id} sans ancrage : ni face ni pièce")
+        return room
 
 
 class SharedView(TimestampedModel, table=True):
