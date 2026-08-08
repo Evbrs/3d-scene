@@ -973,6 +973,21 @@ function fit(): void {
 }
 
 /**
+ * Amène un point du plan au centre de la surface, en centimètres.
+ *
+ * L'échelle est conservée : le panneau d'inspection désigne un endroit, il ne décide pas du zoom.
+ * Zoomer au passage ferait perdre le repère visuel que l'utilisateur venait de se construire.
+ */
+function centerOn(point: Point): void {
+  const { scale } = viewport.value
+  viewport.value = {
+    scale,
+    offsetX: stage.value.width / 2 - point.x * scale,
+    offsetY: stage.value.height / 2 - point.y * scale,
+  }
+}
+
+/**
  * Persistance du brouillon de tracé.
  *
  * Un contour en cours de saisie n'existe que côté client : tant qu'il n'est pas fermé, rien
@@ -1046,7 +1061,7 @@ onUnmounted(() => {
 // Recadre au changement de pièce, pas à chaque micro-édition.
 watch(() => props.faces.map((face) => face.id).join(','), fit)
 
-defineExpose({ fit, zoomAt })
+defineExpose({ fit, zoomAt, centerOn })
 </script>
 
 <template>

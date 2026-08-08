@@ -237,3 +237,20 @@ describe('lecture d’un conflit 409', () => {
     expect(error.conflictKind).toBeNull()
   })
 })
+
+describe('contrôle de conformité', () => {
+  it('n’envoie le mode accessible que lorsqu’il est demandé', async () => {
+    const rapport = {
+      project_id: 1, thresholds: {}, rooms: [], anomalies: [], counts: {}, warnings: [],
+    }
+    respondWith({ '/api/projects/1/inspection': [() => jsonResponse(200, rapport)] })
+
+    await api.readInspection(1)
+    await api.readInspection(1, true)
+
+    // Deux URL pour une seule requête, c'est deux entrées de cache et deux lignes de journal :
+    // le défaut du serveur ne se recopie pas dans l'adresse.
+    expect(pathsCalled('/inspection')[0]?.url).not.toContain('accessible')
+    expect(pathsCalled('/inspection')[1]?.url).toContain('accessible=true')
+  })
+})

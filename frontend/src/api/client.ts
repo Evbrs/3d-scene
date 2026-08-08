@@ -10,6 +10,9 @@ import type {
   Covering,
   Face,
   FurnitureType,
+  InspectionReport,
+  LayingPlan,
+  LayoutProposals,
   Page,
   PlanElement,
   Project,
@@ -73,6 +76,21 @@ export class ApiError extends Error {
   /** Conflit d'édition : le plan a changé depuis la dernière lecture (spec §8, cas 3). */
   get isConflict(): boolean {
     return this.status === 409
+  }
+
+  /**
+   * Mur de paiement : la fonctionnalité (402) ou le plafond de la période (429).
+   *
+   * Le corps du refus porte `required_plan` au premier niveau : c'est ce qui permet de proposer le
+   * bon palier sans analyser une phrase en français, qui changerait à la première reformulation
+   * côté serveur.
+   */
+  get isPaywalled(): boolean {
+    return this.status === 402 || this.status === 429
+  }
+
+  get requiredPlan(): string | null {
+    return readString(this.body, 'required_plan')
   }
 
   get isUnauthorized(): boolean {
@@ -283,6 +301,90 @@ export interface CurrentUser {
 
 export function currentUser(): Promise<CurrentUser> {
   return request<CurrentUser>('/api/auth/me')
+}
+
+/**
+ * Ferme la session côté serveur.
+ *
+ * Indispensable : le jeton de rafraîchissement vit dans un cookie `httpOnly`, donc hors de portée
+ * du JavaScript qui a posé le bouton « Se déconnecter ». Effacer le seul `sessionStorage`
+ * laisserait une session récupérable au prochain rafraîchissement silencieux.
+ */
+export function logout(): Promise<void> {
+  return request<void>('/api/auth/logout', { method: 'POST' })
+}
+
+/**
+ * Change le mot de passe et **remplace** la session.
+ *
+ * Le serveur révoque tous les jetons du compte, y compris celui qui a demandé le changement : la
+ * paire rendue est la seule qui vaut encore quelque chose, et elle est stockée ici. Sans ça,
+ * changer son mot de passe déconnecterait l'utilisateur et passerait pour un échec.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const body = await request<{ access_token: string; refresh_token: string | null }>(
+    '/api/auth/password',
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    },
+  )
+  storeToken(body.access_token)
+  fallbackRefreshToken = body.refresh_token
+}
+
+/**
+ * Demande un lien de réinitialisation.
+ *
+ * `reset_token` n'est renseigné qu'en développement, aucun service d'acheminement de messages
+ * n'existant encore côté serveur. La vue l'affiche alors telle quelle, en le disant.
+ */
+export function forgotPassword(email: string): Promise<{ detail: string; reset_token: string | null }> {
+  return request<{ detail: string; reset_token: string | null }>('/api/auth/password/forgot', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export function resetPassword(token: string, newPassword: string): Promise<{ detail: string }> {
+  return request<{ detail: string }>('/api/auth/password/reset', {
+    method: 'POST',
+    body: JSON.stringify({ token, new_password: newPassword }),
+  })
+}
+
+/** Export de portabilité RGPD (art. 15 et 20) : tout ce que le compte a produit, en JSON. */
+export function exportAccount(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>('/api/auth/me/export')
+}
+
+/**
+ * Ferme le compte définitivement.
+ *
+ * Le mot de passe est exigé par le serveur : un jeton volé ne doit pas suffire à détruire les
+ * chantiers d'une entreprise. Un 409 signale que le compte est le dernier propriétaire d'une
+ * organisation habitée — son message nomme ce qu'il faut transmettre d'abord.
+ */
+export function deleteAccount(currentPassword: string): Promise<void> {
+  return request<void>('/api/auth/me', {
+    method: 'DELETE',
+    body: JSON.stringify({ current_password: currentPassword }),
+  })
+}
+
+/**
+ * Sème le chantier de démonstration. 409 dès que l'espace contient un chantier.
+ *
+ * L'accueil l'appelle une fois, quand la liste est vide. Le 409 n'est donc pas un incident : c'est
+ * la course entre deux onglets, et elle se résout en rechargeant la liste.
+ */
+export function createDemoProject(): Promise<{ project_id: number; name: string }> {
+  return request<{ project_id: number; name: string }>('/api/auth/demo-project', {
+    method: 'POST',
+  })
 }
 
 // --- Projets ----------------------------------------------------------------------------------
@@ -517,6 +619,43 @@ export function readSceneGraph(projectId: number): Promise<SceneGraph> {
   return request<SceneGraph>(`/api/projects/${projectId}/scene`)
 }
 
+// --- Intelligence du plan (`docs/strategie-produit.md` §3.8) -------------------------------------
+
+/**
+ * Contrôle de conformité du plan.
+ *
+ * `accessible` durcit les seuils (couloir de 120 cm, arrêté du 24 décembre 2015). C'est le **seul**
+ * réglage ouvert au client : les autres seuils vivent dans le code du serveur, sinon il suffirait
+ * de demander 10 cm de passage pour rendre conforme un plan invivable.
+ */
+export function readInspection(projectId: number, accessible = false): Promise<InspectionReport> {
+  return request<InspectionReport>(
+    // Le paramètre n'est envoyé que s'il vaut vrai : `accessible=false` est le défaut du serveur,
+    // et l'écrire dans l'URL ferait deux adresses pour une seule requête.
+    withQuery(`/api/projects/${projectId}/inspection`, { accessible: accessible ? 'true' : undefined }),
+  )
+}
+
+export function readLayingPlan(projectId: number): Promise<LayingPlan> {
+  return request<LayingPlan>(`/api/projects/${projectId}/laying-plan`)
+}
+
+/**
+ * Propositions d'implantation pour une pièce.
+ *
+ * Un `POST` alors que rien n'est écrit : le verbe est celui du corps de requête, pas d'un effet de
+ * bord. Rien n'est créé — le client choisit une proposition et pose lui-même les éléments.
+ */
+export function proposeLayouts(
+  roomId: number,
+  options: { program?: string; count?: number; accessible?: boolean } = {},
+): Promise<LayoutProposals> {
+  return request<LayoutProposals>(`/api/rooms/${roomId}/layouts`, {
+    method: 'POST',
+    body: JSON.stringify(options),
+  })
+}
+
 // --- Export PDF (P9) --------------------------------------------------------------------------
 
 /** Réponse du 202 : la génération part en tâche de fond, la requête rend la main tout de suite. */
@@ -674,6 +813,97 @@ export async function readPublicView(token: string): Promise<PublicView> {
     throw new ApiError(response.status, extractDetail(body, response.status), body)
   }
   return body as PublicView
+}
+
+// --- Offres, abonnement et consommation ---------------------------------------------------------
+
+/**
+ * Un palier de la grille tarifaire, **tel qu'il est en base**.
+ *
+ * `limits` et `features` sont des dictionnaires ouverts, et c'est délibéré : les figer dans un
+ * type fermé ici reviendrait à recoder la grille côté navigateur, alors que tout l'intérêt de
+ * `plan_catalog` est qu'une remise ou un plafond déplacé soit une ligne SQL. Les libellés arrivent
+ * avec le catalogue, donc une clé ajoutée en base s'affiche sans toucher au frontend.
+ */
+export interface Plan {
+  code: string
+  name: string
+  tagline: string
+  monthly_price_cents: number
+  /** Nul pour un palier « sur devis » : on n'invente pas un tarif que personne n'a négocié. */
+  yearly_price_cents: number | null
+  seat_price_cents: number
+  currency: string
+  limits: Record<string, number | null>
+  features: Record<string, boolean>
+  sort_order: number
+}
+
+export interface PlanCatalog {
+  plans: Plan[]
+  feature_labels: Record<string, string>
+  limit_labels: Record<string, string>
+  /** `projects_active` est ce qu'on compte, `active_projects` ce qu'on plafonne : deux jeux. */
+  metric_labels: Record<string, string>
+  trial_days: number
+}
+
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled'
+
+export interface Subscription {
+  id: number
+  plan_code: string
+  status: SubscriptionStatus
+  current_period_start: string
+  current_period_end: string
+  trial_ends_at: string | null
+  cancel_at: string | null
+  seats: number
+}
+
+/** `limit` à `null` veut dire **illimité**, jamais zéro : « 3 / 0 » n'a aucun sens à l'écran. */
+export interface UsageLine {
+  metric: string
+  value: number
+  limit: number | null
+}
+
+export interface Entitlement {
+  organization_id: number
+  plan: Plan
+  subscription: Subscription | null
+  period_start: string
+  period_end: string
+  trial_available: boolean
+  trial_ends_at: string | null
+  usage: UsageLine[]
+  archived_project_ids: number[]
+}
+
+/** Grille publique : elle s'affiche avant l'inscription, donc sans jeton. */
+export function readPlans(): Promise<PlanCatalog> {
+  return request<PlanCatalog>('/api/plans')
+}
+
+export function readSubscription(organizationId: number): Promise<Entitlement> {
+  return request<Entitlement>(`/api/organizations/${organizationId}/subscription`)
+}
+
+/** Ouvre l'essai de 14 jours, sans carte. Rejoué, il rend simplement l'état courant. */
+export function startTrial(organizationId: number): Promise<Entitlement> {
+  return request<Entitlement>(`/api/organizations/${organizationId}/subscription/trial`, {
+    method: 'POST',
+  })
+}
+
+export interface Organization {
+  id: number
+  name: string
+  slug: string
+}
+
+export function listOrganizations(): Promise<Organization[]> {
+  return request<Organization[]>('/api/organizations')
 }
 
 export function openApiSchema(): Promise<Record<string, unknown>> {

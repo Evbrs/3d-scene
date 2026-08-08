@@ -54,38 +54,57 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def _create_token(subject: str, token_type: TokenType, expires_in: timedelta) -> str:
+def _create_token(
+    subject: str, token_type: TokenType, expires_in: timedelta, token_version: int
+) -> str:
     settings = get_settings()
     now = utcnow()
     payload: dict[str, Any] = {
         "sub": subject,
         "type": token_type,
+        "ver": token_version,
         "iat": now,
         "exp": now + expires_in,
     }
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 
-def create_access_token(subject: str | int) -> str:
+def create_access_token(subject: str | int, token_version: int = 0) -> str:
     settings = get_settings()
     return _create_token(
-        str(subject), "access", timedelta(minutes=settings.access_token_expire_minutes)
+        str(subject),
+        "access",
+        timedelta(minutes=settings.access_token_expire_minutes),
+        token_version,
     )
 
 
-def create_refresh_token(subject: str | int) -> str:
+def create_refresh_token(subject: str | int, token_version: int = 0) -> str:
     settings = get_settings()
     return _create_token(
-        str(subject), "refresh", timedelta(days=settings.refresh_token_expire_days)
+        str(subject),
+        "refresh",
+        timedelta(days=settings.refresh_token_expire_days),
+        token_version,
     )
 
 
 def decode_token(token: str, expected_type: TokenType) -> str:
-    """Valide un jeton et retourne son sujet (l'identifiant utilisateur).
+    """Valide un jeton et retourne son sujet (l'identifiant utilisateur)."""
+    return decode_token_claims(token, expected_type)[0]
+
+
+def decode_token_claims(token: str, expected_type: TokenType) -> tuple[str, int]:
+    """Valide un jeton et retourne son sujet **et** son compteur de révocation.
 
     `expected_type` est vérifié explicitement : sans ça, un jeton de rafraîchissement — à durée
     de vie longue — serait accepté comme jeton d'accès, ce qui annule l'intérêt d'avoir deux
     durées de vie distinctes.
+
+    `ver` est le `User.token_version` en vigueur à l'émission. Un jeton émis avant l'introduction
+    de cette revendication n'en porte pas : il retombe sur `0`, qui est aussi la valeur par défaut
+    de la colonne — les sessions ouvertes avant le déploiement restent donc valides, et la
+    première réinitialisation de mot de passe les invalide comme les autres.
     """
     settings = get_settings()
     try:
@@ -106,7 +125,12 @@ def decode_token(token: str, expected_type: TokenType) -> str:
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject:
         raise InvalidTokenError("sujet de jeton absent ou invalide")
-    return subject
+
+    version = payload.get("ver", 0)
+    # `bool` est un `int` en Python : sans ce refus, `{"ver": true}` passerait pour la version 1.
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise InvalidTokenError("compteur de révocation absent ou invalide")
+    return subject, version
 
 
 def token_expiry(token_type: TokenType) -> datetime:

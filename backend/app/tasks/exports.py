@@ -12,6 +12,7 @@ from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.models.base import utcnow
 from app.services.export_pdf import render_project_pdf
+from app.services.quotas import register_pdf_export_for_task
 
 
 def export_directory() -> Path:
@@ -62,11 +63,21 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
         # meuble « Meuble » : sur une planche de salle de bains qui en porte quatre, le document
         # cesse de dire lequel va où. `project_to_plain_dict` ne rend que `furniture_type_id`,
         # parce que le scene graph n'a besoin que de la recette, pas du libellé.
+        #
+        # Les **deux** ancrages sont parcourus (spec §10, amendement A4) : un meuble posé au sol
+        # n'est sous aucune face, et l'oublier faisait imprimer « Meuble » à la place de « Lit »
+        # sur le plan coté — la seule planche où le mobilier libre est dessiné (A7).
+        elements = [
+            element
+            for room in payload["rooms"]
+            for element in [
+                *(item for face in room["faces"] for item in face["elements"]),
+                *room["elements"],
+            ]
+        ]
         referenced = {
             element["furniture_type_id"]
-            for room in payload["rooms"]
-            for face in room["faces"]
-            for element in face["elements"]
+            for element in elements
             if element.get("furniture_type_id") is not None
         }
         if referenced:
@@ -80,12 +91,10 @@ async def _load_project(project_id: int) -> dict[str, Any] | None:
                 .scalars()
                 .all()
             }
-            for room in payload["rooms"]:
-                for face in room["faces"]:
-                    for element in face["elements"]:
-                        name = names.get(element.get("furniture_type_id"))
-                        if name:
-                            element["furniture_name"] = name
+            for element in elements:
+                name = names.get(element.get("furniture_type_id"))
+                if name:
+                    element["furniture_name"] = name
         return payload
 
 
@@ -137,8 +146,15 @@ def export_project_pdf(self: Any, project_id: int) -> dict[str, Any]:
     if project is None:
         raise ValueError(f"projet {project_id} introuvable")
 
-    content = render_project_pdf(project, utcnow())
-    target = export_path(project_id, str(self.request.id or "synchrone"))
+    task_id = str(self.request.id or "synchrone")
+    # Le filigrane est décidé **ici**, par le serveur, et la consommation est comptée avec
+    # l'identifiant de tâche pour clé d'idempotence : un rejeu après incident du courtier reprend
+    # la même clé, et ne compte donc pas un second export
+    # (`docs/strategie-produit.md` §4, garde-fous techniques).
+    watermark = run_blocking(register_pdf_export_for_task(project_id, task_id))
+
+    content = render_project_pdf(project, utcnow(), watermark=watermark)
+    target = export_path(project_id, task_id)
     target.write_bytes(content)
 
     return {

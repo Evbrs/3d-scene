@@ -328,11 +328,131 @@ Chaque écriture du plan passe par `_claim_project`, qui incrémente `Project.ve
 
 Les routes unitaires existantes ne sont ni retirées ni dépréciées : un lot est une optimisation du chemin d'écriture, pas un remplacement du modèle CRUD.
 
+### A7 — Le mobilier est compté, et le plan coté le montre (vague 4, 2026-08-08)
+
+**Amende §3.5 et A3**, et **répond à la question ouverte n° 6** ci-dessous, qui exigeait cet amendement avant tout code.
+
+Depuis A4, un lit, une table ou un îlot s'ancrent à la pièce et non à une face. Or les deux livrables du plan parcourent les éléments **par face** : `services/export_pdf.py` lit `face["elements"]`, et `geometry/quantities.py` ne retenait que les nœuds porteurs d'un revêtement. Ce qui n'est adossé à rien n'apparaissait donc **nulle part** — ni sur le plan coté, ni dans le récapitulatif de pièce, ni dans le métré. L'éditeur de la vague 3 sait en poser en masse : l'écart est passé de théorique à visible sur le premier chantier venu.
+
+Deux corrections distinctes, et elles n'ont pas la même nature.
+
+**Le plan coté de la pièce dessine le mobilier posé au sol** (correction). Chaque meuble libre y figure à sa position et à sa rotation, emprise au sol réelle, coins calculés comme le fait déjà `services/faces.py::free_element_footprint` — la même convention que le scene graph, sans quoi un meuble tourné à 90° serait dessiné avec sa largeur et sa profondeur échangées. Le récapitulatif de pièce et la page de garde cessent de le sous-compter. Il reste **absent des planches d'élévation**, et c'est voulu : une élévation est la vue d'un mur, et un îlot de cuisine n'est sur aucun mur.
+
+**Le métré compte le mobilier à l'unité** (ajout de périmètre §4, autorisé ici). `build_takeoff` gagne, par pièce et pour le projet, une liste `furniture` regroupée par recette et par gabarit : `furniture_type_slug`, dimensions, emprise au sol unitaire, et trois décomptes — total, posés au sol, adossés à une face. Règles figées :
+
+- **Le mobilier se compte, il ne se chiffre pas.** Aucun montant n'apparaît dans cette liste : un `FurnitureType` est une recette de composition (§4.1), il n'a pas de prix, et le barème de A2 ne connaît que des ouvrages au m², au ml et à l'unité de pose. Brancher une fourniture sur le chiffrage demanderait un tarif par recette, donc un nouvel amendement.
+- **Le métré ne compte que ce que la scène porte.** Un élément dont la recette manque au catalogue ne produit aucun nœud (`geometry/scene.py::_furniture_node` rend `None`) : il n'a déjà ni forme 3D ni élévation, et il n'est pas davantage compté. Ce n'est pas un silence du métré, c'est un catalogue incomplet.
+- **La clé `furniture` n'est présente que si la pièce en porte.** Son absence vaut zéro et jamais « inconnu » — la présence de mobilier est toujours établissable depuis la scène, contrairement à une surface nette manquante. C'est aussi ce qui laisse intact le contrat décrit par les fixtures de référence 07 à 10, qui font foi (`CLAUDE.md`) et décrivent exhaustivement la forme du métré des vagues précédentes.
+
+### A8 — `LayingPattern` accepte la pose en diagonale (vague 4, 2026-08-08)
+
+**Amende §1** (« motifs de pose avancés »), et **répond à la question ouverte n° 1** ci-dessous.
+
+`WASTE_RATIO_BY_PATTERN` provisionne 12 % de chute pour une pose en diagonale depuis la vague 2, mais `Covering.pattern` est typé sur `LayingPattern`, qui n'avait que `straight`, `staggered`, `chevron` et `herringbone` : **aucune saisie ne pouvait produire ce motif**, et la provision était morte. La valeur `diagonal` est ajoutée à l'énumération.
+
+La question ouverte annonçait « plus une migration d'énumération ». Vérification faite : **il n'y en a pas besoin**, et c'est une correction de la question elle-même. `LayingPattern` n'est le type d'aucune colonne — le motif de pose vit dans le blob `Face.covering`, colonne JSON assumée par §8 (cas 1), et l'énumération n'existe qu'à la frontière de l'API (`schemas/plan.py::Covering`). Aucun type SQL `layingpattern` n'a jamais été créé. Une migration ici n'aurait rien eu à migrer.
+
+Conséquence à ne pas oublier : la valeur nouvelle **change le schéma OpenAPI publié**, donc `frontend/src/api/openapi-snapshot.json` doit être régénéré (une fois, à l'assemblage — un fichier généré ne se fusionne pas).
+
+La pose en diagonale reste hors des `ALIGNED_PATTERNS` du métré : sa trame n'est pas parallèle aux bords de la face, les unités entières et les coupes n'y sont donc pas dénombrées. La quantité à commander, elle, l'est. Inventer un décompte serait pire que ne rien annoncer.
+
+### A9 — Un compte se reprend, s'exporte et se ferme (vague 5, 2026-08-08)
+
+**Amende §7 (P2)** — « Comptes, propriété des projets » — et **complète §5**.
+
+La phase P2 s'arrêtait à l'ouverture d'un compte. Un mot de passe oublié signifiait le compte et tous les chantiers perdus définitivement, et le seul droit RGPD couvert l'était par accident, par les cascades `ON DELETE`. On ne vend pas un abonnement dans cet état.
+
+Une table s'ajoute au §5 :
+
+```
+UserToken   (user_id, purpose, token_hash UNIQUE, expires_at, consumed_at)
+```
+
+Règles figées :
+
+- **Seul le hachage est stocké**, et la ligne consommée est **conservée** pour interdire le rejeu — même règle qu'`Invitation` (A1), et pour la même raison : une ligne effacée est une ligne qu'on ne peut plus opposer.
+- **`User.token_version` cesse d'être décoratif.** Il est recopié dans chaque JWT (revendication `ver`) et confronté au compte à chaque requête authentifiée. Toute route qui pose un nouveau mot de passe **doit** l'incrémenter ; sans quoi « fermer toutes les sessions » est un bouton qui ne fait rien. Un jeton antérieur, sans revendication, retombe sur 0 — la valeur par défaut de la colonne.
+- **La demande de réinitialisation répond 202 avec un corps constant**, que l'adresse existe ou non, comme l'inscription. Deux portes d'énumération valent zéro protection.
+- **La fermeture d'un compte est refusée en 409** tant qu'il est le dernier propriétaire accepté d'une organisation habitée. Le droit à l'effacement de l'un ne détruit pas les données des autres, et l'obligation comptable de dix ans sur les documents **émis** prime également. Le message nomme les organisations à transmettre.
+- **L'export de portabilité a exactement le périmètre des routes de l'API** (`accessible_organization_ids`) et ne contient jamais de secret. Un export plus large est une fuite entre locataires déguisée en conformité.
+
+Ce que cet amendement **ne** couvre **pas**, et qui reste à faire : aucun transport de courriel n'est branché — la réinitialisation est inutilisable en ligne (voir question ouverte n° 11) — et aucune purge automatique n'applique les durées de conservation annoncées (question ouverte n° 12).
+
+### A10 — Le projet de démonstration est un objet de produit (vague 5, 2026-08-08)
+
+**Complète §1.**
+
+Une organisation vierge peut demander **une fois**, par `POST /api/auth/demo-project`, un chantier de démonstration figé dans `app/services/demo.py` : une salle de bain de 240 × 200 cm entièrement chiffrable, dont un devis sort sans aucune saisie de barème.
+
+Deux règles figées :
+
+- **Il est demandé, jamais semé à l'inscription.** Il est refusé (409) dès qu'un chantier existe, ce qui garantit qu'un artisan qui le supprime ne le revoit jamais. Un semis à l'inscription le recréerait à chaque nouveau compte, sans possibilité de refus, et ferait construire une salle de bain complète à chacun des tests qui ouvrent un compte.
+- **Sa géométrie est une constante du code, pas un artefact de test.** Elle est vérifiée par les mêmes fonctions d'encombrement que l'API et, au même titre que les fixtures de `backend/tests/geometry/fixtures/`, elle ne s'ajuste pas pour faire passer un test.
+
+### A11 — Offres, quotas et compteurs d'usage (vague 5, 2026-08-08)
+
+**Complète §5** et **§7**, et pose la frontière technique décrite par `strategie-produit.md` §4. Aucun prestataire de paiement n'est intégré : on pose le modèle et la frontière, pas l'encaissement.
+
+Quatre tables s'ajoutent au §5 :
+
+```
+PlanCatalog    (code PK, name, tagline, monthly_price_cents, yearly_price_cents,
+ │              seat_price_cents, currency, limits JSONB, features JSONB,
+ │              is_public, sort_order)
+Subscription   (organization_id, plan_code FK, status, current_period_start/end,
+ │              trial_ends_at, cancel_at, seats,
+ │              external_customer_id, external_subscription_id)
+UsageCounter   (organization_id, metric, period_start, value)  UNIQUE(les trois premiers)
+UsageEvent     (append-only ; idempotency_key UNIQUE NOT NULL, metadata JSONB,
+                occurred_at, user_id ON DELETE SET NULL)
+Project
+ └─ archived_at                 (déclassement — voir plus bas)
+```
+
+Règles figées :
+
+- **Les codes de palier et les clés de `limits` / `features` sont des chaînes libres, jamais des énumérations.** Ajouter un palier négocié doit rester un `INSERT`, et déplacer une fonctionnalité d'un palier à l'autre un `UPDATE` — sinon chaque négociation commerciale redevient un déploiement. Le palier requis annoncé dans un refus est **calculé depuis la base**, pas depuis une table de correspondance codée.
+- **Une organisation sans ligne d'abonnement est au palier Découverte**, implicitement. Un compte neuf n'a aucune ligne, et c'est l'état normal. C'est aussi ce qui permet à l'essai Pro de 14 jours sans carte de s'ouvrir **au premier geste monétisé** et jamais à l'inscription : la garde ouvre l'essai, réévalue, et le geste aboutit.
+- **Une limite inconnue vaut « illimité », jamais zéro.** Le sens de défaillance est choisi : le pire incident imaginable est un quota qui bloque un client payant en pleine journée de chantier, pas un PDF de trop.
+- **Le compteur s'incrémente en une seule instruction** (`INSERT … ON CONFLICT DO UPDATE SET value = value + :n RETURNING value`). Un `SELECT` puis `UPDATE` laisse deux onglets passer au-dessus de la même limite.
+- **Un événement rejoué ne compte pas deux fois** : `usage_event.idempotency_key` est unique, et pour un export c'est l'identifiant de la tâche Celery. Une panne du courtier ne doit pas se traduire en surfacturation.
+- **La période de comptage est celle de la facturation, pas le mois calendaire.** Un abonnement souscrit le 20 se remet à zéro le 20 ; l'ancre est le début du premier abonnement ou, à défaut, la création de l'organisation.
+- **On bloque la création, jamais la lecture.** Au-delà du plafond de chantiers actifs, les projets excédentaires reçoivent `archived_at` — **rien n'est supprimé**, les plus récemment modifiés sont conservés, et le chantier archivé reste lisible, exportable et partageable. Seule l'écriture est refusée, en 403 `{code: 'project_archived'}`, au point de passage unique de toute écriture du plan (route de lot comprise).
+- **Le filigrane est une décision du serveur**, déduite du palier, et aucun paramètre de requête n'a de prise dessus. Le PDF filigrané **se télécharge quand même** : bloquer le téléchargement ferait douter du résultat, le livrer filigrané le prouve.
+- **Le métré reste entièrement ouvert sans abonnement.** Les trois murs posés sont le devis, l'export sans filigrane et le deuxième chantier — pas la mesure.
+
+Trois colonnes vont au-delà de la liste de `strategie-produit.md` §4 et sont assumées : `tagline` (la colonne « Pour qui » de la grille) et `seat_price_cents` (le « + 19 €/siège »), sans lesquelles la page tarifs aurait dû coder ces valeurs en dur — c'est-à-dire exactement ce que ce modèle existe pour éviter. `yearly_price_cents` est le **prix mensuel équivalent en engagement annuel** (2400 pour Artisan), et non le montant annuel : c'est la lecture qui rend « 29 € (24 €) » cohérent avec « deux mois offerts ». Il est `NULL` pour le palier Réseau, dont §4 dit « sur devis » — inventer un tarif annuel afficherait un prix que personne n'a négocié.
+
+### A12 — Le moteur d'intelligence du plan (vague 5, 2026-08-08)
+
+**Complète §1** (« contrôle de conformité », « calepinage ») et applique `strategie-produit.md` §3.8. **N'ajoute aucune table, aucune colonne, aucune migration.**
+
+Trois moteurs — contrôle de conformité, calepinage optimisé, aménagement sous contraintes — servis par `GET /api/projects/{id}/inspection`, `GET /api/projects/{id}/laying-plan` et `POST /api/rooms/{id}/layouts`.
+
+Règles figées :
+
+- **L'intelligence est algorithmique et locale.** Aucun LLM, aucun appel réseau sortant, aucune clé, aucun aléa : deux appels sur la même pièce rendent le même octet. C'est ce qui la rend testable par fixtures, et c'est une contrainte de produit, pas une préférence d'implémentation.
+- **L'entrée est le scene graph, pas les modèles SQLModel** — même choix que le métré, et pour les mêmes trois raisons : fonction pure alimentable par fixtures sans base, une seule géométrie mise en cache pour le viewer, le devis, le dossier et le contrôle, et `furniture_type_slug` n'existe que là. Conséquence à connaître : un meuble dont la recette manque au catalogue ne produit aucun nœud, donc échappe au contrôle — c'est le comportement de `build_scene_graph`, pas une décision de ce lot.
+- **Les seuils sont une classe d'exigences, pas un avis juridique.** Ils sont relevés dans la réglementation et l'usage courant du bâtiment français (décret n° 2002-120 sur la décence, arrêté du 24 décembre 2015 sur l'accessibilité, NF P01-012 sur les protections contre les chutes, largeurs de bloc-porte du commerce), chaque source est écrite à côté de son champ dans `ergonomy.Thresholds`, et **le rapport republie les seuils appliqués**. L'avertissement de `strategie-produit.md` §2 s'applique mot pour mot : cette liste doit être validée par un homme de métier avant d'être présentée comme une norme, et le produit n'affiche jamais « non conforme » là où il peut afficher « sous le seuil de X cm ».
+- **Aucun seuil n'entre par le corps d'une requête.** Seul le mode « logement accessible » est pilotable par le client. Les ouvrir transformerait un contrôle métier en paramètre d'affichage : il suffirait de demander 10 cm de passage pour rendre conforme un plan invivable. Un réglage par organisation est une ligne SQL, pas un paramètre de requête.
+- **Une proposition d'aménagement n'écrit rien.** Le moteur rend deux ou trois implantations valides et classées ; le client en choisit une et crée lui-même les éléments. Un moteur qui poserait d'autorité quinze meubles dans le plan d'un artisan est un moteur qu'on désactive au premier essai.
+- **Le calepinage ne réécrit pas le métré.** `cuts_saved` mesure l'écart avec la pose de référence ; la quantité à commander reste établie sur la surface et le taux de chute (A2). Un test croisé exige que le calepinage par défaut retombe exactement sur le décompte du métré.
+- **`ai_runs` se compte par version de plan et non par clic** (A11) : les trois moteurs étant déterministes, deux appels sur la même version sont une seule analyse.
+
 ### Questions ouvertes — à trancher par le propriétaire, pas en cours de ticket
 
-1. **`LayingPattern` n'a pas de valeur `diagonal`** alors que le métré porte son taux de chute (12 %). Aucune saisie ne peut donc produire une pose en diagonale. L'ajouter est un amendement de §1 (« motifs de pose avancés ») plus une migration d'énumération.
+1. ~~**`LayingPattern` n'a pas de valeur `diagonal`**~~ — **tranchée par A8** (vague 4, 2026-08-08) : la valeur est ajoutée, et la migration que la question annonçait n'avait pas lieu d'être. Conservée ici parce que l'historique des décisions vaut autant que la décision.
 2. **Le choix de l'organisation à la création d'un projet** n'existe pas : la règle appliquée est déterministe (l'appartenance acceptée la plus ancienne), mais un compte membre de deux entreprises ne peut pas désigner la cible.
 3. ~~**`Element.face_id` reste obligatoire**~~ — **tranchée par A4** (vague 3). Conservée ici parce que l'historique des décisions vaut autant que la décision.
 4. **Aucune vue de back-office** pour les organisations, appartenances et documents commerciaux. C'est délibéré côté facturation : un `quote_counter` ou une `quote_line` modifiables à la main annulent les deux garanties légales de A2 (numérotation sans trou, ligne figée). Si ces vues sont ajoutées, elles doivent l'être en lecture seule.
 5. **Le changement d'ancrage d'un élément** (décrocher une applique du mur pour la poser au sol, ou l'inverse) n'existe pas : A4 impose de supprimer puis recréer. C'est délibéré — les deux repères n'ont pas la même signification — mais si le geste devient courant dans l'éditeur, il faudra une opération dédiée qui exige un placement complet dans le nouveau repère, jamais un simple `PATCH` de `face_id`.
-6. **Un meuble libre n'apparaît pas dans le dossier d'élévations.** `services/export_pdf.py` parcourt les éléments **par face** (`face["elements"]`) : ce qui n'est adossé à rien lui est invisible, aussi bien sur les planches d'élévation que dans la colonne « nombre d'éléments » du récapitulatif de pièce, qui le sous-compte donc. Absent d'une élévation de mur, c'est correct ; absent du plan coté de la pièce, ça ne l'est pas. Le métré (`geometry/quantities.py`) est un cas distinct et **non défectueux** : il chiffre des surfaces, des linéaires et du calepinage à partir du scene graph, et n'a jamais itémisé le mobilier — ni libre, ni adossé. Y faire figurer une fourniture est un ajout de périmètre (§4), pas une correction.
+6. ~~**Un meuble libre n'apparaît pas dans le dossier d'élévations**~~ — **tranchée par A7** (vague 4, 2026-08-08) : le plan coté le dessine, le récapitulatif et la page de garde le comptent, et le métré l'itémise à l'unité. Il reste volontairement absent des planches d'élévation. Conservée ici parce que l'historique des décisions vaut autant que la décision.
+7. **Un brouillon de devis ne suit pas le plan qu'il chiffre.** `quote.warnings`, les lignes et les totaux sont figés à la création. Pour un devis **émis** c'est la règle de A2, et elle n'est pas discutable : un document dit ce qu'on savait à l'instant où il a été établi. Pour un **brouillon**, c'est un défaut — mais rafraîchir les seuls `warnings` le rendrait incohérent, puisque les quantités des lignes, elles, resteraient celles de l'ancien plan : l'artisan lirait « aucun avertissement » sur un devis dont le métré a changé. Deux obstacles concrets à traiter ensemble, jamais séparément : (a) `quote` ne mémorise **ni** le `price_book_id` employé **ni** la `Project.version` chiffrée, si bien qu'un recalcul devrait deviner le barème et ne saurait pas dire *si* le plan a bougé ; (b) régénérer les lignes d'un brouillon écraserait les `extra_lines` saisies à la main. La forme retenue le jour où ce sera traité : deux colonnes (`price_book_id`, `plan_version`), un indicateur de péremption calculé à la lecture (`plan_version != project.version`), et une action explicite de régénération — jamais un rafraîchissement silencieux.
+8. **Aucun prix ne s'attache à une recette de mobilier.** A7 fait compter les meubles par le métré ; les porter dans un devis demande un tarif par `FurnitureType` (ou un code de barème par recette), donc un nouvel amendement de A2. En l'état, le mobilier est une information de dossier, pas une ligne d'argent.
+9. **Le modèle ne stocke ni la main d'une porte ni son sens de battement** (§5). Le contrôle de conformité (A12) suppose donc une ouverture **vers l'intérieur** de la pièce qui porte le percement, et essaie les **deux** ferrages : une porte n'est en défaut que si aucun des deux ne passe ; si un seul est libre, c'est un conseil (« le plan impose la main de la porte, il faut la noter sur la commande »). C'est le choix le moins faux à modèle constant, mais il est structurant : le jour où `Element` reçoit un champ de ferrage, c'est un amendement de §5 **plus** une migration, et les règles `porte.*` changent de nature — elles deviennent des vérifications au lieu d'inférences. Corollaire du même manque : les pièces sont inspectées **indépendamment**, le scene graph ne portant aucune adjacence entre pièces ; un passage qui traverse la porte entre deux pièces n'est pas mesuré.
+10. **Aucun encaissement, donc aucune route de changement de palier** (A11). Ouvrir une telle route sans paiement laisserait n'importe quel administrateur s'attribuer le palier Entreprise gratuitement. Un changement de palier est aujourd'hui un `UPDATE subscription`. Corollaire : le déclassement n'est réconcilié qu'à la consultation de l'abonnement, le dépôt n'ayant pas d'ordonnanceur — un chantier excédentaire reste modifiable tant que personne n'ouvre la page compte. `enforce_active_project_limit` est déjà une fonction pure sur session, prête à être branchée sur un `beat` Celery. Enfin, `rooms_per_project`, `share_link_days` et `max_seats` sont **déclarés dans le catalogue et affichés**, mais aucune garde ne les applique : une ligne `await REQUIRE_ROOM_QUOTA(...)` aux deux points de création de pièce, une lecture de `share_link_days` dans `app/api/share.py`, et une garde sur l'invitation de membres.
+11. **Aucun transport de courriel n'est branché.** `POST /api/auth/password/forgot` fabrique le jeton mais rien ne l'achemine : il n'est rendu dans la réponse qu'en développement (même repli que `TokenPair.refresh_token`, et c'est un oracle d'énumération assumé, gated sur `settings.is_development`). En production la route répond 202 et personne ne reçoit rien : **la réinitialisation de mot de passe est inutilisable en ligne** tant qu'un service d'envoi n'est pas branché. C'est le point n° 1 de `docs/rgpd.md` §5.
+12. **Les durées de conservation sont annoncées et non appliquées.** Ni purge des comptes inactifs (3 ans), ni purge des documents commerciaux au-delà de dix ans, alors que la politique de confidentialité publique les annonce. Annoncer une durée sans l'appliquer est en soi un manquement. Celery est en place, c'est un lot court.
+13. **Les quatre documents légaux sont des gabarits.** Aucun n'a été relu par un juriste et les valeurs de l'exploitant y sont des marqueurs entre crochets. Tant qu'ils sont dans cet état, **aucune CGV n'est opposable et aucun abonnement ne devrait être encaissé**. L'avertissement en tête de chaque document est ce qui rend cet état visible ; le retirer est une décision, pas un nettoyage.
+14. **La carte d'aperçu d'un lien partagé reste générique.** Les robots d'iMessage, WhatsApp et Slack n'exécutent aucun JavaScript : ni le `document.title` dynamique ni aucune manipulation du DOM ne les atteint. Un aperçu portant le nom du chantier exige d'injecter les balises Open Graph **côté serveur** pour `/partage/:token` (nginx, ou une route backend dédiée). Pas d'`og:image` non plus : la balise exige une URL absolue, inconnue à la compilation, et une valeur en dur afficherait une image cassée dans chaque message envoyé.
+15. **Le panneau d'inspection n'est monté que dans l'éditeur 2D.** Le composant est présentationnel exprès, pour être montable aussi dans le viewer 3D — mais recentrer une caméra Three.js sur un point du plan n'est pas le même geste que déplacer une vue Konva, et ce second hôte n'a pas été écrit. Le calepinage (`GET /laying-plan`) et l'aménagement (`POST /rooms/{id}/layouts`) n'ont eux aucune interface : les deux appels existent dans `frontend/src/api/client.ts`, aucun écran ne les invoque.

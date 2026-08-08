@@ -3,7 +3,7 @@
 *Document de passation. Une session qui démarre ici doit pouvoir reprendre le travail sans
 refaire l'audit. Mets-le à jour à la fin de chaque vague.*
 
-Dernière mise à jour : 2026-08-08, fin de la vague 3 (assemblage compris).
+Dernière mise à jour : 2026-08-08, fin des vagues 4 et 5 (assemblage compris).
 
 ---
 
@@ -83,11 +83,55 @@ Les décisions de contrat de cette vague sont écrites dans `spec-complete.md` *
 A4, A5, A6)**, rédigées **avant** le code comme le demande `CLAUDE.md`.
 
 **Le cloisonnement entre locataires est la seule chose à ne jamais casser.** Il est tenu par
-`backend/tests/test_permissions_locataire.py` : 47 routes confrontées à un membre d'une autre
+`backend/tests/test_permissions_locataire.py` : **49 routes** confrontées à un membre d'une autre
 organisation (404, jamais 403), **plus deux garde-fous de complétude** qui lisent le schéma
 OpenAPI publié. Le second — celui qui classe les routes de *liste*, qui ne portent aucun
-identifiant — a révélé que `GET /api/quotes` n'avait pas de test de non-fuite. Si tu ajoutes une
-route, la suite te forcera à la classer : c'est voulu, ne contourne pas le message d'échec.
+identifiant — a révélé que `GET /api/quotes` n'avait pas de test de non-fuite, puis a imposé le
+classement de `GET /api/auth/me/export` à la vague 5. Si tu ajoutes une route, la suite te forcera
+à la classer : c'est voulu, ne contourne pas le message d'échec. Seule exception assumée :
+`GET /api/plans` est **publique** et n'appartient à aucun locataire — une grille de prix s'affiche
+avant l'inscription.
+
+### Fait — vagues 4 et 5, livrées ensemble (4 lots + assemblage, tous verts)
+
+Les deux vagues ont été menées en parallèle par quatre agents, puis assemblées. Ce qui figurait
+ci-dessous comme « à faire » pour les vagues 4, 5 et 6 est en grande partie livré.
+
+| Lot | Contenu |
+|---|---|
+| **V45-L1** | **Combler les manques de la vague 3.** Le métré compte le mobilier à l'unité (par recette *et* par gabarit : deux lits de 140 et 160 ne s'achètent pas ensemble), le plan coté le dessine en trait fin pointillé avec son emprise, la page de garde et les récapitulatifs cessent de le sous-compter. `LayingPattern.DIAGONAL` ajoutée — et **aucune migration n'était nécessaire**, contrairement à ce que la question ouverte n° 1 annonçait : le motif vit dans le blob JSON `Face.covering`. Garde-fou **exécutable** sur `floor_area_cm2` : la valeur est empoisonnée dans le scene graph et la sortie doit être rigoureusement identique. Défaut trouvé en chemin : `PATTERN_LABELS` contenait une clé `brick` qui n'a jamais été une valeur de l'énumération et n'avait pas `staggered` — une pose à coupe de pierre s'imprimait « staggered » en toutes lettres sur un document de chantier. |
+| **V45-L2** | **Socle légal, RGPD et cycle de vie du compte.** Table `UserToken` (hachage seul, ligne consommée conservée). `PATCH /auth/password`, `POST /auth/password/forgot` (202 constant), `/reset`, `DELETE /auth/me`, `GET /auth/me/export`, `POST /auth/demo-project`. **`User.token_version` était inerte depuis la vague 1** : aucun jeton ne le portait, aucune dépendance ne le lisait — il est maintenant dans chaque JWT et confronté à chaque requête, donc changer de mot de passe ferme réellement toutes les sessions. Quatre documents légaux (gabarits, avertissement de relecture en tête), `docs/rgpd.md`, projet de démonstration entièrement chiffrable, gabarits de pièces, titre d'onglet dynamique. |
+| **V45-L3** | **Le moteur d'intelligence du plan**, algorithmique et local : 13 règles de conformité à identifiant stable, seuils sourcés et republiés dans le rapport, calepinage avancé (sens de pose, position de la première rangée, plinthes avec réemploi des chutes), aménagement automatique sous contraintes dures avec score explicite en quatre termes. Trois routes, quatre fixtures calculées à la main, et **deux croisements** qui valent plus que le reste : le calepinage par défaut retombe exactement sur le décompte du métré, et une implantation proposée repasse sous le contrôle de conformité sans un seul bloquant. |
+| **V45-L4** | **Offres, quotas et compteurs d'usage** (la vague 6 anticipée). `plan_catalog` / `subscription` / `usage_counter` / `usage_event`, grille §4 semée sans destruction, incrément atomique, idempotence par clé. Trois murs : devis, export sans filigrane, deuxième chantier. Essai Pro 14 jours sans carte déclenché **au premier geste monétisé**. Déclassement par `Project.archived_at` : rien n'est supprimé, la lecture et l'export restent ouverts, seule l'écriture est refusée. `render_project_pdf(..., watermark=True)` a enfin ses appelants, sur les deux chemins. Pages `/tarifs` et `/abonnement` alimentées par la base. |
+
+**Corrigé à l'assemblage** — quatre défauts qu'aucun agent ne pouvait atteindre seul :
+
+1. **`tasks/exports.py::_load_project` ne nommait le mobilier que par face.** Un meuble **libre**
+   (A4) n'y recevait jamais son nom de catalogue : sur un export réel, un lit s'imprimait
+   « Meuble » sur le plan coté — la seule planche du dossier qui le dessine (A7), donc sans
+   rattrapage possible ailleurs. Le test qui le couvre a été rejoué contre le code fautif : il
+   échoue bien.
+2. **`diagonal` existait côté serveur et était insaisissable côté client.** L'union
+   `LayingPattern` de `frontend/src/api/types.ts` ne la portait pas, et `viewer/textures.ts`
+   retombait silencieusement sur la pose droite — repli propre, mais visuellement faux.
+3. **Le panneau d'inspection n'était branché sur rien.** Types déplacés dans `api/types.ts`, trois
+   appels ajoutés au client HTTP, panneau monté dans l'éditeur 2D avec `centerOn` exposé par
+   `PlanCanvas` pour le recentrage.
+4. **`ai_runs` était posée, affichée sur la page compte et jamais incrémentée** — un compteur qui
+   affiche toujours zéro est un compteur qui ment. Comptée **par version de plan** et non par
+   clic, les trois moteurs étant déterministes.
+
+**État vérifié après assemblage** : backend **1113 tests** (1112 sur SQLite + 1 propre à
+PostgreSQL, 1 ignoré), frontend **428/428** sur 31 fichiers, `ruff`, `mypy --strict`, `eslint`,
+`npm run build` verts. **Une seule tête Alembic** (`f3d47c8a1b56`), `upgrade` → `downgrade base` →
+`upgrade` rejoué sans résidu, `alembic check` sans dérive. Instantané OpenAPI à jour
+(**58 chemins, 79 opérations**), régénéré et diffé à vide. `test_permissions_locataire.py` :
+**49 routes** confrontées à un intrus, plus **4 collections** et **12 routes globales** classées.
+
+Les décisions de contrat de ces deux vagues sont écrites dans `spec-complete.md` **§10 (amendements
+A7 à A12)**. A7 et A8 ont été rédigés avant le code par leur agent ; A9 à A12 l'ont été à
+l'assemblage, sur la base de ce que les agents ont explicitement demandé de consigner — trois
+d'entre eux ne pouvaient pas éditer le fichier sans entrer en collision.
 
 ### Signalé par la vague 2, délibérément **pas** traité
 
@@ -95,21 +139,26 @@ Ce sont des changements de contrat ou de périmètre : la règle `CLAUDE.md` dem
 pas de les improviser en cours de ticket. Ils sont repris dans `spec-complete.md` §10, section
 « questions ouvertes ».
 
-1. **`LayingPattern` n'a pas de valeur `diagonal`** : le métré porte son taux de chute (12 %) mais
-   aucune saisie ne peut le produire, `Covering.pattern` étant typé sur l'énumération. Une ligne
-   d'énumération, une migration, un amendement de §1.
+1. ~~**`LayingPattern` n'a pas de valeur `diagonal`**~~ — **traité par la vague 4** (amendement A8).
+   La migration annoncée ici n'avait pas lieu d'être : le motif vit dans le blob JSON
+   `Face.covering`, l'énumération n'est le type d'aucune colonne. L'union TypeScript et la cellule
+   de texture ont été complétées à l'assemblage.
 2. **Aucun choix de l'organisation à la création d'un projet.** La règle appliquée est
    déterministe (l'appartenance acceptée la plus ancienne) mais un compte membre de deux
    entreprises ne peut pas désigner la cible. `ProjectCreate` n'a pas le champ.
 3. **Aucune vue de back-office** pour les 9 nouveaux modèles. Délibéré côté facturation : un
    `quote_counter` ou une `quote_line` modifiables à la main annulent les deux garanties légales
    du lot (numérotation sans trou, ligne figée). Si elles sont ajoutées, en lecture seule.
-4. **Le filigrane d'aperçu n'a aucun appelant** : `render_project_pdf(..., watermark=True)` existe,
-   est testé et n'est jamais déclenché — il n'y a pas de modèle d'offre en base avant la vague 5.
-   Il est *keyword-only* et décidé par le serveur : ne l'exposez jamais en paramètre de requête.
-5. **Rien n'achemine les invitations** : la route rend le jeton, aucun service de mail n'existe
-   dans le dépôt. `quote.warnings` n'est pas non plus recalculé si le plan change après coup — le
-   document dit ce qu'on savait à l'instant où il a été établi, et aucune route ne le rafraîchit.
+4. ~~**Le filigrane d'aperçu n'a aucun appelant**~~ — **traité par la vague 5** (amendement A11). Le
+   PDF filigrané se télécharge vraiment, sur le chemin synchrone comme sur le chemin Celery, et la
+   décision est prise par le serveur d'après le palier. Il n'a jamais été exposé en paramètre de
+   requête, et un test l'exige.
+5. **Rien n'achemine les invitations ni les réinitialisations de mot de passe** : les routes rendent
+   le jeton, aucun service de mail n'existe dans le dépôt (question ouverte n° 11). `quote.warnings`
+   n'est pas non plus recalculé si le plan change après coup — le document dit ce qu'on savait à
+   l'instant où il a été établi, et aucune route ne le rafraîchit (question ouverte n° 7, analysée
+   par la vague 4 : le correctif évident est faux, rafraîchir les seuls avertissements d'un
+   brouillon le rend incohérent).
 6. **La conformité PDF/A-3 n'a pas été confrontée à veraPDF** (aucun validateur hors ligne). Les
    exigences structurelles connues sont satisfaites et testées une par une, mais aucun verdict
    d'outil n'a été observé : ne le présentez pas comme certifié.
@@ -127,11 +176,10 @@ Questions ouvertes n° 5 et 6 de `spec-complete.md` §10, plus ce que l'assembla
 8. **Le changement d'ancrage n'existe pas** (question ouverte n° 5) : décrocher une applique du mur
    pour la poser au sol impose de supprimer puis recréer. Délibéré — les deux repères n'ont pas la
    même signification — mais à reprendre si le geste devient courant.
-9. **Un meuble libre n'apparaît pas dans le dossier d'élévations** (question ouverte n° 6, énoncé
-   corrigé à l'assemblage). `export_pdf.py` parcourt les éléments par face ; la colonne « nombre
-   d'éléments » du récapitulatif de pièce les sous-compte donc. L'éditeur sait maintenant en poser
-   en masse, ce qui rend l'écart bien plus visible qu'à son ouverture. **Le métré n'est pas
-   concerné** : il chiffre des surfaces et du calepinage, et n'a jamais itémisé de mobilier.
+9. ~~**Un meuble libre n'apparaît pas dans le dossier d'élévations**~~ — **traité par la vague 4**
+   (amendement A7). Le plan coté le dessine, le récapitulatif et la page de garde le comptent, et
+   le métré l'itémise à l'unité — ce dernier point est un ajout de périmètre §4, assumé comme tel.
+   Il reste volontairement absent des planches d'élévation : une élévation est la vue d'un mur.
 10. **Aucune route de téléversement du fond de plan.** Deux chemins existent côté éditeur : une
     adresse validée et enregistrée, ou un fichier local via `URL.createObjectURL` — **aperçu de
     session seulement**, annoncé comme tel, perdu au rechargement. Le calibrage fait dessus est
@@ -148,53 +196,86 @@ Questions ouvertes n° 5 et 6 de `spec-complete.md` §10, plus ce que l'assembla
     en cache de nœuds ; sur une pièce à 200 meubles, l'aperçu de déplacement recalcule toutes les
     emprises à chaque image. Non mesuré, donc affirmé dans aucun sens.
 
+### Signalé par les vagues 4 et 5, délibérément **pas** traité
+
+Questions ouvertes n° 9 à 15 de `spec-complete.md` §10. Les quatre premières sont reprises
+ci-dessus dans « Vague 6 ». Restent celles qui sont des limites de modèle ou de méthode :
+
+14. **La main d'une porte et son sens de battement ne sont pas modélisés** (question ouverte n° 9).
+    Le contrôle de conformité essaie les **deux** ferrages : une porte n'est en défaut que si aucun
+    ne passe, et si un seul est libre c'est un conseil (« le plan impose la main de la porte »).
+    C'est le choix le moins faux à modèle constant, mais il est structurant : le jour où `Element`
+    reçoit un champ de ferrage, les règles `porte.*` changent de nature.
+15. **Les seuils du contrôle de conformité n'ont pas été validés par un homme de métier.** Ils sont
+    relevés dans la réglementation et l'usage courant, chaque source est écrite à côté de son champ,
+    et le rapport republie les seuils appliqués — mais l'avertissement de `strategie-produit.md` §2
+    s'applique mot pour mot. **Ne jamais afficher « non conforme »** là où on peut afficher « sous
+    le seuil de X cm ».
+16. **Le point 7 reste entier : toujours aucune vérification visuelle.** Les vagues 4 et 5 ont ajouté
+    sept vues (`PricingView`, `AccountView`, `AccountSettingsView`, `LegalView`, `OnboardingView`,
+    `ForgotPasswordView`, `ResetPasswordView`) et un panneau d'inspection, tous écrits sans
+    navigateur. La liste des écrans jamais vus s'allonge à chaque vague.
+17. **Le déclassement n'est réconcilié qu'à la consultation de l'abonnement**, le dépôt n'ayant pas
+    d'ordonnanceur. Un chantier excédentaire reste donc modifiable tant que personne n'ouvre la page
+    compte. La règle dure — « on bloque la création, jamais la lecture » — est tenue dans tous les
+    cas. `enforce_active_project_limit` est une fonction pure sur session, prête pour un `beat`.
+18. **Les réponses 402 / 429 / 403 ne sont pas déclarées dans le schéma OpenAPI** des routes
+    concernées (`responses=`). Le frontend les lit par `ApiError.isPaywalled` / `.requiredPlan`,
+    donc le comportement est correct, mais le contrat publié est incomplet.
+
 ---
 
 ## À faire, dans cet ordre
 
 ### D'abord : ouvrir l'application dans un navigateur
 
-Ce n'est pas une vague, c'est un préalable. Trois lots de rendu et d'interaction ont été livrés
-sans qu'un seul pixel soit observé (point 7 ci-dessus). Confronter la 3D et l'éditeur 2D à un écran
-coûte une heure et peut invalider des choix qu'aucun test ne discrimine.
+Ce n'est pas une vague, c'est un préalable, et il est **plus urgent qu'à la vague 3**. Cinq lots de
+rendu et d'interaction, plus sept vues et un panneau d'inspection, ont été livrés sans qu'un seul
+pixel soit observé (points 7 et 16 ci-dessus). Confronter la 3D, l'éditeur 2D, la page tarifs et le
+parcours d'inscription à un écran coûte une heure et peut invalider des choix qu'aucun test ne
+discrimine.
 
-### Vague 4 — l'interface commerciale
+### Vague 6 — mettre en ligne pour de vrai
 
-*Le glisser-déposer, le mobilier libre, l'annuler/refaire, l'aimantation, la cotation, le fond de
-plan calibré et la route de lot, qui figuraient ici, ont été livrés par la vague 3.*
+Quatre points bloquent une mise en production, et aucun n'est un problème d'architecture. Ils sont
+tous écrits en questions ouvertes dans `spec-complete.md` §10.
 
-- **Interface des devis et du barème : rien n'existe.** Les 31 opérations ajoutées par les lots
-  V2-L1 et V2-L4 n'ont **aucun appelant** dans `frontend/src/api/client.ts`. Le produit sait établir un devis
-  Factur-X et ne sait pas le montrer. C'est, de loin, le premier poste de valeur restant.
-- **Le mobilier libre dans le dossier d'élévations** (point 9) : le plan coté de la pièce doit
-  montrer ce qui est posé au sol, et le récapitulatif cesser de le sous-compter.
+1. **Brancher un service d'envoi de courriel** (question ouverte n° 11). La réinitialisation de mot
+   de passe fabrique le jeton et ne l'achemine nulle part : elle est **inutilisable en ligne**. Les
+   invitations sont dans le même état depuis la vague 2. C'est le point n° 1 de `docs/rgpd.md` §5.
+2. **Faire relire les quatre documents légaux par un juriste** (question ouverte n° 13). Tant qu'ils
+   portent leurs marqueurs `[ENTRE CROCHETS]` et leur avertissement de relecture, aucune CGV n'est
+   opposable et aucun abonnement ne devrait être encaissé.
+3. **Appliquer les durées de conservation annoncées** (question ouverte n° 12). Ni purge des comptes
+   inactifs, ni purge des documents commerciaux à dix ans. Celery est en place, c'est un lot court.
+   Annoncer une durée sans l'appliquer est en soi un manquement.
+4. **Intégrer l'encaissement** (question ouverte n° 10). Les colonnes d'identifiants externes
+   existent, vides, depuis la première migration. Sans encaissement il n'y a pas de route de
+   changement de palier — et c'est volontaire, une telle route laisserait n'importe quel
+   administrateur s'attribuer Entreprise gratuitement.
 
-### Vague 5 — l'IA locale
+### Ensuite — finir de brancher ce qui existe
 
-Trois moteurs, par valeur décroissante (`strategie-produit.md` §3.8) : **contrôle de conformité du
-plan** (passage < 90 cm, débattement de porte qui percute, allège hors norme…), **calepinage et
-chutes**, **aménagement automatique sous contraintes**. Déterministes, testés par fixtures comme
-le reste de la géométrie.
+Le backend a des capacités que l'interface n'expose pas. C'est aujourd'hui le premier écart entre
+ce que le produit sait faire et ce qu'un artisan peut en tirer.
 
-Le mobilier libre de la vague 3 est ce qui rend le premier moteur réellement utile : un passage de
-moins de 90 cm se mesure entre des meubles posés au sol, pas entre des appliques murales.
-
-### Vague 6 — offres, quotas, encaissement
-
-`plan_catalog` (limites en JSONB, **en base et pas en dur** : une remise doit être une ligne SQL),
-`subscription` avec les colonnes d'identifiants externes dès la première migration,
-`usage_counter` incrémenté par un **unique `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`**,
-`usage_event` append-only avec clé d'idempotence — et **les métriques produit dès maintenant**
-(activation, délai jusqu'au premier devis) : reconstituer un historique est impossible.
-Murs de paiement, essai déclenché au premier geste monétisé et non à l'inscription, déclassement
-en lecture seule et jamais de suppression. Grille tarifaire et justification : `strategie-produit.md` §4.
-C'est aussi la vague qui donnera enfin un appelant à `render_project_pdf(..., watermark=True)`.
-
-Il manque aussi, et aucun lot ne les portait : pages légales (mentions, CGU, **CGV** — on ne vend
-pas un abonnement sans), export de portabilité RGPD, réinitialisation de mot de passe avec ses
-vues, page vitrine et page tarifs, titre dynamique et Open Graph sur le lien partagé, projet de
-démonstration à l'inscription (l'état vide actuel est « Aucun projet pour le moment » devant un
-canvas blanc).
+- **Le calepinage et l'aménagement n'ont aucun écran** (question ouverte n° 15). `readLayingPlan` et
+  `proposeLayouts` existent dans `frontend/src/api/client.ts`, rien ne les appelle. Le panneau
+  d'inspection, lui, n'est monté que dans l'éditeur 2D — pas dans le viewer 3D, alors que le
+  composant a été écrit pour les deux.
+- **Interface des devis et du barème.** Les opérations des lots V2-L1 et V2-L4 restent sans
+  appelant côté frontend : le produit sait établir un devis Factur-X et ne sait toujours pas le
+  montrer.
+- **Le mobilier ne remonte pas dans l'export CSV du métré** (`app/api/takeoff.py`, `CSV_COLUMNS` est
+  figé et une ligne = une face). Ce CSV est le pont vers le classeur de prix de l'artisan.
+- **Les quotas déclarés et non appliqués** (question ouverte n° 10) : `rooms_per_project`,
+  `share_link_days`, `max_seats`. Ils sont affichés sur la page tarifs, ce qui les rend
+  contractuels avant d'être exécutés.
+- **`shared_view_hits`, `api_calls` et `drop_off`** sont posés (métrique, compteur, journal,
+  affichage) et jamais incrémentés. `shared_view_hits` n'a **pas** été branché à l'assemblage
+  délibérément : compter chaque ouverture d'un lien public transforme une lecture non authentifiée
+  en écriture, donc en levier de charge sur la base pour un visiteur anonyme. Si on le branche, ce
+  doit être avec une agrégation, pas une ligne par vue.
 
 ---
 

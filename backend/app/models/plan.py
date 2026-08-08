@@ -77,6 +77,13 @@ class Project(TimestampedModel, table=True):
     # autoriser un accès a été retiré partout : un projet appartient à l'organisation, pas à la
     # personne qui a cliqué la première (`docs/strategie-produit.md` §6, point 1).
     owner_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
+    # Déclassement en lecture seule (`docs/strategie-produit.md` §4). Un chantier excédentaire au
+    # regard du palier reçoit cette date : il reste **lisible, exportable et partageable**, il
+    # n'est plus modifiable. Il n'est jamais supprimé — c'est la seule issue qui ne détruise pas la
+    # confiance, et la plus favorable au réabonnement.
+    archived_at: datetime | None = Field(  # type: ignore[call-overload]
+        default=None, sa_type=DateTime(timezone=True), nullable=True
+    )
     name: str = Field(max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     version: int = Field(default=1, sa_column=_project_version_column)

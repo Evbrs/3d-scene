@@ -7,3 +7,9 @@
 
 User-agent: *
 Disallow: /
+
+# Seule exception : les documents légaux. Ils ne contiennent aucune donnée personnelle et ils
+# doivent pouvoir être retrouvés — des CGV opposables qu'un moteur de recherche ne peut pas citer
+# sont plus difficiles à opposer, et une politique de confidentialité introuvable n'informe
+# personne (RGPD art. 13). La règle la plus spécifique l'emporte chez les principaux robots.
+Allow: /legal/

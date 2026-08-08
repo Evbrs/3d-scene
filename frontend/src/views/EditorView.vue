@@ -19,7 +19,14 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import * as api from '@/api/client'
 import type { BatchOperation, BatchResponse } from '@/api/client'
-import type { Face, FurnitureType, PlanElement, Room } from '@/api/types'
+import type {
+  Anomaly,
+  Face,
+  FurnitureType,
+  InspectionReport,
+  PlanElement,
+  Room,
+} from '@/api/types'
 import PlanCanvas from '@/editor/PlanCanvas.vue'
 import {
   type BackgroundPlacement,
@@ -69,6 +76,7 @@ import {
   matchesUndo,
 } from '@/editor/shortcuts'
 import { usePlanStore } from '@/stores/plan'
+import InspectorPanel from '@/views/InspectorPanel.vue'
 
 const props = defineProps<{ projectId: string }>()
 const store = usePlanStore()
@@ -914,6 +922,59 @@ async function exportPdf(): Promise<void> {
   }
 }
 
+/**
+ * Contrôle de conformité du plan (`docs/strategie-produit.md` §3.8).
+ *
+ * L'analyse n'est **pas** lancée au montage ni à chaque écriture : elle relit le scene graph
+ * complet, et la relancer à chaque meuble déplacé ferait payer un calcul de plan entier à un geste
+ * de souris. C'est l'utilisateur qui demande, et le rapport porte la version sur laquelle il a été
+ * établi — un rapport plus vieux que le plan doit se dire tel, pas se taire.
+ */
+const inspection = ref<InspectionReport | null>(null)
+const inspectionVersion = ref<number | null>(null)
+const inspecting = ref(false)
+const inspectionError = ref<string | null>(null)
+const accessible = ref(false)
+
+const inspectionStale = computed(
+  () => inspection.value !== null && inspectionVersion.value !== (store.project?.version ?? null),
+)
+
+async function inspect(): Promise<void> {
+  if (inspecting.value) return
+  inspecting.value = true
+  inspectionError.value = null
+  try {
+    inspection.value = await api.readInspection(Number(props.projectId), accessible.value)
+    inspectionVersion.value = store.project?.version ?? null
+  } catch (caught) {
+    inspection.value = null
+    inspectionError.value = `Contrôle impossible : ${messageOf(caught)}`
+  } finally {
+    inspecting.value = false
+  }
+}
+
+/**
+ * Amène le plan sur l'anomalie cliquée.
+ *
+ * Le panneau ne sait pas recentrer — il ne connaît ni Konva ni la pièce courante ; c'est ici que
+ * les deux se rencontrent. L'ordre compte : changer de pièce d'abord, laisser le canevas se
+ * redessiner, puis seulement recentrer, sinon le déplacement s'applique à la pièce qu'on quitte.
+ */
+async function recentrerSur(anomaly: Anomaly): Promise<void> {
+  if (anomaly.room_id !== null && anomaly.room_id !== store.selectedRoomId) {
+    store.selectedRoomId = anomaly.room_id
+    await nextTick()
+  }
+  // Les identifiants viennent du serveur : on ne garde que ceux que la pièce affichée porte
+  // vraiment, sinon la sélection désigne des fantômes et le geste suivant part en 404.
+  const connus = new Set(allElements.value.map((element) => element.id))
+  const cibles = anomaly.element_ids.filter((id) => connus.has(id))
+  if (cibles.length) selection.value = cibles
+  if (anomaly.focus) canvas.value?.centerOn({ x: anomaly.focus[0], y: anomaly.focus[1] })
+}
+
 const savedLabel = computed(() => {
   if (store.saving) return 'Enregistrement…'
   if (!store.savedAt) return 'Aucune modification enregistrée'
@@ -1693,6 +1754,32 @@ watch(helpOpen, async (open) => {
             </li>
           </ul>
         </template>
+
+        <div class="controle">
+          <label class="filtre">
+            <input
+              v-model="accessible"
+              type="checkbox"
+            >
+            Appliquer les seuils du logement accessible
+          </label>
+          <!-- Un rapport plus vieux que le plan ne se tait pas : il le dit. Le vider en silence
+               à chaque écriture ferait clignoter le panneau pendant qu'on déplace un meuble. -->
+          <p
+            v-if="inspectionStale"
+            class="perime"
+            role="status"
+          >
+            Le plan a changé depuis ce contrôle.
+          </p>
+          <InspectorPanel
+            :report="inspection"
+            :loading="inspecting"
+            :error="inspectionError"
+            @rafraichir="inspect"
+            @recentrer="recentrerSur"
+          />
+        </div>
       </aside>
     </div>
 
@@ -2105,6 +2192,24 @@ kbd {
 
 .vide {
   color: var(--texte-doux);
+}
+
+.controle {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--bordure, currentcolor);
+  padding-top: 0.75rem;
+}
+
+.controle .filtre {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.perime {
+  font-weight: 700;
+  margin: 0 0 0.5rem;
 }
 
 h2,

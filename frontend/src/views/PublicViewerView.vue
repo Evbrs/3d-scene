@@ -17,6 +17,7 @@ import { computed, onMounted, ref, shallowRef } from 'vue'
 
 import * as api from '@/api/client'
 import type { CameraPreset, SceneGraph } from '@/api/types'
+import { NOM_DU_PRODUIT } from '@/router'
 import SceneRenderer from '@/viewer/SceneRenderer.vue'
 import ViewerStage from '@/viewer/ViewerStage.vue'
 import { boundsOf } from '@/viewer/build'
@@ -57,6 +58,13 @@ onMounted(async () => {
     const view = await api.readPublicView(props.token)
     scene.value = view.scene
     projectName.value = view.project_name
+
+    // Le titre de l'onglet est posé génériquement par le routeur ; seule cette vue connaît le nom
+    // du chantier. Sans ça, un signet, un historique et une capture d'écran d'onglet affichaient
+    // « Éditeur de plan de rénovation » pour n'importe quel plan partagé. La carte d'aperçu d'un
+    // lien envoyé par SMS, elle, ne s'en trouve pas changée : son robot n'exécute aucun script
+    // (voir le commentaire d'`index.html`).
+    document.title = `${view.project_name} — ${NOM_DU_PRODUIT}`
 
     const state = view.state as unknown as ViewState & { room_index?: number }
     // La vue partagée désigne une pièce précise ; l'ignorer montrait toujours la première.

@@ -88,6 +88,23 @@ export function patternCell(
     }
   }
 
+  if (pattern === 'diagonal') {
+    // Pose en diagonale : la trame droite, tournée d'un quart de tour sur la pointe. Pour une
+    // unité carrée la cellule est exacte — les deux vecteurs de la trame tournée se recombinent
+    // en un carré de côté `unité x √2` portant deux unités. Pour une unité rectangulaire, aucune
+    // cellule alignée sur les axes n'est une période exacte (il en faudrait une elle-même
+    // inclinée) : on garde la même construction, qui reste juste d'échelle et de sens de pose.
+    const side = (width + height) / Math.SQRT2
+    return {
+      widthCm: side,
+      heightCm: side,
+      tiles: [
+        tile(0, 0, width, height, Math.PI / 4),
+        tile(side / 2, side / 2, width, height, Math.PI / 4),
+      ],
+    }
+  }
+
   if (pattern === 'herringbone') {
     // Bâtons rompus : les lames alternent d'un quart de tour, la cellule est carrée.
     const side = width + height

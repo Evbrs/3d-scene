@@ -8,11 +8,17 @@ pièces, puis, pour chaque pièce, le plan coté suivi d'**une page A4 paysage p
 cotée que l'artisan emporte sur le chantier (`docs/strategie-produit.md` §3.3). Les cotes y sont
 exprimées en centimètres, et l'échelle est écrite sur chaque planche : un dessin dont l'échelle
 n'est pas dite n'est pas un document de chantier, c'est une illustration.
+
+Deux ancrages, deux lectures (spec §10, amendements A4 et A7) : ce qui est adossé à une face se lit
+sur la planche d'élévation de ce mur, ce qui est **posé au sol** de la pièce n'est sur aucun mur et
+ne se lit donc que sur le plan coté. Les deux sont comptés par le récapitulatif de pièce et par la
+page de garde ; aucun des deux ne peut manquer au dossier.
 """
 
 import io
 import itertools
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -59,12 +65,15 @@ OPENING_LABELS = {
     "door_sliding": "Porte coulissante",
 }
 FACE_KIND_LABELS = {"wall": "Mur", "floor": "Sol", "ceiling": "Plafond"}
+# Les clés sont les valeurs de `LayingPattern` (`app/models/base.py`), et rien d'autre. « brick »
+# y figurait et n'a jamais été une valeur de l'énumération : une pose décalée s'imprimait donc en
+# « staggered » sur le dossier de chantier, faute de traduction.
 PATTERN_LABELS = {
     "straight": "pose droite",
-    "brick": "pose à coupe de pierre",
-    "herringbone": "chevron",
+    "staggered": "pose à coupe de pierre",
+    "diagonal": "pose en diagonale",
+    "herringbone": "bâton rompu",
     "chevron": "chevron",
-    "diagonal": "diagonale",
 }
 
 WATERMARK_TEXT = "APERÇU"
@@ -95,6 +104,23 @@ class Fixture:
     bottom_cm: float
     width_cm: float
     height_cm: float
+
+
+@dataclass(frozen=True)
+class FloorFixture:
+    """Un meuble posé au sol de la pièce, dans le repère du plan (spec §10, amendements A4 et A7).
+
+    Il n'est adossé à aucune face : aucune planche d'élévation ne le montre, et le plan coté est
+    donc le seul endroit du dossier où il existe. `corners` porte l'emprise **après rotation** —
+    un lit tourné à 90° n'occupe pas le même rectangle que le même lit droit.
+    """
+
+    label: str
+    center: tuple[float, float]
+    width_cm: float
+    depth_cm: float
+    rotation_deg: float
+    corners: list[tuple[float, float]]
 
 
 @dataclass(frozen=True)
@@ -227,6 +253,77 @@ def wall_elevations(project: dict[str, Any]) -> list[WallElevation]:
         for room in project.get("rooms") or []
         for elevation in room_elevations(room)
     ]
+
+
+def _free_footprint(element: dict[str, Any]) -> list[tuple[float, float]]:
+    """Les quatre coins de l'emprise au sol d'un meuble libre, rotation comprise.
+
+    Même convention que `app/services/faces.py::free_element_footprint` et que le scene graph :
+    une rotation `R_y(a)` envoie la largeur sur `(cos a, -sin a)` et la profondeur sur
+    `(sin a, cos a)` une fois relues dans le plan. Le calcul est refait ici plutôt qu'emprunté
+    parce que ce module travaille sur des dictionnaires simples, sans base de données — c'est ce
+    qui le rend testable sur un plan brut. Un test confronte les deux à la fixture de référence
+    `11_mobilier_libre.json` : les faire diverger, ce serait dessiner un meuble tourné avec sa
+    largeur et sa profondeur échangées.
+    """
+    angle = math.radians(float(element.get("rotation_deg") or 0.0))
+    cosine, sine = math.cos(angle), math.sin(angle)
+    half_width = float(element["width_cm"]) / 2.0
+    half_depth = float(element["depth_cm"]) / 2.0
+    center_x = float(element.get("pos_x_cm") or 0.0)
+    center_y = float(element.get("pos_y_cm") or 0.0)
+    return [
+        (
+            center_x + along * half_width * cosine + across * half_depth * sine,
+            center_y - along * half_width * sine + across * half_depth * cosine,
+        )
+        for along, across in ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0))
+    ]
+
+
+def room_floor_fixtures(room: dict[str, Any]) -> list[FloorFixture]:
+    """Le mobilier posé au sol de la pièce — celui qu'aucune élévation ne montre.
+
+    Il se lit dans `room["elements"]`, la clé que `app/api/scene.py::project_to_plain_dict`
+    réserve au mobilier libre, et **jamais** dans `room["faces"][*]["elements"]` : confondre les
+    deux listes ferait compter deux fois le mobilier d'une pièce.
+
+    Un meuble sans position est ignoré : la contrainte `ck_element_exactly_one_anchor` interdit ce
+    cas en base, mais ce module est aussi alimenté par des plans écrits à la main, et lui inventer
+    l'origine du plan le poserait au hasard, souvent hors de la pièce.
+    """
+    fixtures: list[FloorFixture] = []
+    for element in room.get("elements") or []:
+        if element.get("pos_x_cm") is None or element.get("pos_y_cm") is None:
+            continue
+        fixtures.append(
+            FloorFixture(
+                # Le nom du catalogue quand l'appelant l'a joint, « Meuble » sinon — même repli
+                # que sur les élévations.
+                label=str(element.get("furniture_name") or "Meuble"),
+                center=(float(element["pos_x_cm"]), float(element["pos_y_cm"])),
+                width_cm=float(element["width_cm"]),
+                depth_cm=float(element["depth_cm"]),
+                rotation_deg=float(element.get("rotation_deg") or 0.0),
+                corners=_free_footprint(element),
+            )
+        )
+    return fixtures
+
+
+def furniture_count(room: dict[str, Any]) -> int:
+    """Nombre de meubles de la pièce, les deux ancrages réunis (spec §10, amendement A7).
+
+    Le récapitulatif de pièce et la page de garde le sous-comptaient : ils ne parcouraient que les
+    éléments adossés à une face, si bien qu'un logement entièrement meublé au sol s'annonçait vide.
+    """
+    on_faces = sum(
+        1
+        for face in room.get("faces") or []
+        for element in face.get("elements") or []
+        if element["kind"] not in OPENING_KINDS
+    )
+    return on_faces + len(room.get("elements") or [])
 
 
 def _normalised_scale(
@@ -641,9 +738,65 @@ def _draw_wall_elevation(
 # --- Plan de la pièce ---------------------------------------------------------------------------
 
 
+def _draw_floor_fixtures(
+    pdf: pdfcanvas.Canvas,
+    fixtures: list[FloorFixture],
+    place: Callable[[Sequence[float]], tuple[float, float]],
+) -> None:
+    """Le mobilier posé au sol, en trait fin sur le plan coté (spec §10, amendement A7).
+
+    Dessiné à partir de ses quatre coins **après rotation**, et non d'un rectangle droit centré :
+    un lit tourné à 90° occupe l'autre sens de la pièce, et c'est précisément ce que l'artisan
+    vient vérifier sur un plan — le passage qui reste autour.
+    """
+    for fixture in fixtures:
+        corners = [place(corner) for corner in fixture.corners]
+
+        path = pdf.beginPath()
+        path.moveTo(*corners[0])
+        for corner in corners[1:]:
+            path.lineTo(*corner)
+        path.close()
+
+        pdf.saveState()
+        pdf.setStrokeColor(FURNITURE_COLOR)
+        pdf.setLineWidth(0.5)
+        pdf.setDash(2, 2)
+        pdf.drawPath(path, stroke=1, fill=0)
+        pdf.restoreState()
+
+        # L'étiquette s'écrit à l'horizontale, au centre de l'emprise : la place disponible est
+        # donc l'étendue horizontale du quadrilatère dessiné, et non le côté du meuble. Sur un
+        # rectangle, la corde horizontale passant par le centre vaut exactement cette étendue,
+        # rotation comprise.
+        xs = [corner[0] for corner in corners]
+        ys = [corner[1] for corner in corners]
+        available = max(xs) - min(xs)
+        centre_x = sum(xs) / 4
+        centre_y = sum(ys) / 4
+        caption = f"{round(fixture.width_cm)} x {round(fixture.depth_cm)}"
+        # Le nom est abandonné en premier quand la place manque : perdre l'encombrement serait
+        # perdre la cote, ce qui est plus grave. Même arbitrage que sur les élévations.
+        lines = (
+            [fixture.label, caption]
+            if _fits(pdf, fixture.label, LABEL_FONT_SIZE, available)
+            else [caption]
+        )
+        needed = len(lines) * (LABEL_FONT_SIZE + 1) + 3
+        if not _fits(pdf, caption, LABEL_FONT_SIZE, available) or max(ys) - min(ys) < needed:
+            continue
+
+        pdf.setFillColor(FURNITURE_COLOR)
+        pdf.setFont("Helvetica", LABEL_FONT_SIZE)
+        cursor = centre_y + (len(lines) - 1) * (LABEL_FONT_SIZE + 1) / 2 - LABEL_FONT_SIZE / 2
+        for line in lines:
+            pdf.drawCentredString(centre_x, cursor, line)
+            cursor -= LABEL_FONT_SIZE + 1
+
+
 def _draw_room_plan(
-    pdf: pdfcanvas.Canvas, room: dict[str, Any], origin_x: float, origin_y: float,
-    width: float, height: float,
+    pdf: pdfcanvas.Canvas, room: dict[str, Any], fixtures: list[FloorFixture],
+    origin_x: float, origin_y: float, width: float, height: float,
 ) -> int | None:
     """Plan coté de la pièce. Renvoie le dénominateur de l'échelle employée, ou `None` si vide."""
     polygon = room.get("polygon") or []
@@ -665,7 +818,7 @@ def _draw_room_plan(
     left = origin_x + max(width - drawn_width, 0.0) / 2
     bottom = origin_y + max(height - drawn_height, 0.0) / 2
 
-    def place(vertex: list[float]) -> tuple[float, float]:
+    def place(vertex: Sequence[float]) -> tuple[float, float]:
         # L'axe y du plan descend (repère écran) ; celui du PDF monte. D'où l'inversion, sans
         # laquelle le plan imprimé serait le miroir vertical de l'éditeur.
         return (
@@ -684,6 +837,10 @@ def _draw_room_plan(
     pdf.setStrokeColor(WALL_COLOR)
     pdf.setLineWidth(1.2)
     pdf.drawPath(path, stroke=1, fill=1)
+
+    # Posé après l'aplat du sol et avant les étiquettes de mur : dessiné avant, il passerait sous
+    # l'aplat et disparaîtrait ; dessiné après, il barrerait les cotes des murs.
+    _draw_floor_fixtures(pdf, fixtures, place)
 
     centre = (
         sum(place(vertex)[0] for vertex in polygon) / len(polygon),
@@ -724,12 +881,19 @@ def _draw_room_plan(
 def _draw_room_summary(
     pdf: pdfcanvas.Canvas,
     room: dict[str, Any],
+    fixtures: list[FloorFixture],
     sheets: dict[str, str],
+    plan_sheet: str,
     origin_x: float,
     top_y: float,
     available_height: float,
 ) -> None:
-    """Récapitulatif par face : revêtement, éléments posés et numéro de planche du mur."""
+    """Récapitulatif par ancrage : revêtement, éléments posés et numéro de planche.
+
+    Une ligne par face, puis une ligne pour ce qui est **posé au sol** (spec §10, amendement A7).
+    Sans elle le tableau sous-comptait le mobilier d'une pièce entière : il ne parcourait que les
+    éléments adossés à une face, et un logement meublé au sol s'y annonçait vide.
+    """
     pdf.setFont("Helvetica-Bold", 9)
     pdf.setFillColor(WALL_COLOR)
     pdf.drawString(origin_x, top_y, "Détail par face")
@@ -746,12 +910,15 @@ def _draw_room_summary(
     pdf.line(origin_x, cursor, columns[-1] + 44, cursor)
     cursor -= 10
 
-    floor = top_y - available_height
+    # Une ligne est réservée au mobilier posé au sol : c'est la seule que le dossier ne rattrape
+    # nulle part ailleurs, et un tableau de faces qui déborde ne doit pas l'évincer.
+    floor = top_y - available_height + (10 if fixtures else 0)
     for face in room.get("faces") or []:
         if cursor < floor:
             pdf.setFont("Helvetica-Oblique", 7)
             pdf.drawString(origin_x, cursor, "Faces suivantes : voir leur planche d'élévation.")
-            return
+            cursor -= 10
+            break
         pdf.setFont("Helvetica", 7)
         pdf.setFillColor(WALL_COLOR)
         kind = FACE_KIND_LABELS.get(face["kind"], face["kind"])
@@ -764,6 +931,19 @@ def _draw_room_summary(
         pdf.drawString(columns[2], cursor, str(len(face.get("elements") or [])))
         pdf.drawString(columns[3], cursor, sheets.get(face["label"], "—"))
         cursor -= 10
+
+    if not fixtures:
+        return
+    pdf.setFont("Helvetica", 7)
+    pdf.setFillColor(WALL_COLOR)
+    pdf.drawString(columns[0], cursor, "— · Posé au sol")
+    pdf.setFillColor(DIMENSION_COLOR)
+    names = ", ".join(sorted({fixture.label for fixture in fixtures}))
+    pdf.drawString(columns[1], cursor, _shortened(pdf, names, 7, columns[2] - columns[1] - 8))
+    pdf.drawString(columns[2], cursor, str(len(fixtures)))
+    # Le plan et non une élévation : un meuble libre n'est sur aucun mur, et c'est précisément ce
+    # que cette colonne doit dire à qui cherche où le voir.
+    pdf.drawString(columns[3], cursor, plan_sheet)
 
 
 def _draw_room_page(
@@ -778,26 +958,33 @@ def _draw_room_page(
     pdf.setFillColor(WALL_COLOR)
     pdf.drawString(MARGIN, PAGE_HEIGHT - MARGIN - 6, f"Plan — {room['name']}")
 
+    fixtures = room_floor_fixtures(room)
+
     pdf.setFont("Helvetica", 9)
     pdf.setFillColor(DIMENSION_COLOR)
     area = _floor_area_m2(room)
-    pdf.drawString(
-        MARGIN,
-        PAGE_HEIGHT - MARGIN - 22,
+    header = (
         f"{project_name} · {area:.2f} m² · murs de {room['wall_thickness_cm']} cm · "
-        f"plafond à {room['ceiling_height_cm']} cm",
+        f"plafond à {room['ceiling_height_cm']} cm"
     )
+    if fixtures:
+        header += f" · {len(fixtures)} meuble(s) au sol"
+    pdf.drawString(MARGIN, PAGE_HEIGHT - MARGIN - 22, header)
 
     plan_width = (PAGE_WIDTH - 2 * MARGIN) * 0.55
     plan_bottom = MARGIN + FOOTER_HEIGHT
     plan_height = PAGE_HEIGHT - MARGIN - HEADER_HEIGHT - plan_bottom
-    denominator = _draw_room_plan(pdf, room, MARGIN, plan_bottom, plan_width, plan_height)
+    denominator = _draw_room_plan(
+        pdf, room, fixtures, MARGIN, plan_bottom, plan_width, plan_height
+    )
 
     summary_top = PAGE_HEIGHT - MARGIN - HEADER_HEIGHT
     _draw_room_summary(
         pdf,
         room,
+        fixtures,
         sheets,
+        sheet,
         MARGIN + plan_width + 10 * mm,
         summary_top,
         summary_top - plan_bottom,
@@ -806,11 +993,12 @@ def _draw_room_page(
     if denominator is not None:
         pdf.setFont("Helvetica", 8)
         pdf.setFillColor(DIMENSION_COLOR)
-        pdf.drawCentredString(
-            MARGIN + plan_width / 2,
-            MARGIN + FOOTER_HEIGHT - 16,
-            f"Échelle 1:{denominator} — cotes en centimètres",
-        )
+        caption = f"Échelle 1:{denominator} — cotes en centimètres"
+        if fixtures:
+            # Le trait fin du mobilier n'est expliqué nulle part sur cette page : la planche
+            # d'élévation a sa légende, le plan n'en a pas.
+            caption += " — mobilier posé au sol en trait fin"
+        pdf.drawCentredString(MARGIN + plan_width / 2, MARGIN + FOOTER_HEIGHT - 16, caption)
 
     _draw_title_block(
         pdf,
@@ -842,8 +1030,18 @@ def _draw_cover_header(pdf: pdfcanvas.Canvas, project_name: str, generated_at: d
     return PAGE_HEIGHT - MARGIN - 60
 
 
-COVER_COLUMNS = (0.0, 300.0, 400.0, 470.0, 560.0, 660.0)
-COVER_HEADINGS = ("Pièce", "Surface au sol", "Sous plafond", "Murs", "Ouvertures", "Planches")
+COVER_COLUMNS = (0.0, 300.0, 400.0, 470.0, 560.0, 640.0, 740.0)
+COVER_HEADINGS = (
+    "Pièce",
+    "Surface au sol",
+    "Sous plafond",
+    "Murs",
+    "Ouvertures",
+    # Les deux ancrages réunis (spec §10, amendement A7) : cette colonne ne comptait que ce qui
+    # est adossé à une face, et une pièce entièrement meublée au sol s'y annonçait vide.
+    "Meubles",
+    "Planches",
+)
 
 
 def _draw_cover_table_header(pdf: pdfcanvas.Canvas, cursor: float) -> float:
@@ -886,6 +1084,7 @@ def _draw_cover(
     cursor = _draw_cover_table_header(pdf, cursor)
     total_area = 0.0
     total_openings = 0
+    total_furniture = 0
 
     for room, elevations, first_sheet, last_sheet in schedule:
         if cursor < MARGIN + FOOTER_HEIGHT:
@@ -894,8 +1093,10 @@ def _draw_cover(
 
         area = _floor_area_m2(room)
         openings = sum(len(elevation.openings) for elevation in elevations)
+        furniture = furniture_count(room)
         total_area += area
         total_openings += openings
+        total_furniture += furniture
 
         pdf.setFont("Helvetica", 9)
         pdf.setFillColor(WALL_COLOR)
@@ -907,8 +1108,9 @@ def _draw_cover(
         )
         pdf.drawRightString(MARGIN + COVER_COLUMNS[3], cursor, str(len(elevations)))
         pdf.drawRightString(MARGIN + COVER_COLUMNS[4], cursor, str(openings))
+        pdf.drawRightString(MARGIN + COVER_COLUMNS[5], cursor, str(furniture))
         pdf.drawRightString(
-            MARGIN + COVER_COLUMNS[5],
+            MARGIN + COVER_COLUMNS[6],
             cursor,
             str(first_sheet) if first_sheet == last_sheet else f"{first_sheet} à {last_sheet}",
         )
@@ -924,6 +1126,7 @@ def _draw_cover(
     pdf.drawString(MARGIN, cursor, f"{len(schedule)} pièce(s)")
     pdf.drawRightString(MARGIN + COVER_COLUMNS[1], cursor, f"{total_area:.2f} m²")
     pdf.drawRightString(MARGIN + COVER_COLUMNS[4], cursor, str(total_openings))
+    pdf.drawRightString(MARGIN + COVER_COLUMNS[5], cursor, str(total_furniture))
 
     pdf.setFont("Helvetica-Oblique", 8)
     pdf.setFillColor(DIMENSION_COLOR)

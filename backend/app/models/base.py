@@ -109,10 +109,18 @@ class ElementKind(StrEnum):
 
 
 class LayingPattern(StrEnum):
-    """Motif de pose d'un revêtement (`docs/spec-complete.md` §1)."""
+    """Motif de pose d'un revêtement (`docs/spec-complete.md` §1).
+
+    Aucune colonne n'est typée sur cette énumération : le motif vit dans le blob `Face.covering`,
+    colonne JSON assumée par §8 (cas 1). Y ajouter une valeur ne demande donc **aucune migration**
+    (spec §10, amendement A8) — mais change le schéma OpenAPI publié.
+    """
 
     STRAIGHT = "straight"
     STAGGERED = "staggered"
+    # Ajoutée par l'amendement A8 : `WASTE_RATIO_BY_PATTERN` provisionnait sa chute de 12 % depuis
+    # la vague 2, et aucune saisie ne pouvait produire le motif.
+    DIAGONAL = "diagonal"
     CHEVRON = "chevron"
     HERRINGBONE = "herringbone"
 

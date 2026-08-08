@@ -13,9 +13,11 @@ une dépendance de lecture de PDF pour ce seul usage.
 """
 
 import base64
+import json
 import re
 import zlib
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,9 +25,12 @@ import pytest
 from app.geometry.scene import build_scene_graph
 from app.services.export_pdf import (
     SCALE_DENOMINATORS,
+    _free_footprint,
     _normalised_scale,
+    furniture_count,
     render_project_pdf,
     room_elevations,
+    room_floor_fixtures,
     wall_elevations,
 )
 
@@ -44,6 +49,13 @@ MEUBLE = {
     "id": 3, "kind": "furniture", "x_offset_cm": 250, "y_offset_cm": 0,
     "width_cm": 90, "height_cm": 85, "depth_cm": 60, "furniture_type_id": 7,
 }
+# Mobilier posé au sol, ancré à la pièce (spec §10, amendements A4 et A7) : il n'est adossé à
+# aucune face, donc aucune planche d'élévation ne le montre.
+BAIGNOIRE = {
+    "id": 4, "kind": "furniture", "pos_x_cm": 200, "pos_y_cm": 150,
+    "width_cm": 170, "height_cm": 55, "depth_cm": 75,
+    "rotation_deg": 0, "furniture_type_id": 8, "furniture_name": "Baignoire",
+}
 
 
 def _wall(
@@ -60,10 +72,16 @@ def _wall(
     }
 
 
-def _room(faces: list[dict[str, Any]], polygon: list[list[float]] | None = None) -> dict[str, Any]:
+def _room(
+    faces: list[dict[str, Any]],
+    polygon: list[list[float]] | None = None,
+    elements: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "id": 1, "name": "Salle de bains", "wall_thickness_cm": 10, "ceiling_height_cm": 250,
         "polygon": CARRE if polygon is None else polygon, "faces": faces,
+        # Même clé que `app/api/scene.py::project_to_plain_dict` réserve au mobilier libre.
+        "elements": elements or [],
     }
 
 
@@ -77,6 +95,13 @@ def _carre_room() -> dict[str, Any]:
             _wall(4, "D", (0, 300, 0, 0)),
         ]
     )
+
+
+def _meublee() -> dict[str, Any]:
+    """La pièce de référence, plus une baignoire posée au sol : personne ne l'adosse à un mur."""
+    room = _carre_room()
+    room["elements"] = [BAIGNOIRE]
+    return room
 
 
 def _project(rooms: list[dict[str, Any]], name: str = "Chantier Dupont") -> dict[str, Any]:
@@ -228,6 +253,140 @@ def test_the_elevations_of_the_project_follow_the_rooms() -> None:
     )
 
 
+# --- Mobilier posé au sol (spec §10, amendement A7) ----------------------------------------------
+
+FIXTURE_MOBILIER = (
+    Path(__file__).parent / "geometry" / "fixtures" / "11_mobilier_libre.json"
+)
+
+
+def test_the_floor_fixture_carries_its_centre_its_size_and_its_rotation() -> None:
+    """Le plan coté est le seul endroit du dossier où un meuble libre existe : s'il n'y porte pas
+    son encombrement réel, il n'y sert à rien."""
+    fixture = room_floor_fixtures(_meublee())[0]
+
+    assert fixture.label == "Baignoire"
+    assert (fixture.center, fixture.width_cm, fixture.depth_cm) == ((200.0, 150.0), 170.0, 75.0)
+
+
+def test_the_footprint_is_the_one_the_rest_of_the_project_computes() -> None:
+    """Confrontation directe à la fixture de référence 11, qui fige la convention de rotation
+    partagée par le scene graph et par `services/faces.py::free_element_footprint`.
+
+    Deux calculs d'une même emprise finissent toujours par diverger, et l'écart serait invisible :
+    un meuble tourné à 90° s'imprimerait avec sa largeur et sa profondeur échangées, sans que rien
+    ne signale lequel des deux documents ment.
+    """
+    fixture: dict[str, Any] = json.loads(FIXTURE_MOBILIER.read_text(encoding="utf-8"))
+    elements = fixture["input"]["rooms"][0]["elements"]
+
+    for element in elements:
+        attendu = fixture["expected_footprints"][str(element["id"])]
+
+        assert _free_footprint(element) == pytest.approx(
+            [tuple(corner) for corner in attendu]
+        ), f"emprise du meuble {element['id']}"
+
+
+def test_a_rotated_fixture_does_not_occupy_the_same_footprint_as_a_straight_one() -> None:
+    """Le garde-fou du garde-fou : une convention de rotation ignorée passerait le test précédent
+    si les deux emprises étaient identiques."""
+    droite = _free_footprint({**BAIGNOIRE, "rotation_deg": 0})
+    tournee = _free_footprint({**BAIGNOIRE, "rotation_deg": 90})
+
+    assert max(corner[0] for corner in droite) == pytest.approx(285.0)
+    assert max(corner[0] for corner in tournee) == pytest.approx(237.5)
+
+
+def test_a_fixture_without_a_position_is_ignored_rather_than_placed_at_the_origin() -> None:
+    """L'origine du plan est presque toujours hors de la pièce : y poser un meuble par défaut
+    dessinerait un plan faux sans le dire."""
+    room = _room([], elements=[{**BAIGNOIRE, "pos_x_cm": None, "pos_y_cm": None}])
+
+    assert room_floor_fixtures(room) == []
+
+
+def test_the_floor_fixture_stays_off_the_wall_elevations() -> None:
+    """Une élévation est la vue d'un mur : un îlot de cuisine n'est sur aucun mur, et l'y faire
+    figurer inventerait un adossement (spec §10, A7)."""
+    elevations = room_elevations(_meublee())
+
+    assert [fixture.label for elevation in elevations for fixture in elevation.fixtures] == [
+        "Meuble"
+    ]
+
+
+def test_the_room_count_of_elements_no_longer_ignores_the_floor() -> None:
+    """La colonne « nombre d'éléments » sous-comptait : elle ne parcourait que les faces, et une
+    pièce entièrement meublée au sol s'y annonçait vide."""
+    assert furniture_count(_carre_room()) == 1
+    assert furniture_count(_meublee()) == 2
+
+
+def test_an_opening_is_not_a_piece_of_furniture_in_that_count() -> None:
+    """La fenêtre et la porte de la pièce de référence sont des percements, pas des meubles."""
+    assert furniture_count(_room([_wall(1, "A", (0, 0, 400, 0), [FENETRE, PORTE])])) == 0
+
+
+def test_the_plan_draws_the_floor_fixture_with_its_name_and_its_footprint() -> None:
+    text = _pdf_text(render_project_pdf(_project([_meublee()]), FIXED_DATE))
+
+    assert "Baignoire" in text
+    # L'emprise au sol — largeur x profondeur — et non la hauteur, qui ne se lit pas sur un plan.
+    assert "170 x 75" in text
+    assert "mobilier posé au sol en trait fin" in text
+
+
+def test_the_room_summary_lists_what_is_standing_on_the_floor() -> None:
+    """Le récapitulatif renvoie vers le plan, et non vers une planche : c'est là qu'il se voit."""
+    text = _pdf_text(render_project_pdf(_project([_meublee()]), FIXED_DATE))
+
+    assert "— · Posé au sol" in text
+    assert "1 meuble(s) au sol" in text
+
+
+def test_the_cover_page_counts_the_furniture_of_each_room() -> None:
+    """Deux meubles dans la pièce : celui du mur A et la baignoire posée au sol."""
+    text = _pdf_text(render_project_pdf(_project([_meublee()]), FIXED_DATE))
+
+    assert "Meubles" in text
+    assert furniture_count(_meublee()) == 2
+
+
+def test_a_room_without_floor_fixtures_says_nothing_about_them() -> None:
+    """Le dossier d'une pièce sans mobilier au sol ne change pas : pas de ligne vide, pas de
+    légende inutile."""
+    text = _pdf_text(render_project_pdf(_project([_carre_room()]), FIXED_DATE))
+
+    assert "Posé au sol" not in text
+    assert "mobilier posé au sol en trait fin" not in text
+
+
+# --- Revêtements ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        ("straight", "pose droite"),
+        ("staggered", "pose à coupe de pierre"),
+        ("diagonal", "pose en diagonale"),
+        ("herringbone", "bâton rompu"),
+        ("chevron", "chevron"),
+    ],
+)
+def test_every_laying_pattern_is_written_in_french_on_the_sheet(
+    pattern: str, expected: str
+) -> None:
+    """Les clés de `PATTERN_LABELS` sont les valeurs de `LayingPattern`, et rien d'autre : une
+    pose décalée s'imprimait « staggered » sur un document de chantier, faute de traduction."""
+    room = _room(
+        [_wall(1, "A", (0, 0, 400, 0), covering={"material": "carrelage", "pattern": pattern})]
+    )
+
+    assert expected in _pdf_text(render_project_pdf(_project([room]), FIXED_DATE))
+
+
 # --- Échelle ------------------------------------------------------------------------------------
 
 
@@ -348,6 +507,20 @@ def test_the_cover_area_is_the_one_the_takeoff_will_bill() -> None:
 
     assert nette_m2 == pytest.approx(11.31)
     assert f"{nette_m2:.2f} m²" in text
+    assert "12.00 m²" not in text
+
+
+def test_the_thicker_the_walls_the_more_the_centre_line_area_would_overbill() -> None:
+    """Garde-fou permanent : aucun chemin du dossier ne doit revenir à l'aire du contour saisi.
+
+    Avec des murs de 30 cm l'écart atteint 20 % — 12,00 m² annoncés pour 9,99 m² réels sur une
+    pièce de 400 x 300. À ce niveau ce n'est plus un arrondi, c'est un litige.
+    """
+    epais = {**_carre_room(), "wall_thickness_cm": 30}
+
+    text = _pdf_text(render_project_pdf(_project([epais]), FIXED_DATE))
+
+    assert "9.99 m²" in text
     assert "12.00 m²" not in text
 
 

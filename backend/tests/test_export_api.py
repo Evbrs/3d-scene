@@ -143,6 +143,36 @@ async def test_the_elevation_names_the_furniture_it_draws(
     assert meuble["name"] in _pdf_text(response.content)
 
 
+async def test_the_floor_plan_names_the_furniture_standing_on_the_floor(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Même exigence pour le mobilier **libre**, que seul le plan coté dessine (spec §10, A7).
+
+    Le chargement de l'export ne parcourait que les éléments adossés à une face : un lit ou un
+    îlot, ancré à la pièce (A4), n'atteignait jamais son nom de catalogue et s'imprimait
+    « Meuble » — sur la seule planche du dossier où il apparaît, donc sans rattrapage possible.
+    """
+    await seed_catalog(session)
+    project = (await auth_client.post("/api/projects", json={"name": "Au sol"})).json()
+    room = (
+        await auth_client.post(
+            f"/api/projects/{project['id']}/rooms", json={"name": "Chambre", "polygon": CARRE}
+        )
+    ).json()
+    meuble = (await auth_client.get("/api/furniture-types/lit")).json()
+    posé = await auth_client.post(
+        f"/api/rooms/{room['id']}/elements",
+        json={"kind": "furniture", "furniture_type_id": meuble["id"], "pos_x_cm": 200,
+              "pos_y_cm": 150, "width_cm": 140, "height_cm": 50, "depth_cm": 190},
+    )
+    assert posé.status_code == 201, posé.text
+
+    response = await auth_client.get(f"/api/projects/{project['id']}/exports/pdf/direct")
+
+    assert response.status_code == 200
+    assert meuble["name"] in _pdf_text(response.content)
+
+
 async def test_the_export_requires_authentication(client: AsyncClient) -> None:
     assert (await client.get("/api/projects/1/exports/pdf/direct")).status_code == 401
     assert (await client.post("/api/projects/1/exports/pdf")).status_code == 401
@@ -291,9 +321,13 @@ async def test_the_pdf_is_never_rendered_on_the_event_loop(
     seen: list[str] = []
     original = export_pdf.render_project_pdf
 
-    def spy(project: dict[str, object], generated_at: datetime) -> bytes:
+    # `watermark` est décidé par le serveur d'après le palier (`app/services/quotas.py`) et passé
+    # nommément : sans ce paramètre, l'espion refuse l'appel réel de la route.
+    def spy(
+        project: dict[str, object], generated_at: datetime, *, watermark: bool = False
+    ) -> bytes:
         seen.append(threading.current_thread().name)
-        return original(project, generated_at)
+        return original(project, generated_at, watermark=watermark)
 
     monkeypatch.setattr("app.api.exports.render_project_pdf", spy)
     response = await auth_client.get(f"/api/projects/{project_id}/exports/pdf/direct")

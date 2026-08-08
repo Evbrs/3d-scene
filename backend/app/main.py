@@ -22,14 +22,17 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.admin import mount_admin
 from app.api.auth import router as auth_router
 from app.api.conflicts import stale_data_handler
+from app.api.deps import PaywallError, paywall_handler
 from app.api.exports import router as exports_router
 from app.api.furniture import router as furniture_router
 from app.api.health import router as health_router
+from app.api.intelligence import router as intelligence_router
 from app.api.organizations import router as organizations_router
 from app.api.plan import router as plan_router
 from app.api.quotes import router as quotes_router
 from app.api.scene import router as scene_router
 from app.api.share import router as share_router
+from app.api.subscriptions import router as subscriptions_router
 from app.api.takeoff import router as takeoff_router
 from app.core.compression import SelectiveGZipMiddleware
 from app.core.config import Settings, get_settings
@@ -126,6 +129,11 @@ def create_app() -> FastAPI:
     # version détectée par la base — remonter en 500, là où le client attend un 409 rejouable.
     app.add_exception_handler(StaleDataError, stale_data_handler)
 
+    # Refus commerciaux (402 / 429). Comme le 409 du plan, leur corps est machine-lisible et il
+    # est produit en un seul endroit : le frontend doit pouvoir proposer le bon palier sans
+    # analyser une phrase en français, qui changerait à la première reformulation.
+    app.add_exception_handler(PaywallError, paywall_handler)
+
     app.include_router(health_router)
     app.include_router(probes_router)
     app.include_router(auth_router)
@@ -136,7 +144,9 @@ def create_app() -> FastAPI:
     app.include_router(share_router)
     app.include_router(exports_router)
     app.include_router(takeoff_router)
+    app.include_router(intelligence_router)
     app.include_router(quotes_router)
+    app.include_router(subscriptions_router)
     mount_admin(app)
     return app
 

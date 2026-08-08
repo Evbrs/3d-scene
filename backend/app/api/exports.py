@@ -8,6 +8,7 @@ repli si le broker est indisponible.
 
 import time
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 from fastapi.concurrency import run_in_threadpool
@@ -18,6 +19,7 @@ from app.api.permissions import get_owned_project
 from app.core.celery_app import celery_app
 from app.models.base import utcnow
 from app.services.export_pdf import render_project_pdf
+from app.services.quotas import register_pdf_export
 from app.tasks.exports import _load_project, export_path, export_project_pdf
 
 router = APIRouter(prefix="/api", tags=["export"])
@@ -142,7 +144,23 @@ async def export_pdf_synchronously(
     Celery, comme l'exige `docs/spec-complete.md` §8 (cas 2). `measure=true` ajoute la durée de
     génération dans un en-tête, pour comparer sans instrumenter le client.
     """
-    await get_owned_project(session, project_id, current_user)
+    owned = await get_owned_project(session, project_id, current_user)
+
+    # Deuxième mur de paiement (`docs/strategie-produit.md` §4) : le fichier **se télécharge
+    # vraiment**, filigrané ou non. Bloquer le téléchargement ferait douter du résultat ; le livrer
+    # filigrané le prouve. Aucun paramètre de requête ne touche à cette décision — un filigrane
+    # apposé côté navigateur se retire en dix secondes par la console.
+    watermark = await register_pdf_export(
+        session,
+        organization_id=owned.organization_id,
+        # Rien à dédupliquer sur ce chemin : chaque appel est un export réellement produit et
+        # renvoyé dans la requête. L'identifiant de tâche du chemin asynchrone n'a pas
+        # d'équivalent ici, d'où la clé tirée au sort.
+        idempotency_key=f"exports_pdf:direct:{uuid4()}",
+        project_id=project_id,
+        user_id=current_user.id,
+    )
+    await session.commit()
 
     started = time.perf_counter()
     project = await _load_project(project_id)
@@ -151,7 +169,7 @@ async def export_pdf_synchronously(
     # ReportLab est purement synchrone : rendu sur la boucle d'événements, il fige toutes les
     # autres requêtes le temps de la génération — la mesure de ce même endpoint donne des
     # centaines de millisecondes sur un plan de quelques pièces.
-    content = await run_in_threadpool(render_project_pdf, project, utcnow())
+    content = await run_in_threadpool(render_project_pdf, project, utcnow(), watermark=watermark)
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     headers = {"Content-Disposition": f'inline; filename="projet-{project_id}.pdf"'}

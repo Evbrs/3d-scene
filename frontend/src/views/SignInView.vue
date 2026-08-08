@@ -101,7 +101,9 @@ function toggleMode(): void {
         >
         <label for="consentement">
           J'accepte les
-          <RouterLink to="/conditions">conditions générales d'utilisation</RouterLink>.
+          <RouterLink to="/legal/cgu">conditions générales d'utilisation</RouterLink>
+          et j'ai pris connaissance de la
+          <RouterLink to="/legal/confidentialite">politique de confidentialité</RouterLink>.
         </label>
       </div>
 
@@ -145,6 +147,26 @@ function toggleMode(): void {
         Mot de passe oublié ?
       </RouterLink>
     </p>
+
+    <!-- Le premier écran du produit est aussi le seul que tout visiteur voit : les documents
+         légaux y sont atteignables sans compte, y compris en mode connexion. -->
+    <nav
+      class="legal"
+      aria-label="Informations légales"
+    >
+      <RouterLink to="/legal/mentions">
+        Mentions légales
+      </RouterLink>
+      <RouterLink to="/legal/cgu">
+        CGU
+      </RouterLink>
+      <RouterLink to="/legal/cgv">
+        CGV
+      </RouterLink>
+      <RouterLink to="/legal/confidentialite">
+        Confidentialité
+      </RouterLink>
+    </nav>
   </section>
 </template>
 
@@ -193,5 +215,15 @@ function toggleMode(): void {
   flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1.25rem;
+}
+
+.legal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--bordure);
+  font-size: 0.9rem;
 }
 </style>

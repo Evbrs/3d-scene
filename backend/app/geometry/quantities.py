@@ -33,8 +33,10 @@ from app.geometry.vectors import offset_polygon, signed_area
 WALL = "wall"
 FLOOR = "floor"
 CEILING = "ceiling"
-# Les seules natures de nœud qui portent un revêtement, donc les seules à métrer. Le mobilier et
-# les menuiseries ne se chiffrent pas au m² : ils se comptent à l'unité, et c'est un autre métier.
+FURNITURE = "furniture"
+# Les seules natures de nœud qui portent un revêtement, donc les seules à métrer au m². Le
+# mobilier et les menuiseries ne se chiffrent pas à la surface : ils se comptent à l'unité, et
+# c'est un autre métier — voir `_furniture_lines` et l'amendement A7.
 COVERED_KINDS = (WALL, FLOOR, CEILING)
 
 CM_PER_M = 100.0
@@ -59,9 +61,8 @@ WASTE_RATIO_BY_PATTERN: dict[str, float] = {
     # Pose décalée (« à coupe de pierre ») : le demi-module de décalage coupe les DEUX abouts
     # d'un rang sur deux, là où une pose droite n'en coupe qu'un.
     "staggered": 0.10,
-    # Pose en diagonale : les quatre rives sont coupées au lieu de deux. Ce motif n'est pas
-    # encore une valeur de `LayingPattern` (`app/models/base.py`) ; l'entrée est là pour que le
-    # jour où il y entre, le métré n'ait pas à changer.
+    # Pose en diagonale : les quatre rives sont coupées au lieu de deux (`LayingPattern.DIAGONAL`,
+    # spec §10, amendement A8).
     "diagonal": 0.12,
     "chevron": 0.15,
     # Bâton rompu : même trame à 45° que le chevron, mêmes coupes de rive.
@@ -449,6 +450,113 @@ def _group_coverings(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return grouped
 
 
+# --- Mobilier (spec §10, amendement A7) ----------------------------------------------------------
+
+# Clé de regroupement d'une fourniture : la recette **et** le gabarit. Deux lits de la même recette
+# mais de 140 et de 160 ne s'achètent pas ensemble, et les fondre ferait perdre la seule dimension
+# qu'un fournisseur demande.
+FurnitureKey = tuple[str, float, float, float]
+
+
+def _furniture_key(node: dict[str, Any]) -> FurnitureKey | None:
+    """Recette et gabarit d'un nœud de mobilier, ou `None` s'il est inexploitable.
+
+    `size_cm` est écrit par `geometry/scene.py::_furniture_node` et vaut toujours trois valeurs ;
+    on le revérifie parce que le métré est aussi alimenté par des fixtures écrites à la main, où
+    une faute de saisie ne doit pas sortir en `IndexError` — donc en 500 sur la route du métré.
+    """
+    size = node.get("size_cm") or []
+    if len(size) != 3:
+        return None
+    width, height, depth = (float(value) for value in size)
+    return (str(node.get("furniture_type_slug") or ""), width, height, depth)
+
+
+def _group_furniture(entries: Iterable[tuple[FurnitureKey, int, int]]) -> list[dict[str, Any]]:
+    """`(clé, unités posées au sol, unités adossées)` regroupées en lignes de fourniture.
+
+    Une seule fonction pour la pièce et pour le projet : les deux regroupent la même chose, à ceci
+    près que la première part de nœuds et la seconde de lignes déjà comptées. Les faire diverger
+    ferait deux totaux pour un seul décompte.
+
+    **Aucun montant n'apparaît ici** (spec §10, A7) : une recette de `FurnitureType` n'a pas de
+    prix, et le barème de A2 ne connaît que des ouvrages au m², au ml et à l'unité de pose. Le
+    mobilier est une information de dossier tant qu'un tarif par recette n'existe pas.
+    """
+    totals: dict[FurnitureKey, list[int]] = {}
+    for key, free, on_face in entries:
+        counts = totals.setdefault(key, [0, 0])
+        counts[0] += free
+        counts[1] += on_face
+
+    lines = []
+    for key in sorted(totals):
+        slug, width, height, depth = key
+        free, on_face = totals[key]
+        lines.append(
+            {
+                "furniture_type_slug": slug,
+                "width_cm": width,
+                "height_cm": height,
+                "depth_cm": depth,
+                # Emprise au sol d'**une** unité : c'est elle qui dit si le meuble tient dans la
+                # pièce, et elle ne se déduit pas des dimensions sans savoir laquelle est la
+                # hauteur.
+                "footprint_m2": _to_m2(width * depth),
+                "count": free + on_face,
+                # Le décompte est scindé parce que les deux poses ne se lisent pas au même endroit
+                # du dossier : ce qui est adossé figure sur une planche d'élévation, ce qui est
+                # posé au sol n'apparaît que sur le plan coté de la pièce.
+                "free_count": free,
+                "on_face_count": on_face,
+            }
+        )
+    return lines
+
+
+def _furniture_lines(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Le mobilier d'une pièce, compté à l'unité depuis les nœuds de sa scène.
+
+    Un meuble dont la recette manque au catalogue ne produit aucun nœud (`_furniture_node` rend
+    `None`) : il n'a déjà ni forme 3D ni élévation, et il n'est pas davantage compté. Ce n'est pas
+    un silence du métré, c'est un catalogue incomplet — et le signaler ici demanderait au métré de
+    connaître le plan, dont il est justement indépendant.
+
+    Les menuiseries (`kind == "joinery"`) sont exclues : elles sont déjà comptées comme percements
+    par `opening_count`, `door_count` et `window_count`, et les reprendre ici les compterait deux
+    fois dans un même document.
+    """
+    entries: list[tuple[FurnitureKey, int, int]] = []
+    for node in nodes:
+        if node.get("kind") != FURNITURE:
+            continue
+        key = _furniture_key(node)
+        if key is None:
+            continue
+        # `face_label` nul est la marque d'un meuble libre, posée par `_furniture_node`.
+        free = node.get("face_label") is None
+        entries.append((key, 1 if free else 0, 0 if free else 1))
+    return _group_furniture(entries)
+
+
+def _merged_furniture(rooms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Le mobilier de tout le projet, à partir des lignes déjà établies pièce par pièce."""
+    return _group_furniture(
+        (
+            (
+                line["furniture_type_slug"],
+                line["width_cm"],
+                line["height_cm"],
+                line["depth_cm"],
+            ),
+            line["free_count"],
+            line["on_face_count"],
+        )
+        for room in rooms
+        for line in room.get("furniture") or []
+    )
+
+
 # --- Faces ---------------------------------------------------------------------------------------
 
 
@@ -596,8 +704,10 @@ def _net_contour(
 def _room_takeoff(room: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     label = f"« {room.get('name')} » (id {room.get('id')})"
-    nodes = [node for node in room.get("nodes") or [] if node["kind"] in COVERED_KINDS]
+    scene_nodes = list(room.get("nodes") or [])
+    nodes = [node for node in scene_nodes if node["kind"] in COVERED_KINDS]
     walls = [node for node in nodes if node["kind"] == WALL]
+    furniture = _furniture_lines(scene_nodes)
 
     height_cm = float(room["ceiling_height_cm"])
     thickness_cm = float(room["wall_thickness_cm"])
@@ -648,6 +758,12 @@ def _room_takeoff(room: dict[str, Any]) -> dict[str, Any]:
         "window_count": sum(face["window_count"] for face in wall_faces),
         "faces": faces,
         "coverings": _group_coverings(faces),
+        # Mobilier compté à l'unité (spec §10, amendement A7). La clé est **absente** quand la
+        # pièce n'en porte aucun : son absence vaut zéro et jamais « inconnu », la présence de
+        # mobilier étant toujours établissable depuis la scène — contrairement à une surface nette
+        # manquante. C'est aussi ce qui laisse intact le contrat que décrivent exhaustivement les
+        # fixtures de référence 07 à 10, qui font foi (`CLAUDE.md`).
+        **({"furniture": furniture} if furniture else {}),
         "warnings": warnings,
     }
 
@@ -657,6 +773,7 @@ def _room_takeoff(room: dict[str, Any]) -> dict[str, Any]:
 
 def _project_totals(rooms: list[dict[str, Any]]) -> dict[str, Any]:
     faces = [face for room in rooms for face in room["faces"]]
+    furniture = _merged_furniture(rooms)
     return {
         "room_count": len(rooms),
         "floor_area_m2": _rounded_sum(room["floor_area_m2"] for room in rooms),
@@ -674,6 +791,8 @@ def _project_totals(rooms: list[dict[str, Any]]) -> dict[str, Any]:
         "door_count": sum(room["door_count"] for room in rooms),
         "window_count": sum(room["window_count"] for room in rooms),
         "coverings": _group_coverings(faces),
+        # Même règle d'absence que sur la pièce, et pour la même raison.
+        **({"furniture": furniture} if furniture else {}),
     }
 
 
@@ -699,10 +818,17 @@ def build_takeoff(scene_graph: dict[str, Any]) -> dict[str, Any]:
                            opening_count, door_count, window_count, skirting_deduction_ml,
                            material, tiling
                coverings[] regroupement des `tiling` par référence de revêtement
+               furniture[] furniture_type_slug, width_cm, height_cm, depth_cm, footprint_m2,
+                           count, free_count, on_face_count — clé absente si la pièce n'en porte
+                           aucun
                warnings[]
     totals     mêmes agrégats, plus room_count, sur tout le projet
     warnings[] tous les avertissements des pièces, à plat
     ```
+
+    `furniture` compte le mobilier **à l'unité** et ne porte aucun montant (spec §10, amendement
+    A7) : une recette de `FurnitureType` n'a pas de prix. Son absence vaut zéro, jamais
+    « inconnu ».
 
     `tiling` vaut `None` quand le revêtement ne déclare pas de dimensions d'unité ; sinon il porte
     `pattern`, `unit_width_cm`, `unit_height_cm`, `unit_area_m2`, `waste_ratio`,

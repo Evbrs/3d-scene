@@ -1,0 +1,59 @@
+{
+  "description": "Cuisine où l'îlot ne laisse que 40 cm entre lui et la rangée de meubles bas. Un seul passage doit être signalé, et bloquant : les deux réduits de 75 cm laissés entre la rangée et les murs latéraux ne sont pas des passages, ce sont des culs-de-sac.",
+  "reasoning": [
+    "Même pièce de référence : 400 x 300, plafond 250, murs de 10, nu intérieur [[5,5],[395,5],[395,295],[5,295]].",
+    "RANGÉE DE MEUBLES BAS, libre, 240 de large sur 60 de profondeur, centre (200,35), rotation 0 : emprise x de 80 à 320, y de 5 à 65. Elle est plaquée contre le nu intérieur du mur A (y = 5).",
+    "ÎLOT, libre, 180 x 90, centre (200,150), rotation 0 : emprise x de 110 à 290, y de 105 à 195.",
+    "PASSAGE CENTRAL. La rangée s'arrête à y = 65, l'îlot commence à y = 105 : il reste 40 cm. Le seuil courant est 90, il manque donc 50 cm ; et 40 < 60, seuil en deçà duquel on ne passe plus avec une caisse à outils, donc la sévérité est BLOQUANTE. Le portillon est pris au milieu de la zone où les deux se font face — les projections sur x se recouvrent de 110 à 290, milieu 200 — et à mi-distance en y, soit (200,85). Les deux sondes à 60 cm de part et d'autre, perpendiculairement au portillon, tombent en (140,85) et (260,85) : toutes deux dans la pièce, donc l'interstice débouche bien des deux côtés. C'est un passage.",
+    "RÉDUIT DE GAUCHE. La rangée commence à x = 80, le mur D est au nu intérieur x = 5 : 75 cm. C'est sous le seuil de 90, et pourtant ce n'est PAS un passage. Les deux emprises se font face sur y de 5 à 65 (la rangée ne dépasse pas y = 65), milieu 35 ; le portillon est donc (42.5,35), et les sondes tombent en (42.5,95) — dans la pièce — et (42.5,-25) — hors de la pièce, derrière le mur A. Bouché d'un côté : c'est un cul-de-sac de 75 sur 60, pas un couloir. Aucune anomalie.",
+    "RÉDUIT DE DROITE. Symétrique : la rangée s'arrête à x = 320, le mur B est à x = 395, soit 75 cm, portillon (357.5,35), sonde (357.5,-25) hors de la pièce. Aucune anomalie.",
+    "AUTRES COUPLES. Îlot / mur D : 110 - 5 = 105. Îlot / mur B : 395 - 290 = 105. Îlot / mur C : 295 - 195 = 100. Îlot / mur A : 105 - 5 = 100. Rangée / mur C : 295 - 65 = 230. Rangée / mur A : contact. Murs opposés : 290 et 390. Tous au-dessus de 90.",
+    "PORTE, mur D, x_offset 100, largeur 90, hauteur 204 : percement u de 100 à 190 sur un mur de 300 de long. Marges d'angle 100 et 110, toutes deux au-dessus de 10. Largeur 90 >= 83.",
+    "DÉBATTEMENT. Charnières sur le nu intérieur du mur D, à u = 100 et u = 190, soit (5,200) et (5,110) — le mur D va de (0,300) vers (0,0), sa rentrante est (1,0). Les deux quarts de disque de rayon 90 tiennent dans x de 5 à 95 et y de 110 à 200. L'îlot commence à x = 110 : dégagé de 15 cm. La rangée s'arrête à y = 65 : dégagée de 45 cm. Les murs A, B et C sont hors d'atteinte. Les deux ferrages sont libres, donc ni anomalie ni conseil.",
+    "PIÈCE : plafond 250 >= 220 ; une ouverture, donc pas de pièce aveugle ; « Cuisine » n'est PAS une pièce humide au sens de ce moteur — aucune recette du catalogue ne décrit un évier, la règle y produirait un faux positif systématique.",
+    "TOTAL ATTENDU : 1 bloquant (circulation.passage_etroit, 40 cm mesurés pour 90 attendus, entre « meuble-bas » et « ilot »), 0 avertissement, 0 conseil."
+  ],
+  "input": {
+    "project_id": 13,
+    "furniture_types": {
+      "1": {"id": 1, "slug": "porte-battante", "color_slots": ["panneau"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "panneau"}]},
+      "5": {"id": 5, "slug": "meuble-bas", "color_slots": ["caisson"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "caisson"}]},
+      "6": {"id": 6, "slug": "ilot", "color_slots": ["caisson"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "caisson"}]}
+    },
+    "rooms": [
+      {
+        "id": 130,
+        "name": "Cuisine",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {"id": 1301, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0, "covering": {}, "elements": []},
+          {"id": 1302, "label": "B", "kind": "wall", "start_x_cm": 400, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 300, "covering": {}, "elements": []},
+          {"id": 1303, "label": "C", "kind": "wall", "start_x_cm": 400, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 300, "covering": {}, "elements": []},
+          {"id": 1304, "label": "D", "kind": "wall", "start_x_cm": 0, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 0, "covering": {}, "elements": [
+            {"id": 13040, "kind": "door_hinged", "x_offset_cm": 100, "y_offset_cm": 0, "pos_x_cm": null, "pos_y_cm": null, "width_cm": 90, "height_cm": 204, "depth_cm": 4, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]}
+        ],
+        "elements": [
+          {"id": 13050, "kind": "furniture", "x_offset_cm": 0, "y_offset_cm": 0, "pos_x_cm": 200, "pos_y_cm": 35, "width_cm": 240, "height_cm": 88, "depth_cm": 60, "rotation_deg": 0, "furniture_type_id": 5, "colors": {}, "variant_params": {}},
+          {"id": 13051, "kind": "furniture", "x_offset_cm": 0, "y_offset_cm": 0, "pos_x_cm": 200, "pos_y_cm": 150, "width_cm": 180, "height_cm": 90, "depth_cm": 90, "rotation_deg": 0, "furniture_type_id": 6, "colors": {}, "variant_params": {}}
+        ]
+      }
+    ]
+  },
+  "expected_inner_contour": [[5, 5], [395, 5], [395, 295], [5, 295]],
+  "expected_counts": {"bloquant": 1, "avertissement": 0, "conseil": 0},
+  "expected_warning_count": 0,
+  "expected_anomalies": [
+    {
+      "rule_id": "circulation.passage_etroit",
+      "severity": "bloquant",
+      "room_id": 130,
+      "element_ids": [13050, 13051],
+      "measured_cm": 40.0,
+      "threshold_cm": 90.0,
+      "focus": [200.0, 85.0]
+    }
+  ]
+}

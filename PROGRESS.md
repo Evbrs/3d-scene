@@ -766,3 +766,92 @@ pointeur réels de Konva. C'est le premier point de la reprise (`docs/REPRISE.md
 
 Suite : **787 tests backend** (786 sur SQLite, le 787ᵉ ne s'exécutant que sur PostgreSQL), **368
 tests frontend** sur 23 fichiers, `ruff`, `mypy --strict`, `eslint` et `npm run build` verts.
+
+## Vagues 4 et 5 — combler les manques, socle légal, intelligence du plan, offres et quotas · **fait**
+
+Quatre lots en parallèle, propriété exclusive des fichiers, puis assemblage. Les deux vagues ont
+été menées ensemble : la vague 5 ne dépendait de la vague 4 que par des fichiers disjoints, et la
+vague 6 (offres) a été anticipée parce que le filigrane d'aperçu, livré et sans appelant depuis la
+vague 2, n'attendait plus qu'un modèle d'offre en base.
+
+| Lot | Contenu |
+|---|---|
+| **V45-L1** | **Ce que les vagues précédentes avaient signalé sans le traiter.** Le métré compte le mobilier à l'unité, regroupé par recette **et** par gabarit — deux lits de 140 et 160 ne s'achètent pas ensemble — avec les deux ancrages comptés séparément parce qu'ils se lisent à deux endroits différents du dossier. Le plan coté dessine le mobilier posé au sol (emprise réelle après rotation, même convention que `services/faces.py`), la page de garde gagne sa colonne « Meubles », et une ligne du tableau récapitulatif est **réservée** au mobilier au sol : c'est la seule que le dossier ne rattrape nulle part ailleurs. `LayingPattern.DIAGONAL` ajoutée. Garde-fou **exécutable** sur `floor_area_cm2` : la valeur est empoisonnée dans le scene graph et la sortie doit rester rigoureusement identique, sur `build_takeoff` comme sur `build_quote_lines`. |
+| **V45-L2** | **Un compte se reprend, s'exporte et se ferme.** Table `UserToken`, six routes de cycle de vie, export RGPD au périmètre exact des routes de l'API. Quatre documents légaux, `docs/rgpd.md` (le registre pour l'exploitant, la page publique étant celui de l'utilisateur), projet de démonstration entièrement chiffrable, cinq gabarits de pièces, titre d'onglet reconstruit à chaque navigation. |
+| **V45-L3** | **Le moteur d'intelligence du plan**, algorithmique et local (`strategie-produit.md` §3.8). 13 règles à identifiant stable, sévérité, message français disant QUOI et DE COMBIEN, et entités concernées. Seuils sourcés dans une dataclass gelée et **republiés dans le rapport**. Calepinage avancé prolongeant `geometry/quantities.py` sans le réécrire. Aménagement sous contraintes dures avec score explicite en quatre termes pondérés et publiés. Trois routes, quatre fixtures calculées à la main. |
+| **V45-L4** | **La frontière technique entre gratuit et payant.** Quatre tables, grille §4 semée sans destruction, incrément atomique, idempotence par clé, période de facturation et non mois calendaire. Trois murs (devis, filigrane, deuxième chantier), essai Pro sans carte au premier geste monétisé, déclassement en lecture seule qui ne supprime rien. Pages `/tarifs` et `/abonnement` alimentées par `plan_catalog` — leurs specs servent un catalogue **inventé** et exigent qu'il s'affiche, ce qui fait échouer toute valeur recopiée dans le composant. |
+
+**Deux défauts trouvés par les agents dans du code qui n'était pas le leur, et corrigés.**
+`PATTERN_LABELS` (export_pdf.py) contenait une clé `brick` qui n'a jamais été une valeur de
+`LayingPattern` et n'avait pas `staggered` : une pose à coupe de pierre s'imprimait « staggered »
+en toutes lettres sur un document de chantier. `User.token_version` était **inerte depuis la
+vague 1** — aucun jeton ne le portait, aucune dépendance ne le lisait — donc « fermer toutes les
+sessions » était un bouton qui ne faisait rien.
+
+**Une prémisse de contrat corrigée.** La question ouverte n° 1 annonçait « une ligne d'énumération
+**plus une migration** » pour `diagonal`. Vérification faite, il n'y a pas de migration à écrire :
+`LayingPattern` n'est le type d'aucune colonne, le motif vit dans le blob JSON `Face.covering`
+(§8, cas 1). L'amendement A8 corrige explicitement la question plutôt que de la refermer en
+silence.
+
+### Assemblage — ce que la réconciliation a corrigé
+
+- **Le mobilier posé au sol s'imprimait « Meuble ».** `tasks/exports.py::_load_project` ne
+  parcourait `room["faces"][*]["elements"]` que pour affecter les noms de catalogue. Un meuble
+  **libre** (A4) n'y passe jamais : sur un export réel, un lit s'imprimait « Meuble » sur le plan
+  coté — et le plan coté est, depuis A7, la **seule** planche du dossier qui le dessine, donc la
+  seule où l'information manquait sans rattrapage possible. Corrigé en parcourant les deux
+  ancrages. Le test a été rejoué contre le code fautif, où il échoue bien.
+- **`diagonal` existait côté serveur et restait insaisissable côté client.** L'union
+  `LayingPattern` de `frontend/src/api/types.ts` ne la portait pas — aucun utilisateur ne pouvait
+  choisir la pose — et `viewer/textures.ts` retombait silencieusement sur la cellule de pose
+  droite : repli propre, mais visuellement faux. La cellule diagonale ajoutée est **exacte** pour
+  une unité carrée (la trame tournée de 45° se referme sur un carré de côté `unité × √2` portant
+  deux carreaux) et documentée comme approchée sinon, aucune période alignée sur les axes
+  n'existant pour une unité rectangulaire.
+- **Le panneau d'inspection n'était branché sur rien.** Livré présentationnel par construction — il
+  doit pouvoir vivre dans l'éditeur 2D comme dans le viewer 3D, qui ne recentrent pas la même
+  chose — il n'était monté nulle part. Types déplacés dans `api/types.ts` (avec le reste du
+  contrat de l'API), trois appels ajoutés au client HTTP, `centerOn` exposé par `PlanCanvas`, et
+  panneau monté dans l'éditeur avec changement de pièce, sélection des éléments visés et
+  recentrage. L'analyse n'est **pas** relancée à chaque écriture : elle relit le scene graph
+  complet, et un rapport plus vieux que le plan le dit au lieu de se taire.
+- **`ai_runs` était posée, affichée sur la page compte et jamais incrémentée.** Un compteur qui
+  affiche toujours zéro est un compteur qui ment. Les trois routes d'intelligence l'écrivent
+  désormais, avec une clé d'idempotence portant la **version du plan** : les moteurs étant
+  déterministes, deux appels sur la même version sont une seule analyse, et rafraîchir un panneau
+  ne gonfle pas la métrique. `shared_view_hits` n'a **pas** été branché, délibérément — compter
+  chaque ouverture d'un lien public transforme une lecture non authentifiée en écriture, donc en
+  levier de charge pour un visiteur anonyme.
+- **Le contrat a été mis à jour pour de bon.** Trois des quatre agents ne pouvaient pas éditer
+  `docs/spec-complete.md` sans entrer en collision et ont remonté leurs décisions dans leur
+  rapport. L'assemblage les a écrites : **A9** (cycle de vie du compte et RGPD), **A10** (le projet
+  de démonstration est un objet de produit), **A11** (offres, quotas et compteurs), **A12** (le
+  moteur d'intelligence). Sept questions ouvertes ajoutées (n° 9 à 15), dont les quatre qui
+  bloquent réellement une mise en ligne : pas de transport de courriel, documents légaux non
+  relus, durées de conservation annoncées et non appliquées, pas d'encaissement.
+- Instantané OpenAPI régénéré et diffé à vide (**58 chemins, 79 opérations**, 11 nouveaux chemins).
+- **Une seule tête Alembic** (`f3d47c8a1b56`) : les deux nouvelles révisions ont été chaînées l'une
+  derrière l'autre par leurs auteurs plutôt que branchées en parallèle sur `e7b3c05f1a62`.
+  `upgrade` → `downgrade base` → `upgrade` rejoué sans résidu, `alembic check` sans dérive aux deux
+  extrémités.
+- **Les onze nouvelles routes authentifiées sont classées** dans `tests/test_permissions_locataire.py` :
+  49 routes confrontées à un membre d'une autre organisation, plus 4 collections et 12 routes
+  globales. `GET /api/plans` est publique et hors des deux garde-fous : une grille de prix
+  n'appartient à aucun locataire.
+
+**Le piège de cette vague, et pourquoi il n'a rien cassé.** L'agent des offres branche un quota sur
+la création de projet, alors que des centaines de tests créent librement des projets sans
+abonnement. Le comportement par défaut est explicite et documenté (A11) : une organisation sans
+ligne d'abonnement est au palier Découverte, plafonné à un chantier actif ; le deuxième chantier
+ouvre l'essai Pro de 14 jours sans carte, la garde réévalue, et le geste aboutit. C'est le
+comportement voulu du produit, pas un contournement pour les tests — et c'est ce qui fait que
+l'essai se déclenche au premier geste monétisé et jamais à l'inscription.
+
+**Ce qui n'a toujours pas été vérifié** : aucun pixel. Les vagues 4 et 5 ajoutent sept vues et un
+panneau d'inspection, tous écrits sans navigateur. Le point est ouvert depuis la vague 3 et la
+liste s'allonge (`docs/REPRISE.md`).
+
+Suite : **1113 tests backend** (1112 sur SQLite dont 1 ignoré, le 1113ᵉ ne s'exécutant que sur
+PostgreSQL), **428 tests frontend** sur 31 fichiers, `ruff`, `mypy --strict`, `eslint` et
+`npm run build` verts.

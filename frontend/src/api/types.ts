@@ -11,7 +11,7 @@ export type FaceKind = 'wall' | 'floor' | 'ceiling'
 
 export type ElementKind = 'door_hinged' | 'door_sliding' | 'window' | 'furniture'
 
-export type LayingPattern = 'straight' | 'staggered' | 'chevron' | 'herringbone'
+export type LayingPattern = 'straight' | 'staggered' | 'chevron' | 'herringbone' | 'diagonal'
 
 export interface Covering {
   color?: string | null
@@ -224,4 +224,92 @@ export interface SceneGraph {
   units: 'cm'
   project_id: number
   rooms: SceneRoom[]
+}
+
+// --- Intelligence du plan (`docs/strategie-produit.md` §3.8) -------------------------------------
+
+/** Les trois sévérités du moteur de règles (`app/intelligence/rules.py::Severity`). */
+export type Severity = 'bloquant' | 'avertissement' | 'conseil'
+
+/**
+ * Une anomalie de conformité, telle que le serveur la publie.
+ *
+ * `focus` est un point du **plan** en centimètres, dans le repère de `Room.polygon` : c'est ce qui
+ * permet de recentrer l'éditeur 2D sans conversion. Nul quand l'anomalie ne désigne aucun endroit
+ * précis — une pièce sans ouverture n'a pas de coordonnée.
+ */
+export interface Anomaly {
+  rule_id: string
+  title: string
+  severity: Severity
+  message: string
+  room_id: number | null
+  room_name: string | null
+  face_labels: string[]
+  element_ids: number[]
+  focus: [number, number] | null
+  measured_cm: number | null
+  threshold_cm: number | null
+}
+
+export interface RoomInspection {
+  room_id: number | null
+  name: string | null
+  counts: Record<string, number>
+}
+
+/**
+ * Le rapport complet.
+ *
+ * `thresholds` republie les seuils appliqués : « passage insuffisant » sans son barème n'est pas
+ * vérifiable, et le mode accessible change la réponse.
+ */
+export interface InspectionReport {
+  project_id: number | null
+  thresholds: Record<string, number | boolean>
+  rooms: RoomInspection[]
+  anomalies: Anomaly[]
+  counts: Record<string, number>
+  warnings: string[]
+}
+
+/**
+ * Calepinage optimisé. Le détail par face reste libre côté serveur — sa forme dépend du
+ * revêtement, une face peinte n'en a pas — donc ici aussi.
+ */
+export interface LayingPlan {
+  project_id: number | null
+  rooms: Record<string, unknown>[]
+  cuts_saved: number
+}
+
+/**
+ * Un meuble proposé, prêt à être créé tel quel : `pos_x_cm` / `pos_y_cm` sont le **centre** de
+ * l'emprise dans le repère du plan, la convention du mobilier libre (spec §10, amendement A4).
+ */
+export interface LayoutItem {
+  slug: string
+  width_cm: number
+  depth_cm: number
+  height_cm: number
+  pos_x_cm: number
+  pos_y_cm: number
+  rotation_deg: number
+  against_face_label: string | null
+  clearance_cm: number
+}
+
+export interface LayoutProposal {
+  rank: number
+  score: number
+  breakdown: Record<string, number>
+  items: LayoutItem[]
+}
+
+export interface LayoutProposals {
+  room_id: number | null
+  program: string
+  weights: Record<string, number>
+  proposals: LayoutProposal[]
+  warnings: string[]
 }

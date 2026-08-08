@@ -6,23 +6,44 @@
     <title>Éditeur de plan de rénovation</title>
     <meta
       name="description"
-      content="Éditeur de plan de rénovation : dessin du plan en 2D (pièces, ouvertures, revêtements) et visualisation 3D du résultat."
+      content="Du relevé de la pièce au devis chiffré par mur : plan 2D, vue 3D, élévations cotées et lien à envoyer au client. Pour les artisans du second œuvre."
     />
+    <meta name="theme-color" content="#1f2933" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 
-    <!-- Aperçu des liens partagés : sans ces balises, un plan envoyé par SMS ou messagerie
-         s'affiche comme une carte vide. Le titre et la description restent génériques — les
-         renseigner par projet exposerait le nom du chantier d'un client à quiconque reçoit le
-         lien, et relève de toute façon du rendu côté application. -->
+    <!-- Aperçu des liens partagés.
+
+         Ce que ces balises font, et ce qu'elles ne font pas — la distinction est ce qui évite de
+         croire le problème réglé :
+
+         - le **titre de l'onglet** est repris à chaque navigation par `src/router.ts`, et la vue
+           d'un plan partagé y écrit le nom du chantier. C'est ce qui rend un signet et un
+           historique lisibles ;
+         - la **carte d'aperçu** d'un lien envoyé par SMS ou messagerie est construite par un robot
+           qui n'exécute aucun JavaScript. Il ne lit donc que les balises statiques ci-dessous, et
+           aucune manipulation du DOM après chargement ne l'atteindra. Un aperçu portant le nom du
+           chantier suppose d'injecter les balises côté serveur pour `/partage/:token` — dans
+           nginx ou dans une route dédiée du backend. Ce n'est pas fait, et ça ne l'est nulle part
+           dans le dépôt aujourd'hui.
+
+         Le titre et la description restent donc génériques, et c'est aussi ce qu'on veut : les
+         renseigner par projet exposerait le nom du chantier d'un client — typiquement
+         « Rénovation Dupont, 12 rue des Lilas » — à quiconque reçoit ou intercepte le lien. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Éditeur de plan de rénovation" />
     <meta property="og:locale" content="fr_FR" />
-    <meta property="og:title" content="Éditeur de plan de rénovation" />
+    <meta property="og:title" content="Plan de rénovation partagé" />
     <meta
       property="og:description"
-      content="Plan 2D et visualisation 3D d'un projet de rénovation."
+      content="Plan 2D, vue 3D et chiffrage d'un projet de rénovation, préparés par votre artisan."
     />
     <meta name="twitter:card" content="summary" />
+
+    <!-- Pas d'`og:image` : la balise exige une URL absolue, donc le domaine public, inconnu à la
+         compilation. Une valeur relative est ignorée par la plupart des robots, et une valeur en
+         dur pointant sur un domaine d'exemple afficherait une image cassée dans chaque message
+         envoyé — pire qu'une carte sans image. À poser en même temps que l'injection côté
+         serveur décrite ci-dessus. -->
 
     <!-- Ni `og:url` ni `<link rel="canonical">` ici : les deux exigent une URL absolue, donc le
          domaine public, inconnu à la compilation. Une canonique statique pointée sur la racine

@@ -27,7 +27,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, RequireFeature, SessionDep
 from app.api.permissions import (
     accessible_organization_ids,
     get_owned_face,
@@ -47,6 +47,7 @@ from app.models.billing import (
     QuoteLine,
     QuoteStatus,
 )
+from app.models.billing_plan import UsageMetric
 from app.models.organization import Organization, OrganizationRole
 from app.models.plan import Face, Project, Room
 from app.schemas.quote import (
@@ -78,6 +79,8 @@ from app.services.pricing import (
     line_total_cents,
     vat_buckets_from,
 )
+from app.services.quotas import record_first_quote_delay, record_usage, resolve_entitlement
+from app.services.seed_plans import FEATURE_QUOTES
 from app.services.seed_prices import (
     DEFAULT_PRICE_ITEMS,
     find_default_price_book,
@@ -85,6 +88,10 @@ from app.services.seed_prices import (
 )
 
 router = APIRouter(prefix="/api", tags=["devis"])
+
+# Premier mur de paiement : le devis chiffré. Le métré, lui, reste ouvert — c'est ce qui prouve
+# que le calcul est juste avant qu'on demande de payer (`docs/strategie-produit.md` §4).
+REQUIRE_QUOTES = RequireFeature(FEATURE_QUOTES)
 
 _NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ressource introuvable")
 
@@ -561,8 +568,17 @@ async def create_quote(
 
     Les lignes sont écrites en dur — libellé, prix unitaire, taux — et ne référencent le barème
     que par un code, à titre de trace. Modifier le barème après coup ne les touche pas.
+
+    C'est le **premier mur de paiement** (`docs/strategie-produit.md` §4) : le métré, lui, reste
+    entièrement lisible sans abonnement (`GET /api/projects/{id}/takeoff`), et c'est délibéré — on
+    prouve que le calcul est juste avant de demander de payer. Le premier devis demandé ouvre
+    l'essai de 14 jours sans carte.
     """
     project = await get_owned_project(session, project_id, current_user, OrganizationRole.EDITOR)
+    entitlement = await REQUIRE_QUOTES(session, project.organization_id)
+    # Métrique produit, posée une seule fois par entreprise : combien de temps s'écoule entre
+    # l'ouverture du compte et le premier devis établi. Son historique ne se reconstitue pas.
+    await record_first_quote_delay(session, entitlement, user_id=current_user.id)
 
     book = await _resolve_price_book(session, project, payload.price_book_id)
     references = await _references_for(session, book.id or 0)
@@ -776,6 +792,20 @@ async def issue_quote(quote_id: int, session: SessionDep, current_user: CurrentU
     if quote.valid_until is None:
         quote.valid_until = now + timedelta(days=DEFAULT_VALIDITY_DAYS)
     quote.updated_at = now
+
+    # Consommation comptée à l'émission et non à la création : un brouillon abandonné ne consomme
+    # rien, exactement comme il ne consomme aucun numéro. La clé d'idempotence est l'identifiant du
+    # devis, qui ne s'émet qu'une fois — un double clic ne compte donc pas deux fois.
+    entitlement = await resolve_entitlement(session, quote.organization_id)
+    await record_usage(
+        session,
+        organization_id=quote.organization_id,
+        metric=UsageMetric.QUOTES_ISSUED,
+        idempotency_key=f"{UsageMetric.QUOTES_ISSUED}:{quote_id}",
+        period_start=entitlement.period_start,
+        user_id=current_user.id,
+        metadata={"quote_id": quote_id, "project_id": quote.project_id},
+    )
 
     _apply_totals(quote, await _quote_lines(session, quote_id))
     await session.commit()

@@ -77,6 +77,25 @@ describe('cellules de calepinage', () => {
     expect(herringbone.widthCm).toBe(herringbone.heightCm)
     expect(herringbone.tiles).toHaveLength(4)
   })
+
+  it('pose en diagonale : la trame droite sur la pointe, cellule exacte en unité carrée', () => {
+    const cell = patternCell('diagonal', 30, 30)
+    // La trame tournée de 45° se referme sur un carré de côté 30 √2 portant deux carreaux : c'est
+    // la période exacte, pas un cadrage arbitraire.
+    expect(cell.widthCm).toBeCloseTo(30 * Math.SQRT2, 6)
+    expect(cell.widthCm).toBe(cell.heightCm)
+    expect(cell.tiles).toHaveLength(2)
+    expect(cell.tiles.map((unit) => unit.angleRad)).toEqual([Math.PI / 4, Math.PI / 4])
+    expect(cell.tiles.map((unit) => unit.xCm)).toEqual([0, cell.widthCm / 2])
+  })
+
+  it('ne retombe plus silencieusement sur la pose droite pour un motif oblique', () => {
+    // Avant l'ajout de `diagonal`, la valeur publiée par le backend s'affichait comme une pose
+    // droite : visuellement faux, et muet.
+    expect(patternCell('diagonal', 30, 30).tiles.map((unit) => unit.angleRad)).not.toEqual(
+      patternCell('straight', 30, 30).tiles.map((unit) => unit.angleRad),
+    )
+  })
 })
 
 describe('dimensionnement par la face réelle', () => {

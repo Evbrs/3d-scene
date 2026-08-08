@@ -1,0 +1,57 @@
+{
+  "description": "Entrée où une armoire est posée pile devant la porte : les deux ferrages possibles percutent, donc le plan est irréalisable et pas seulement inconfortable. C'est la fixture qui vérifie qu'on ne se prononce qu'après avoir essayé les deux mains de la porte.",
+  "reasoning": [
+    "Pièce de référence : 400 x 300, plafond 250, murs de 10, nu intérieur [[5,5],[395,5],[395,295],[5,295]].",
+    "PORTE, mur A, x_offset 150, largeur 90 : percement u de 150 à 240. Marges d'angle 150 et 160, largeur 90 : rien à signaler sur la porte elle-même.",
+    "DÉBATTEMENTS. Le mur A va de (0,0) à (400,0), sa rentrante est (0,1), et le nu intérieur est la droite y = 5. Ferrage gauche : charnière (150,5), rayon 90, l'arc balaie de la direction (1,0) à la direction (0,1). Ferrage droit : charnière (240,5), l'arc balaie de (-1,0) à (0,1). Les deux quarts de disque sont contenus dans x de 150 à 240 et y de 5 à 95.",
+    "ARMOIRE libre 120 x 60, centre (200,35), rotation 0 : emprise x de 140 à 260, y de 5 à 65. Elle est plaquée contre le mur A et couvre entièrement la largeur du percement.",
+    "FERRAGE GAUCHE. Le point (180,35) est à 42.4 de la charnière (150,5) — moins que le rayon 90 — et sous un angle de 45 degrés, donc dans le quart balayé de 0 à 90 degrés. Il est aussi à l'intérieur de l'armoire (x entre 140 et 260, y entre 5 et 65). L'arc percute.",
+    "FERRAGE DROIT. Le point (210,35) est à 42.4 de la charnière (240,5) sous un angle de 135 degrés, donc dans le quart balayé de 180 à 90 degrés. Il est également dans l'armoire. L'arc percute aussi.",
+    "Aucun des deux ferrages ne passe : l'anomalie est BLOQUANTE, et son message doit dire « quelle que soit la main de la porte ». Si un seul avait été bloqué, la bonne réponse aurait été un conseil de sens d'ouverture, pas une anomalie.",
+    "CIRCULATIONS. Armoire / mur A : contact, donc pas un passage. Armoire / mur D : 140 - 5 = 135. Armoire / mur B : 395 - 260 = 135. Armoire / mur C : 295 - 65 = 230. Murs opposés : 290 et 390. Rien sous 90 : aucune anomalie de circulation, ce qui laisse l'anomalie de débattement seule et lisible.",
+    "L'armoire tient dans le contour : x de 140 à 260 et y de 5 à 65 sont dans [5,395] x [5,295], le côté arrière tombant exactement sur le nu intérieur (tolérance de contact).",
+    "PIÈCE : plafond 250 >= 220 ; une ouverture ; « Entrée » n'est pas une pièce humide.",
+    "TOTAL ATTENDU : 1 bloquant (porte.debattement_impossible, mur A, vantail de 90), 0 avertissement, 0 conseil."
+  ],
+  "input": {
+    "project_id": 14,
+    "furniture_types": {
+      "1": {"id": 1, "slug": "porte-battante", "color_slots": ["panneau"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "panneau"}]},
+      "7": {"id": 7, "slug": "armoire", "color_slots": ["caisson"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "caisson"}]}
+    },
+    "rooms": [
+      {
+        "id": 140,
+        "name": "Entrée",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {"id": 1401, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0, "covering": {}, "elements": [
+            {"id": 14010, "kind": "door_hinged", "x_offset_cm": 150, "y_offset_cm": 0, "pos_x_cm": null, "pos_y_cm": null, "width_cm": 90, "height_cm": 204, "depth_cm": 4, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]},
+          {"id": 1402, "label": "B", "kind": "wall", "start_x_cm": 400, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 300, "covering": {}, "elements": []},
+          {"id": 1403, "label": "C", "kind": "wall", "start_x_cm": 400, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 300, "covering": {}, "elements": []},
+          {"id": 1404, "label": "D", "kind": "wall", "start_x_cm": 0, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 0, "covering": {}, "elements": []}
+        ],
+        "elements": [
+          {"id": 14050, "kind": "furniture", "x_offset_cm": 0, "y_offset_cm": 0, "pos_x_cm": 200, "pos_y_cm": 35, "width_cm": 120, "height_cm": 200, "depth_cm": 60, "rotation_deg": 0, "furniture_type_id": 7, "colors": {}, "variant_params": {}}
+        ]
+      }
+    ]
+  },
+  "expected_inner_contour": [[5, 5], [395, 5], [395, 295], [5, 295]],
+  "expected_counts": {"bloquant": 1, "avertissement": 0, "conseil": 0},
+  "expected_warning_count": 0,
+  "expected_anomalies": [
+    {
+      "rule_id": "porte.debattement_impossible",
+      "severity": "bloquant",
+      "room_id": 140,
+      "face_labels": ["A"],
+      "element_ids": [14010],
+      "measured_cm": 90.0,
+      "threshold_cm": null
+    }
+  ]
+}

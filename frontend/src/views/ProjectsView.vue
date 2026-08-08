@@ -1,9 +1,17 @@
 <script setup lang="ts">
+/**
+ * Liste des chantiers.
+ *
+ * L'état vide n'est plus la chaîne « Aucun projet pour le moment » : c'est l'accueil complet
+ * (`OnboardingView`), avec le chantier de démonstration et les gabarits de pièces. Un espace vide
+ * est le seul écran que **tout** utilisateur voit, et c'est celui d'où personne ne repartait.
+ */
 import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import * as api from '@/api/client'
 import type { ProjectSummary } from '@/api/types'
+import OnboardingView from '@/views/OnboardingView.vue'
 
 const projects = ref<ProjectSummary[]>([])
 const total = ref(0)
@@ -65,6 +73,18 @@ onMounted(refresh)
   <section>
     <h1>Mes projets</h1>
 
+    <p class="raccourcis">
+      <RouterLink to="/compte">
+        Mon compte
+      </RouterLink>
+      <RouterLink to="/legal/cgu">
+        Conditions générales
+      </RouterLink>
+      <RouterLink to="/legal/confidentialite">
+        Confidentialité
+      </RouterLink>
+    </p>
+
     <form
       class="creation"
       @submit.prevent="create"
@@ -99,9 +119,10 @@ onMounted(refresh)
     <p v-if="loading">
       Chargement des projets…
     </p>
-    <p v-else-if="projects.length === 0">
-      Aucun projet pour le moment.
-    </p>
+    <OnboardingView
+      v-else-if="projects.length === 0"
+      @cree="refresh"
+    />
 
     <div
       v-else
@@ -157,6 +178,17 @@ onMounted(refresh)
 </template>
 
 <style scoped>
+/* Les liens de compte et les documents légaux doivent être atteignables depuis un écran
+   authentifié : l'en-tête n'en porte aucun, et une page de confidentialité qu'on ne trouve pas
+   n'informe personne (RGPD art. 13). */
+.raccourcis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+}
+
 .creation {
   display: flex;
   align-items: flex-end;

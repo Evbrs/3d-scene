@@ -1,6 +1,122 @@
 {
   "components": {
     "schemas": {
+      "AccountDeletion": {
+        "description": "Confirmation d'une fermeture de compte.\n\nLe mot de passe est exigé pour la même raison qu'au changement : un jeton volé ne doit pas\nsuffire à détruire les chantiers d'une entreprise.",
+        "properties": {
+          "current_password": {
+            "maxLength": 128,
+            "title": "Current Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password"
+        ],
+        "title": "AccountDeletion",
+        "type": "object"
+      },
+      "AnomalyRead": {
+        "additionalProperties": false,
+        "description": "Une anomalie de conformité.\n\n`focus` est un point du **plan** en centimètres, dans le repère de `Room.polygon` : c'est ce\nqui permet au panneau de recentrer l'éditeur 2D sans conversion. `null` quand l'anomalie ne\ndésigne aucun endroit précis — une pièce sans ouverture n'a pas de coordonnée.",
+        "properties": {
+          "element_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Element Ids",
+            "type": "array"
+          },
+          "face_labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Face Labels",
+            "type": "array"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "measured_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Cm"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "room_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Name"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "threshold_cm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Cm"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "title",
+          "severity",
+          "message"
+        ],
+        "title": "AnomalyRead",
+        "type": "object"
+      },
       "BatchOperationResult": {
         "description": "Résultat d'une opération, rendu au **même rang** que l'opération d'origine.\n\nLes identifiants sont répétés hors de l'objet rendu : après une suppression il n'y a plus\nd'objet, et c'est pourtant là que le client a le plus besoin de savoir ce qui a disparu.",
         "properties": {
@@ -424,6 +540,24 @@
           "room_id"
         ],
         "title": "DeleteRoomOp",
+        "type": "object"
+      },
+      "DemoProjectCreated": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "name"
+        ],
+        "title": "DemoProjectCreated",
         "type": "object"
       },
       "ElementBase": {
@@ -1223,6 +1357,81 @@
         "title": "ElementUpdate",
         "type": "object"
       },
+      "EntitlementRead": {
+        "description": "Ce à quoi une organisation a droit, et ce qu'elle a consommé.\n\nC'est la réponse qui alimente la page compte **et** les boîtes de dialogue des murs de\npaiement : une seule route, pour que les deux ne puissent pas afficher deux vérités.",
+        "properties": {
+          "archived_project_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Archived Project Ids",
+            "type": "array"
+          },
+          "organization_id": {
+            "title": "Organization Id",
+            "type": "integer"
+          },
+          "period_end": {
+            "format": "date-time",
+            "title": "Period End",
+            "type": "string"
+          },
+          "period_start": {
+            "format": "date-time",
+            "title": "Period Start",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanRead"
+          },
+          "subscription": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trial_available": {
+            "title": "Trial Available",
+            "type": "boolean"
+          },
+          "trial_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Ends At"
+          },
+          "usage": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRead"
+            },
+            "title": "Usage",
+            "type": "array"
+          }
+        },
+        "required": [
+          "organization_id",
+          "plan",
+          "subscription",
+          "period_start",
+          "period_end",
+          "trial_available",
+          "trial_ends_at",
+          "usage",
+          "archived_project_ids"
+        ],
+        "title": "EntitlementRead",
+        "type": "object"
+      },
       "ExportAccepted": {
         "description": "Réponse du chemin asynchrone : la requête HTTP rend la main immédiatement.",
         "properties": {
@@ -1857,6 +2066,65 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "InspectionRead": {
+        "additionalProperties": false,
+        "description": "Le rapport complet.\n\n`thresholds` republie les seuils appliqués : un rapport qui annonce « passage insuffisant »\nsans dire par rapport à quoi n'est pas vérifiable, et le mode accessible change la réponse.",
+        "properties": {
+          "anomalies": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyRead"
+            },
+            "title": "Anomalies",
+            "type": "array"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/components/schemas/RoomInspectionRead"
+            },
+            "title": "Rooms",
+            "type": "array"
+          },
+          "thresholds": {
+            "additionalProperties": true,
+            "title": "Thresholds",
+            "type": "object"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "thresholds",
+          "rooms",
+          "anomalies",
+          "counts",
+          "warnings"
+        ],
+        "title": "InspectionRead",
+        "type": "object"
+      },
       "InvitationAccept": {
         "additionalProperties": false,
         "properties": {
@@ -1998,15 +2266,229 @@
         "type": "object"
       },
       "LayingPattern": {
-        "description": "Motif de pose d'un revêtement (`docs/spec-complete.md` §1).",
+        "description": "Motif de pose d'un revêtement (`docs/spec-complete.md` §1).\n\nAucune colonne n'est typée sur cette énumération : le motif vit dans le blob `Face.covering`,\ncolonne JSON assumée par §8 (cas 1). Y ajouter une valeur ne demande donc **aucune migration**\n(spec §10, amendement A8) — mais change le schéma OpenAPI publié.",
         "enum": [
           "straight",
           "staggered",
+          "diagonal",
           "chevron",
           "herringbone"
         ],
         "title": "LayingPattern",
         "type": "string"
+      },
+      "LayingPlanRead": {
+        "additionalProperties": false,
+        "description": "Enveloppe du calepinage optimisé.\n\nLe détail par face reste un dictionnaire libre, pour la même raison que le métré : sa forme\ndépend du revêtement, une face peinte n'a pas de calepinage du tout, et un `Union` de variantes\nalourdirait le schéma sans rien apporter au client. Ce qui est typé, c'est ce qui se lit :\n`cuts_saved` est le chiffre que l'artisan compare.",
+        "properties": {
+          "cuts_saved": {
+            "title": "Cuts Saved",
+            "type": "integer"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "rooms": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rooms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rooms",
+          "cuts_saved"
+        ],
+        "title": "LayingPlanRead",
+        "type": "object"
+      },
+      "LayoutItemRead": {
+        "additionalProperties": false,
+        "description": "Un meuble proposé, prêt à être créé tel quel.\n\n`pos_x_cm` / `pos_y_cm` sont le **centre** de l'emprise dans le repère du plan, la convention\ndu mobilier libre (`docs/spec-complete.md` §10, amendement A4). Le client n'a donc aucune\nconversion à faire pour transformer une proposition en éléments réels.",
+        "properties": {
+          "against_face_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Against Face Label"
+          },
+          "clearance_cm": {
+            "title": "Clearance Cm",
+            "type": "number"
+          },
+          "depth_cm": {
+            "title": "Depth Cm",
+            "type": "number"
+          },
+          "height_cm": {
+            "title": "Height Cm",
+            "type": "number"
+          },
+          "pos_x_cm": {
+            "title": "Pos X Cm",
+            "type": "number"
+          },
+          "pos_y_cm": {
+            "title": "Pos Y Cm",
+            "type": "number"
+          },
+          "rotation_deg": {
+            "title": "Rotation Deg",
+            "type": "number"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "width_cm": {
+            "title": "Width Cm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "slug",
+          "width_cm",
+          "depth_cm",
+          "height_cm",
+          "pos_x_cm",
+          "pos_y_cm",
+          "rotation_deg",
+          "clearance_cm"
+        ],
+        "title": "LayoutItemRead",
+        "type": "object"
+      },
+      "LayoutProposalRead": {
+        "additionalProperties": false,
+        "description": "Une implantation valide, avec le détail de sa note.\n\n`breakdown` n'est pas de la décoration : sans lui, le classement est une boîte noire et\nl'utilisateur n'a aucun moyen de comprendre pourquoi la deuxième proposition perd.",
+        "properties": {
+          "breakdown": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Breakdown",
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LayoutItemRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rank",
+          "score",
+          "breakdown",
+          "items"
+        ],
+        "title": "LayoutProposalRead",
+        "type": "object"
+      },
+      "LayoutProposalsRead": {
+        "additionalProperties": false,
+        "properties": {
+          "program": {
+            "title": "Program",
+            "type": "string"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/LayoutProposalRead"
+            },
+            "title": "Proposals",
+            "type": "array"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "weights": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Weights",
+            "type": "object"
+          }
+        },
+        "required": [
+          "program",
+          "weights",
+          "proposals",
+          "warnings"
+        ],
+        "title": "LayoutProposalsRead",
+        "type": "object"
+      },
+      "LayoutRequest": {
+        "additionalProperties": false,
+        "description": "Ce qu'un client peut demander. Rien d'autre : `extra=\"forbid\"`.\n\nAucun seuil n'entre par le corps de la requête. Les rendre pilotables par le client\ntransformerait un contrôle métier en paramètre d'affichage, et il suffirait de demander un\nseuil de 10 cm pour qu'un plan invivable devienne conforme.",
+        "properties": {
+          "accessible": {
+            "default": false,
+            "title": "Accessible",
+            "type": "boolean"
+          },
+          "count": {
+            "default": 3,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "program": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z_]{1,40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program"
+          }
+        },
+        "title": "LayoutRequest",
+        "type": "object"
       },
       "MemberRead": {
         "description": "Une ligne de la liste des membres.\n\nL'adresse e-mail est jointe depuis le compte : sans elle, la liste n'affiche que des\nidentifiants numériques, et personne ne sait qui retirer.",
@@ -2698,6 +3180,212 @@
         ],
         "title": "PartPrimitive",
         "type": "string"
+      },
+      "PasswordChange": {
+        "description": "Changement de mot de passe par quelqu'un qui connaît l'actuel.",
+        "properties": {
+          "current_password": {
+            "maxLength": 128,
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 128,
+            "minLength": 12,
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordChange",
+        "type": "object"
+      },
+      "PasswordForgot": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "PasswordForgot",
+        "type": "object"
+      },
+      "PasswordReset": {
+        "properties": {
+          "new_password": {
+            "maxLength": 128,
+            "minLength": 12,
+            "title": "New Password",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "PasswordReset",
+        "type": "object"
+      },
+      "PasswordResetAccepted": {
+        "description": "Réponse d'une demande de réinitialisation, identique que l'adresse existe ou non.\n\nMême raisonnement que `RegistrationAccepted` : un 404 pour une adresse inconnue et un 202 pour\nune adresse inscrite formeraient un oracle d'énumération parfait, et l'inscription est déjà\nprotégée contre ça — laisser une seconde porte ouverte annulerait la première.\n\n`reset_token` n'est renseigné **qu'en développement**, et pour la même raison que\n`TokenPair.refresh_token` : aucun service d'acheminement de messages n'existe encore dans le\ndépôt, et la suite de tests comme `curl` doivent pouvoir aller au bout du parcours. En\nproduction le champ est nul, et **il faut un transport de courriel avant la mise en ligne** —\nc'est écrit ici parce que c'est ici qu'on l'oublierait.",
+        "properties": {
+          "detail": {
+            "default": "Si cette adresse correspond à un compte, un lien de réinitialisation vient d'être envoyé. Il est valable une heure.",
+            "title": "Detail",
+            "type": "string"
+          },
+          "reset_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reset Token"
+          }
+        },
+        "title": "PasswordResetAccepted",
+        "type": "object"
+      },
+      "PasswordResetDone": {
+        "properties": {
+          "detail": {
+            "default": "Mot de passe mis à jour. Toutes les sessions ouvertes ont été fermées : reconnectez-vous.",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "title": "PasswordResetDone",
+        "type": "object"
+      },
+      "PlanCatalogRead": {
+        "description": "La grille complète, libellés compris.\n\nLes libellés accompagnent le catalogue au lieu de vivre côté navigateur : une clé ajoutée en\nbase sans libellé s'affiche telle quelle, plutôt que de disparaître silencieusement de la page.",
+        "properties": {
+          "feature_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Feature Labels",
+            "type": "object"
+          },
+          "limit_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Limit Labels",
+            "type": "object"
+          },
+          "metric_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metric Labels",
+            "type": "object"
+          },
+          "plans": {
+            "items": {
+              "$ref": "#/components/schemas/PlanRead"
+            },
+            "title": "Plans",
+            "type": "array"
+          },
+          "trial_days": {
+            "title": "Trial Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plans",
+          "feature_labels",
+          "limit_labels",
+          "metric_labels",
+          "trial_days"
+        ],
+        "title": "PlanCatalogRead",
+        "type": "object"
+      },
+      "PlanRead": {
+        "description": "Un palier de la grille, tel qu'il est en base.\n\n`limits` et `features` sortent bruts : la page tarifs les affiche avec les libellés servis à\ncôté, et n'en code aucun en dur. Une limite déplacée par `UPDATE` change donc la page sans\ndéploiement, ce qui est exactement l'intention de `plan_catalog`.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "features": {
+            "additionalProperties": true,
+            "title": "Features",
+            "type": "object"
+          },
+          "limits": {
+            "additionalProperties": true,
+            "title": "Limits",
+            "type": "object"
+          },
+          "monthly_price_cents": {
+            "title": "Monthly Price Cents",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "seat_price_cents": {
+            "title": "Seat Price Cents",
+            "type": "integer"
+          },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          },
+          "tagline": {
+            "title": "Tagline",
+            "type": "string"
+          },
+          "yearly_price_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yearly Price Cents"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "tagline",
+          "monthly_price_cents",
+          "yearly_price_cents",
+          "seat_price_cents",
+          "currency",
+          "limits",
+          "features",
+          "sort_order"
+        ],
+        "title": "PlanRead",
+        "type": "object"
       },
       "PriceBookCreate": {
         "additionalProperties": false,
@@ -4920,6 +5608,45 @@
         "title": "RoomElementCreate",
         "type": "object"
       },
+      "RoomInspectionRead": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          }
+        },
+        "required": [
+          "counts"
+        ],
+        "title": "RoomInspectionRead",
+        "type": "object"
+      },
       "RoomPatch": {
         "additionalProperties": false,
         "description": "Modification d'une pièce, **sans** verrouillage : la version est portée par le lot.",
@@ -5331,6 +6058,16 @@
         "title": "RoomUpdate",
         "type": "object"
       },
+      "Severity": {
+        "description": "Trois niveaux, et un seul mérite d'arrêter un chantier.",
+        "enum": [
+          "bloquant",
+          "avertissement",
+          "conseil"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
       "SharedViewCreate": {
         "additionalProperties": false,
         "properties": {
@@ -5465,6 +6202,82 @@
         "title": "SharedViewRead",
         "type": "object"
       },
+      "SubscriptionRead": {
+        "properties": {
+          "cancel_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel At"
+          },
+          "current_period_end": {
+            "format": "date-time",
+            "title": "Current Period End",
+            "type": "string"
+          },
+          "current_period_start": {
+            "format": "date-time",
+            "title": "Current Period Start",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "plan_code": {
+            "title": "Plan Code",
+            "type": "string"
+          },
+          "seats": {
+            "title": "Seats",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SubscriptionStatus"
+          },
+          "trial_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Ends At"
+          }
+        },
+        "required": [
+          "id",
+          "plan_code",
+          "status",
+          "current_period_start",
+          "current_period_end",
+          "trial_ends_at",
+          "cancel_at",
+          "seats"
+        ],
+        "title": "SubscriptionRead",
+        "type": "object"
+      },
+      "SubscriptionStatus": {
+        "description": "Cycle de vie d'un abonnement.\n\nFermé à quatre valeurs, contrairement aux codes de plan : ce sont les états que le code sait\ninterpréter, et en inventer un cinquième par `INSERT` rendrait une organisation ni autorisée\nni refusée. C'est donc bien un ENUM en base.\n\n`past_due` reste **autorisé** : couper l'accès d'un client dont le prélèvement a échoué le\nmatin même, en plein chantier, coûte plus cher que les quelques jours de relance. La coupure\nest un passage explicite en `canceled`.",
+        "enum": [
+          "trialing",
+          "active",
+          "past_due",
+          "canceled"
+        ],
+        "title": "SubscriptionStatus",
+        "type": "string"
+      },
       "TakeoffRead": {
         "additionalProperties": false,
         "description": "Enveloppe du métré.\n\nLe contenu reste un dictionnaire libre : sa forme dépend de la nature des faces, et un modèle\nPydantic de six variantes alourdirait le schéma OpenAPI sans rien apporter au client, qui\naiguille sur `kind`. Même arbitrage que pour le scene graph (`app/api/scene.py`).",
@@ -5595,6 +6408,37 @@
           "changes"
         ],
         "title": "UpdateRoomOp",
+        "type": "object"
+      },
+      "UsageRead": {
+        "description": "Consommation d'une métrique sur la période de facturation en cours.\n\n`limit` à `null` veut dire **illimité**, jamais zéro : les confondre afficherait « 3 / 0 » à un\nclient qui n'a aucun plafond.",
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "metric",
+          "value",
+          "limit"
+        ],
+        "title": "UsageRead",
         "type": "object"
       },
       "UserCreate": {
@@ -5848,9 +6692,36 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/auth/demo-project": {
+      "post": {
+        "description": "Sème le chantier de démonstration dans l'organisation par défaut du compte.\n\nRéservée à un espace **vierge** : dès qu'un chantier existe, la route répond 409 et n'écrit\nrien. C'est ce qui permet à l'artisan de supprimer la démonstration pour de bon — un objet\nqu'on ne peut pas jeter est plus irritant qu'un état vide — et c'est aussi le garde-fou contre\ndeux onglets qui la demanderaient en même temps.",
+        "operationId": "create_demo_api_auth_demo_project_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoProjectCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Demo",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/auth/logout": {
       "post": {
-        "description": "Ferme la session en effaçant le cookie de rafraîchissement.\n\nSans cette route, un client ne peut **pas** se déconnecter : le cookie est `httpOnly`, donc\nhors de portée du JavaScript qui a posé le bouton « Se déconnecter ». Les attributs répétés\nici ne sont pas décoratifs — un navigateur n'efface un cookie que si le `Path` correspond.\n\nLa réponse est construite ici plutôt qu'injectée : FastAPI ne reporte les en-têtes du\nparamètre `Response` que sur les retours sérialisés, et le `Set-Cookie` d'effacement serait\nsilencieusement perdu.",
+        "description": "Ferme la session en effaçant le cookie de rafraîchissement.\n\nSans cette route, un client ne peut **pas** se déconnecter : le cookie est `httpOnly`, donc\nhors de portée du JavaScript qui a posé le bouton « Se déconnecter ».\n\nLa réponse est construite ici plutôt qu'injectée : FastAPI ne reporte les en-têtes du\nparamètre `Response` que sur les retours sérialisés, et le `Set-Cookie` d'effacement serait\nsilencieusement perdu.",
         "operationId": "logout_api_auth_logout_post",
         "responses": {
           "204": {
@@ -5864,6 +6735,44 @@
       }
     },
     "/api/auth/me": {
+      "delete": {
+        "description": "Ferme le compte et efface ses données (RGPD art. 17).\n\nRefusé — 409 — quand le compte est le dernier propriétaire accepté d'une organisation qui\ncompte d'autres membres. Ce n'est pas une restriction du droit à l'effacement : c'est le refus\nde détruire les données d'un tiers au passage. `project.owner_id` porte un\n`ON DELETE CASCADE` : partir emporterait tous les chantiers **créés** par ce compte, y compris\nceux que ses collègues éditent tous les jours. Le message nomme les organisations à transmettre\nd'abord.",
+        "operationId": "delete_current_account_api_auth_me_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDeletion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Current Account",
+        "tags": [
+          "auth"
+        ]
+      },
       "get": {
         "operationId": "read_current_user_api_auth_me_get",
         "responses": {
@@ -5884,6 +6793,166 @@
           }
         ],
         "summary": "Read Current User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me/export": {
+      "get": {
+        "description": "Export complet des données du compte, en JSON (RGPD art. 15 et 20).\n\nLe périmètre est exactement celui que les routes de l'API autorisent : les organisations dont\nle compte est membre **accepté**, et ce qu'elles portent. Un export plus large serait une\nfuite entre locataires déguisée en conformité, ce que `tests/test_rgpd.py` vérifie.",
+        "operationId": "export_current_account_api_auth_me_export_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Current Account Api Auth Me Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Export Current Account",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password": {
+      "patch": {
+        "description": "Change le mot de passe d'un compte connecté.\n\nLe mot de passe actuel est exigé : un jeton d'accès volé ne doit pas suffire à verrouiller le\ntitulaire hors de son propre compte. C'est la différence entre une session compromise, dont on\nreprend la main, et un compte perdu.\n\nToutes les sessions sont révoquées, **y compris celle-ci** — d'où la paire de jetons rendue en\nréponse. Sans elle, l'utilisateur serait déconnecté par son propre changement de mot de passe\net croirait à un échec.",
+        "operationId": "change_password_api_auth_password_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Change Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password/forgot": {
+      "post": {
+        "description": "Demande un lien de réinitialisation. Répond toujours 202, avec le même corps.\n\nLimité en débit comme la connexion et l'inscription : sans ça, la route serait le moyen le\nmoins cher d'inonder de messages une adresse qu'on n'a pas, et de périmer en boucle le lien\nqu'un utilisateur légitime vient de recevoir.",
+        "operationId": "forgot_password_api_auth_password_forgot_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordForgot"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forgot Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password/reset": {
+      "post": {
+        "description": "Consomme un jeton de réinitialisation et pose le nouveau mot de passe.\n\nUn jeton inconnu, expiré ou déjà utilisé rend le même 400 : distinguer ces cas dirait à qui\nprésente un jeton au hasard s'il a existé. Le refus n'est pas un oracle d'énumération pour\nautant — le secret est le jeton, pas l'adresse.\n\nLa réinitialisation révoque toutes les sessions : quelqu'un a peut-être pris la main sur le\ncompte, et c'est précisément le moment de le mettre dehors.",
+        "operationId": "reset_password_api_auth_password_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordReset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetDone"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Password",
         "tags": [
           "auth"
         ]
@@ -7289,6 +8358,124 @@
         ]
       }
     },
+    "/api/organizations/{organization_id}/subscription": {
+      "get": {
+        "description": "Droits, abonnement et consommation de l'organisation.\n\nC'est ici, et seulement ici, que le **déclassement** est appliqué : les chantiers excédentaires\npassent en lecture seule (`archived_at`), jamais à la corbeille. Le faire pendant une simple\nlecture de projet ferait écrire n'importe quelle requête ; le faire dans une tâche planifiée\ndemanderait un ordonnanceur que le dépôt n'a pas. La page compte et la boîte de dialogue du\nmur de paiement passent toutes les deux par ici, donc la réconciliation a lieu au moment exact\noù l'utilisateur regarde ce qu'il lui reste.",
+        "operationId": "read_subscription_api_organizations__organization_id__subscription_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Subscription",
+        "tags": [
+          "abonnement"
+        ]
+      }
+    },
+    "/api/organizations/{organization_id}/subscription/trial": {
+      "post": {
+        "description": "Ouvre l'essai de 14 jours du palier Artisan, sans carte.\n\nIdempotente en pratique : un essai déjà consommé ne rend pas une erreur mais l'état courant.\nRenvoyer un 409 obligerait le frontend à traiter un cas qui ne change rien pour l'utilisateur —\nil voulait connaître ses droits, il les obtient.\n\n`editor` suffit : c'est le rôle qui pose le geste monétisé (dessiner, chiffrer, exporter), et\nl'essai est déclenché par ce geste-là. Exiger `admin` ferait échouer l'ouverture automatique au\nmoment précis où elle doit être invisible.",
+        "operationId": "open_trial_api_organizations__organization_id__subscription_trial_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "title": "Organization Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Open Trial",
+        "tags": [
+          "abonnement"
+        ]
+      }
+    },
+    "/api/plans": {
+      "get": {
+        "description": "Grille tarifaire publique, lue en base et non codée en dur.\n\nLe tri est celui de `sort_order`, et le filtre celui de `is_public` : un palier négocié pour un\nréseau particulier existe en base sans figurer sur la page tarifs. Le prix puis le code\ndépartagent deux paliers au même rang, pour qu'un palier ajouté par `INSERT` sans `sort_order`\nn'affiche pas la grille dans l'ordre de lecture de la table.",
+        "operationId": "read_plans_api_plans_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanCatalogRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Plans",
+        "tags": [
+          "abonnement"
+        ]
+      }
+    },
     "/api/price-books/{price_book_id}/items": {
       "get": {
         "operationId": "list_price_items_api_price_books__price_book_id__items_get",
@@ -7553,6 +8740,7 @@
         ]
       },
       "post": {
+        "description": "Crée un chantier, dans la limite du palier.\n\nC'est le troisième mur de paiement (`docs/strategie-produit.md` §4), et le plus lisible :\ncréer un **deuxième** chantier ouvre l'essai de 14 jours sans carte, et c'est seulement une\nfois l'essai consommé que le refus tombe.",
         "operationId": "create_project_api_projects_post",
         "requestBody": {
           "content": {
@@ -8115,6 +9303,114 @@
         ]
       }
     },
+    "/api/projects/{project_id}/inspection": {
+      "get": {
+        "description": "Toutes les anomalies de conformité du projet, triées par sévérité puis par pièce.\n\nChacune porte un identifiant de règle stable, une mesure, le seuil qu'elle enfreint et les\nentités concernées : c'est ce qui permet au panneau d'inspection de recentrer le plan sur le\nproblème plutôt que de laisser l'utilisateur le chercher.\n\n`warnings` recense ce qui **n'a pas pu** être contrôlé — une pièce dont les murs ne se\nreferment pas n'a pas de contour, donc pas de circulation mesurable. Un rapport vide\naccompagné d'un avertissement ne veut pas dire « conforme ».",
+        "operationId": "read_inspection_api_projects__project_id__inspection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Applique les seuils d'un logement accessible (couloir de 120 cm) en plus des seuils d'usage courant.",
+            "in": "query",
+            "name": "accessible",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Applique les seuils d'un logement accessible (couloir de 120 cm) en plus des seuils d'usage courant.",
+              "title": "Accessible",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Inspection",
+        "tags": [
+          "intelligence"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/laying-plan": {
+      "get": {
+        "description": "Calepinage optimisé : sens de pose, position de la première rangée, et plinthes.\n\nLe métré (`GET /takeoff`) donne déjà entières, coupes et chutes pour la pose de référence —\ntrame calée sur le coin, unité dans le sens déclaré. Cette route dit **comment poser** : quel\nsens minimise les coupes, où démarrer la trame pour ne jamais laisser moins d'un tiers d'unité\nen rive, et combien de barres de plinthe commander en réemployant les chutes.\n\nElle n'entre pas dans le devis et ne le contredit pas : `cuts_saved` mesure l'écart avec la\npose de référence du métré, il ne réécrit pas la quantité à commander, qui reste établie sur la\nsurface et le taux de chute.",
+        "operationId": "read_laying_plan_api_projects__project_id__laying_plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayingPlanRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Laying Plan",
+        "tags": [
+          "intelligence"
+        ]
+      }
+    },
     "/api/projects/{project_id}/quotes": {
       "get": {
         "operationId": "list_project_quotes_api_projects__project_id__quotes_get",
@@ -8166,7 +9462,7 @@
         ]
       },
       "post": {
-        "description": "Crée un devis **brouillon** à partir du métré du projet.\n\nSans numéro : il n'est attribué qu'à l'émission, sinon chaque brouillon abandonné ferait un\ntrou dans une suite qui doit être continue.\n\nLes lignes sont écrites en dur — libellé, prix unitaire, taux — et ne référencent le barème\nque par un code, à titre de trace. Modifier le barème après coup ne les touche pas.",
+        "description": "Crée un devis **brouillon** à partir du métré du projet.\n\nSans numéro : il n'est attribué qu'à l'émission, sinon chaque brouillon abandonné ferait un\ntrou dans une suite qui doit être continue.\n\nLes lignes sont écrites en dur — libellé, prix unitaire, taux — et ne référencent le barème\nque par un code, à titre de trace. Modifier le barème après coup ne les touche pas.\n\nC'est le **premier mur de paiement** (`docs/strategie-produit.md` §4) : le métré, lui, reste\nentièrement lisible sans abonnement (`GET /api/projects/{id}/takeoff`), et c'est délibéré — on\nprouve que le calcul est juste avant de demander de payer. Le premier devis demandé ouvre\nl'essai de 14 jours sans carte.",
         "operationId": "create_quote_api_projects__project_id__quotes_post",
         "parameters": [
           {
@@ -9240,6 +10536,64 @@
         "summary": "List Faces",
         "tags": [
           "plan"
+        ]
+      }
+    },
+    "/api/rooms/{room_id}/layouts": {
+      "post": {
+        "description": "Deux ou trois implantations de mobilier **valides** et classées, pour la pièce demandée.\n\nUn `POST` alors que rien n'est écrit : le verbe est celui du corps de requête, pas celui d'un\neffet de bord. Aucune ligne n'est créée — le client choisit une proposition et crée lui-même\nles éléments, parce qu'un moteur qui poserait d'autorité quinze meubles dans le plan d'un\nartisan serait un moteur qu'on désactive au premier essai.\n\nLe rôle exigé est `editor` et non `viewer`, pour deux raisons : la proposition n'a de sens que\npour quelqu'un qui peut ensuite modifier le plan, et c'est le calcul le plus coûteux de l'API —\nl'ouvrir en lecture seule en ferait le levier de charge le moins cher du produit.",
+        "operationId": "propose_room_layouts_api_rooms__room_id__layouts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "room_id",
+            "required": true,
+            "schema": {
+              "title": "Room Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutProposalsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Propose Room Layouts",
+        "tags": [
+          "intelligence"
         ]
       }
     },

@@ -112,6 +112,12 @@ TENANT_ROUTES: tuple[tuple[str, str, dict[str, Any] | None], ...] = (
     # --- Métré, barème, devis et facture ---
     ("GET", "/api/projects/{project_id}/takeoff", None),
     ("GET", "/api/projects/{project_id}/takeoff.csv", None),
+    # --- Intelligence du plan ---
+    # Le rapport d'inspection décrit la géométrie complète d'un chantier — anomalie par anomalie,
+    # avec les identifiants des éléments concernés. Il fuit donc autant qu'un scene graph.
+    ("GET", "/api/projects/{project_id}/inspection", None),
+    ("GET", "/api/projects/{project_id}/laying-plan", None),
+    ("POST", "/api/rooms/{room_id}/layouts", {"count": 1}),
     ("GET", "/api/projects/{project_id}/costings", None),
     ("GET", "/api/projects/{project_id}/quotes", None),
     ("POST", "/api/projects/{project_id}/quotes", {"client_name": "Client détourné"}),
@@ -130,6 +136,11 @@ TENANT_ROUTES: tuple[tuple[str, str, dict[str, Any] | None], ...] = (
     ("GET", "/api/quotes/{quote_id}/pdf", None),
     ("GET", "/api/quotes/{quote_id}/invoice.pdf", None),
     ("GET", "/api/quotes/{quote_id}/invoice.xml", None),
+    # --- Abonnement et consommation ---
+    # Ce que paie un concurrent, ce qu'il consomme et depuis quand : deux routes qui n'exposent
+    # aucun plan mais tout le dossier commercial d'une entreprise.
+    ("GET", "/api/organizations/{organization_id}/subscription", None),
+    ("POST", "/api/organizations/{organization_id}/subscription/trial", None),
 )
 
 # Routes authentifiées ne portant **aucun** identifiant d'objet : le garde-fou de complétude ne
@@ -143,12 +154,21 @@ TENANT_COLLECTIONS: tuple[tuple[str, str], ...] = (
     ("GET", "/api/projects"),
     ("GET", "/api/organizations"),
     ("GET", "/api/quotes"),
+    # Export de portabilité RGPD : il ne porte aucun identifiant et rend en un seul appel tout ce
+    # que le compte peut voir. C'est la route où un filtre oublié coûterait le plus cher. Son test
+    # de non-fuite vit dans `tests/test_rgpd.py`, avec le reste de la conformité.
+    ("GET", "/api/auth/me/export"),
 )
 
 # `GLOBAL_ROUTES` : ne renvoient rien qui appartienne à un locataire. Le catalogue de mobilier est
 # **global** (spec §4) ; les autres n'agissent que sur le compte appelant ou créent un objet neuf.
 GLOBAL_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/auth/me"),
+    # Cycle de vie du compte : ces trois routes n'agissent que sur l'appelant. La démonstration
+    # crée un chantier neuf dans sa propre organisation, comme `POST /api/projects`.
+    ("DELETE", "/api/auth/me"),
+    ("PATCH", "/api/auth/password"),
+    ("POST", "/api/auth/demo-project"),
     ("GET", "/api/furniture-types"),
     ("POST", "/api/furniture-types"),
     ("GET", "/api/furniture-types/{slug}"),

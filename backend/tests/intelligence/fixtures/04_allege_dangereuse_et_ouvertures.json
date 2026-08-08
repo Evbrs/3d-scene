@@ -1,0 +1,75 @@
+{
+  "description": "Séjour dont les trois ouvertures sont fautives chacune à sa façon : une allège de 45 qui appelle un garde-corps, un percement à 3 cm d'un angle que le tableau ne peut pas tenir, et une porte de 70 sous le passage utile accessible. Trois règles distinctes, trois sévérités raisonnées.",
+  "reasoning": [
+    "Pièce de référence : 400 x 300, plafond 250, murs de 10, nu intérieur [[5,5],[395,5],[395,295],[5,295]].",
+    "FENÊTRE DU MUR C, x_offset 130, largeur 140, allège 45, hauteur 160 : percement u de 130 à 270, v de 45 à 205. L'allège vaut 45 alors que le seuil est 90, donc il manque 45 cm. C'est un AVERTISSEMENT et pas un bloquant : le plan reste réalisable, il appelle simplement une protection contre les chutes (garde-corps ou barre d'appui) dès que la hauteur de chute dépasse 1 m — et le plan ne connaît pas l'étage, donc on n'a pas le droit d'être plus catégorique. Marges d'angle : 130 et 400 - 270 = 130, rien à signaler.",
+    "FENÊTRE DU MUR B, x_offset 3, largeur 90, allège 100, hauteur 110 : percement u de 3 à 93 sur un mur de 300. La marge au départ vaut 3 cm alors que le mur en fait 10 d'épaisseur : il n'y a physiquement plus de matière pour le retour du tableau, l'anomalie est BLOQUANTE. La marge en fin vaut 300 - 93 = 207, rien à signaler de ce côté. Allège 100 >= 90 : pas de garde-corps exigé sur celle-ci, ce qui prouve que les deux règles sont bien indépendantes.",
+    "PORTE DU MUR D, x_offset 100, largeur 70, hauteur 204 : percement u de 100 à 170 sur un mur de 300. 70 est en dessous du passage utile accessible de 83, il manque 13 cm — AVERTISSEMENT. Ce n'est pas bloquant parce que 70 reste au-dessus de 63, la plus étroite largeur de bloc-porte couramment fabriquée : la porte est posable, elle n'est simplement pas accessible. Marges d'angle 100 et 130.",
+    "DÉBATTEMENT de cette porte. Le mur D va de (0,300) à (0,0), sa rentrante est (1,0), le nu intérieur est la droite x = 5. Charnières (5,200) et (5,110), rayon 70 : les deux quarts de disque tiennent dans x de 5 à 75 et y de 110 à 200. Aucun meuble dans la pièce, et les murs A (y = 5), C (y = 295) et B (x = 395) sont tous hors d'atteinte. Les deux ferrages sont libres.",
+    "AUCUNE COLLISION ENTRE DÉBATTEMENTS : la seule porte battante est celle du mur D.",
+    "AUCUNE CIRCULATION EN DÉFAUT : la pièce est vide de mobilier, et les seuls couples d'obstacles sont les murs entre eux — 290 pour A/C, 390 pour B/D, et les murs voisins se rejoignent en un angle, qui n'est pas un passage.",
+    "PIÈCE : plafond 250 >= 220 ; trois ouvertures ; « Séjour » n'est pas une pièce humide.",
+    "TOTAL ATTENDU : 1 bloquant (ouverture.trop_pres_d_un_angle sur le mur B, 3 cm mesurés pour 10 exigés) et 2 avertissements (fenetre.allege_sous_le_seuil sur le mur C, 45 pour 90 ; porte.largeur_insuffisante sur le mur D, 70 pour 83). Aucun conseil."
+  ],
+  "input": {
+    "project_id": 15,
+    "furniture_types": {
+      "1": {"id": 1, "slug": "porte-battante", "color_slots": ["panneau"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "panneau"}]},
+      "2": {"id": 2, "slug": "fenetre", "color_slots": ["dormant"], "parts": [{"type": "box", "rel_position": [0.5, 0.5, 0.5], "rel_size": [1, 1, 1], "color_slot": "dormant"}]}
+    },
+    "rooms": [
+      {
+        "id": 150,
+        "name": "Séjour",
+        "wall_thickness_cm": 10.0,
+        "ceiling_height_cm": 250.0,
+        "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+        "faces": [
+          {"id": 1501, "label": "A", "kind": "wall", "start_x_cm": 0, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 0, "covering": {}, "elements": []},
+          {"id": 1502, "label": "B", "kind": "wall", "start_x_cm": 400, "start_y_cm": 0, "end_x_cm": 400, "end_y_cm": 300, "covering": {}, "elements": [
+            {"id": 15020, "kind": "window", "x_offset_cm": 3, "y_offset_cm": 100, "pos_x_cm": null, "pos_y_cm": null, "width_cm": 90, "height_cm": 110, "depth_cm": 12, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]},
+          {"id": 1503, "label": "C", "kind": "wall", "start_x_cm": 400, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 300, "covering": {}, "elements": [
+            {"id": 15030, "kind": "window", "x_offset_cm": 130, "y_offset_cm": 45, "pos_x_cm": null, "pos_y_cm": null, "width_cm": 140, "height_cm": 160, "depth_cm": 12, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]},
+          {"id": 1504, "label": "D", "kind": "wall", "start_x_cm": 0, "start_y_cm": 300, "end_x_cm": 0, "end_y_cm": 0, "covering": {}, "elements": [
+            {"id": 15040, "kind": "door_hinged", "x_offset_cm": 100, "y_offset_cm": 0, "pos_x_cm": null, "pos_y_cm": null, "width_cm": 70, "height_cm": 204, "depth_cm": 4, "rotation_deg": 0, "furniture_type_id": null, "colors": {}, "variant_params": {}}
+          ]}
+        ],
+        "elements": []
+      }
+    ]
+  },
+  "expected_inner_contour": [[5, 5], [395, 5], [395, 295], [5, 295]],
+  "expected_counts": {"bloquant": 1, "avertissement": 2, "conseil": 0},
+  "expected_warning_count": 0,
+  "expected_anomalies": [
+    {
+      "rule_id": "ouverture.trop_pres_d_un_angle",
+      "severity": "bloquant",
+      "room_id": 150,
+      "face_labels": ["B"],
+      "element_ids": [15020],
+      "measured_cm": 3.0,
+      "threshold_cm": 10.0
+    },
+    {
+      "rule_id": "fenetre.allege_sous_le_seuil",
+      "severity": "avertissement",
+      "room_id": 150,
+      "face_labels": ["C"],
+      "element_ids": [15030],
+      "measured_cm": 45.0,
+      "threshold_cm": 90.0
+    },
+    {
+      "rule_id": "porte.largeur_insuffisante",
+      "severity": "avertissement",
+      "room_id": 150,
+      "face_labels": ["D"],
+      "element_ids": [15040],
+      "measured_cm": 70.0,
+      "threshold_cm": 83.0
+    }
+  ]
+}

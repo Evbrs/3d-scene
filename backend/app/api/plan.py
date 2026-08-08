@@ -15,7 +15,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import col, select
 
 from app.api.conflicts import STALE_MESSAGE, ConflictAwareRoute, PlanConflict
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, ProjectReadOnly, RequireQuota, SessionDep
 from app.api.permissions import (
     accessible_organization_ids,
     default_organization_id,
@@ -26,6 +26,7 @@ from app.api.permissions import (
 )
 from app.core.cache import scene_cache
 from app.models.base import ElementKind, utcnow
+from app.models.billing_plan import UsageMetric
 from app.models.organization import OrganizationRole
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 from app.schemas.plan import (
@@ -65,8 +66,20 @@ from app.services.faces import (
     openings_overlap,
     sync_room_faces,
 )
+from app.services.quotas import record_activation
+from app.services.seed_plans import LIMIT_ACTIVE_PROJECTS
 
 router = APIRouter(prefix="/api", tags=["plan"], route_class=ConflictAwareRoute)
+
+# Mur de paiement du **deuxième chantier**. Configuré une fois, à l'import : le plafond lui-même
+# vit en base (`plan_catalog.limits`), seul le rattachement métrique ↔ limite est ici.
+REQUIRE_PROJECT_QUOTA = RequireQuota(
+    UsageMetric.PROJECTS_ACTIVE,
+    LIMIT_ACTIVE_PROJECTS,
+    reassurance=(
+        "Les chantiers en trop passent en lecture seule, ils ne sont jamais supprimés."
+    ),
+)
 
 # Le 409 est documenté dans l'OpenAPI : c'est la source de vérité du frontend
 # (`docs/plan-generation-ia.md` §6), un conflit non déclaré y serait invisible.
@@ -109,6 +122,11 @@ async def _claim_project(
     malgré le `onupdate` du modèle : `onupdate` ne s'applique qu'à un `UPDATE` déjà émis, or
     toucher un projet par ailleurs inchangé est précisément le but ici.
     """
+    if project.archived_at is not None:
+        # Déclassement (`docs/strategie-produit.md` §4) : on bloque l'écriture, **jamais** la
+        # lecture. Le contrôle est ici parce que c'est le point de passage obligé de toute écriture
+        # du plan — y compris la route de lot, qui ferait sinon une porte dérobée.
+        raise ProjectReadOnly(project.id or 0)
     if client_version is not None and client_version != project.version:
         raise PlanConflict(STALE_MESSAGE, current_version=project.version)
     project.updated_at = utcnow()
@@ -162,12 +180,21 @@ async def _delete_row(session: SessionDep, model: type[Room] | type[Element], ro
 async def create_project(
     payload: ProjectCreate, session: SessionDep, current_user: CurrentUser
 ) -> Project:
+    """Crée un chantier, dans la limite du palier.
+
+    C'est le troisième mur de paiement (`docs/strategie-produit.md` §4), et le plus lisible :
+    créer un **deuxième** chantier ouvre l'essai de 14 jours sans carte, et c'est seulement une
+    fois l'essai consommé que le refus tombe.
+    """
+    organization_id = await default_organization_id(session, current_user)
+    await REQUIRE_PROJECT_QUOTA(session, organization_id)
+
     # `owner_id` n'est plus qu'une trace de création : c'est `organization_id` qui portera les
     # droits d'accès (`app/api/permissions.py`).
     project = Project(
         **payload.model_dump(),
         owner_id=current_user.id or 0,
-        organization_id=await default_organization_id(session, current_user),
+        organization_id=organization_id,
     )
     session.add(project)
     await session.commit()
@@ -329,6 +356,12 @@ async def create_room(
     project = await get_owned_project(
         session, project_id, current_user, OrganizationRole.EDITOR
     )
+
+    # Métrique produit, posée une seule fois par entreprise. La première pièce dessinée est le
+    # geste qui prouve que le produit a été compris — pas l'inscription, pas le chantier vide.
+    # Écrite **avant** `_claim_project`, comme toute lecture de base : après, le projet est marqué
+    # modifié et le moindre autoflush remonterait une collision de version.
+    await record_activation(session, project.organization_id, user_id=current_user.id)
 
     values = payload.model_dump()
     await _claim_project(session, project, values.pop("version", None))

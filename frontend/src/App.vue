@@ -37,6 +37,16 @@ function signOut(): void {
       <RouterLink to="/projets">
         Projets
       </RouterLink>
+      <!-- Deux entrées et non une : `/abonnement` porte le contrat de l'ENTREPRISE (palier,
+           consommation, essai), `/compte` porte la personne (mot de passe, export RGPD, fermeture).
+           Les fondre ferait cohabiter « changer de palier » et « supprimer mon compte » sur le même
+           écran, ce qui est exactement l'endroit où on ne veut pas d'ambiguïté. -->
+      <RouterLink to="/abonnement">
+        Abonnement
+      </RouterLink>
+      <RouterLink to="/compte">
+        Mon compte
+      </RouterLink>
       <button
         type="button"
         @click="signOut"

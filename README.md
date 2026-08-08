@@ -1,12 +1,28 @@
 # Éditeur de plan de rénovation 2D → 3D
 
-Application web de conception de plans de rénovation : édition 2D d'un plan (pièces, faces,
-ouvertures, revêtements), génération d'une scène 3D côté serveur, et visualisation 3D
-(caméras multiples, isolement de face, transparence, partage de vue).
+Application web de conception de plans de rénovation, pour l'artisan de second œuvre : édition 2D
+d'un plan (pièces, faces, ouvertures, revêtements, mobilier paramétrique), génération d'une scène
+3D côté serveur, visualisation 3D (caméras multiples, isolement de face, transparence, partage de
+vue), puis **métré, devis chiffré, facture Factur-X et dossier d'élévations cotées**. Un moteur
+d'analyse du plan — contrôle de conformité, calepinage, aménagement — complète l'ensemble ; il est
+**algorithmique et local** : déterministe, testable par fixtures, sans clé ni appel réseau sortant.
 
-- **Contrat fonctionnel et technique** : [`docs/spec-complete.md`](docs/spec-complete.md)
+Le mobilier est **générique et paramétrique** : aucun catalogue de marque externe n'est importé
+(`docs/spec-complete.md` §4.1).
+
+- **Contrat fonctionnel et technique** : [`docs/spec-complete.md`](docs/spec-complete.md) — §10
+  porte les amendements et les questions ouvertes, à lire avant tout travail
+- **Positionnement, tarification** : [`docs/strategie-produit.md`](docs/strategie-produit.md)
+- **Point de reprise** : [`docs/REPRISE.md`](docs/REPRISE.md)
+- **Conformité RGPD (côté exploitant)** : [`docs/rgpd.md`](docs/rgpd.md)
 - **Méthode de développement** : [`docs/plan-generation-ia.md`](docs/plan-generation-ia.md)
 - **Avancement** : [`PROGRESS.md`](PROGRESS.md)
+
+> **Avant toute mise en ligne**, quatre points sont bloquants et documentés en questions ouvertes
+> (`docs/spec-complete.md` §10, n° 10 à 13) : aucun transport de courriel n'est branché (la
+> réinitialisation de mot de passe est inutilisable en ligne), les documents légaux sont des
+> gabarits non relus par un juriste, les durées de conservation annoncées ne sont pas appliquées,
+> et aucun encaissement n'est intégré.
 
 ## Stack
 
@@ -83,13 +99,20 @@ Ce sont exactement les checks exécutés par la CI (`.github/workflows/ci.yml`).
 | Vulnérabilités des dépendances frontend | `cd frontend && npm audit --audit-level=high` |
 | Tests backend sur PostgreSQL | `cd backend && TEST_DATABASE_URL=postgresql+psycopg://app:<mdp>@localhost:5433/app_test pytest` |
 | Migrations | `cd backend && alembic upgrade head` |
+| Vérifier qu'il n'y a **qu'une seule** tête de migration | `cd backend && alembic heads` |
 | Vérifier l'absence de dérive modèles/migrations | `cd backend && alembic check` |
 | Lint + types backend | `cd backend && ruff check . && mypy .` |
+| Régénérer l'instantané OpenAPI | `cd backend && ENVIRONMENT=development python -m scripts.dump_openapi ../frontend/src/api/openapi-snapshot.json` |
 | Tests frontend | `cd frontend && npm run test` |
 | Lint frontend | `cd frontend && npm run lint` |
 | Build frontend | `cd frontend && npm run build` |
 | Validation du fichier compose | `docker compose config -q` |
 | Validation de la surcouche de production | `docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q` |
+
+L'instantané OpenAPI est un **fichier généré** : il ne se fusionne pas. On le régénère une fois, en
+dernier, et la CI échoue si le fichier versionné a dérivé du backend. Une migration ajoutée sans
+chaîner sa `down_revision` sur la tête courante ouvre une branche, que `alembic heads` révèle
+immédiatement — c'est la vérification à faire en premier après un travail à plusieurs.
 
 ## Structure
 
@@ -97,20 +120,34 @@ Ce sont exactement les checks exécutés par la CI (`.github/workflows/ci.yml`).
 .
 ├── backend/          # API FastAPI
 │   ├── app/
-│   │   ├── api/      # routers HTTP
-│   │   ├── core/     # configuration
-│   │   ├── models/   # modèles SQLModel
-│   │   ├── admin.py  # back-office SQLAdmin
-│   │   ├── db.py     # moteur + session
+│   │   ├── api/          # routers HTTP
+│   │   ├── core/         # configuration, sécurité, limitation de débit, cache
+│   │   ├── models/       # modèles SQLModel
+│   │   ├── schemas/      # frontière Pydantic de l'API
+│   │   ├── geometry/     # scene graph et métré — fonctions pures, sans SQLModel
+│   │   ├── intelligence/ # conformité, calepinage, aménagement — pures elles aussi
+│   │   ├── services/     # chiffrage, export PDF, quotas, catalogue, comptes
+│   │   ├── tasks/        # tâches Celery
+│   │   ├── admin.py      # back-office SQLAdmin
+│   │   ├── db.py         # moteur + session
 │   │   └── main.py
 │   ├── alembic/      # migrations
+│   ├── scripts/      # outillage hors application (dump du schéma OpenAPI)
 │   ├── requirements.txt  # versions figées installées par l'image de production
 │   └── tests/
+│       ├── geometry/fixtures/      # références calculées à la main — elles font foi
+│       └── intelligence/fixtures/  # idem, pour le contrôle de conformité
 ├── frontend/         # SPA Vue 3
 │   ├── nginx/        # service statique + relais /api (production)
 │   ├── public/       # servi tel quel : robots.txt, favicon
 │   └── src/
-│       ├── api/      # client HTTP typé vers le backend
+│       ├── api/         # client HTTP typé + instantané OpenAPI versionné
+│       ├── components/  # briques partagées entre écrans
+│       ├── editor/      # éditeur 2D (Konva) : géométrie, magnétisme, historique
+│       ├── stores/      # état partagé (Pinia)
+│       ├── viewer/      # viewer 3D (TresJS) : visibilité, textures, ressources
+│       ├── views/       # écrans
+│       ├── router.ts
 │       └── App.vue
 ├── docs/             # spec de référence + méthode de développement
 ├── .claude/agents/   # sous-agent de revue adversariale (spec-reviewer)
@@ -203,11 +240,17 @@ c'est cet en-tête, et non robots.txt, qui fait retirer une URL déjà indexée.
 Ces points sortent du périmètre du dépôt et dépendent de l'hébergeur :
 
 - **Sauvegardes PostgreSQL** et test de restauration.
-- **Limitation de débit partagée** : celle en place vit dans la mémoire de chaque processus, donc
-  se dilue avec plusieurs workers. À porter sur Redis.
+- **Service d'envoi de courriel** : rien n'achemine les invitations ni les jetons de
+  réinitialisation de mot de passe. Sans lui, un mot de passe oublié reste perdu en production.
 - **Supervision** : Sentry est prévu par les conventions du projet, pas encore branché.
+- **Ordonnanceur** : `celery beat` n'est pas configuré. Deux traitements l'attendent — la purge des
+  données arrivées au terme de leur conservation, et la réconciliation du déclassement des
+  chantiers excédentaires, qui n'a lieu aujourd'hui qu'à la consultation de la page abonnement.
 - **Dimensionnement** : les `mem_limit` du compose de production visent un petit déploiement ;
   les relire avant d'y mettre du trafic réel.
+
+La limitation de débit, elle, est **partagée** : elle vit sur Redis (fenêtre glissante en Lua), pas
+dans la mémoire de chaque processus.
 
 ## Contribution
 
