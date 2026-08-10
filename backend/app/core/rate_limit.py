@@ -1,7 +1,8 @@
 """Limitation de débit à fenêtre glissante.
 
 Protège la connexion, l'inscription et les routes coûteuses contre le bourrage d'identifiants et
-l'épuisement de ressources.
+l'épuisement de ressources. Les premières comptent par identité visée (voir `login_buckets`), les
+secondes par adresse et par nature de calcul (voir `COSTLY_QUOTAS` et `RateLimited`).
 
 **Pourquoi Redis.** L'implémentation précédente vivait dans la mémoire du processus, alors que la
 production tourne avec quatre workers uvicorn : le plafond réel était multiplié par quatre, et
@@ -74,6 +75,11 @@ ASSUMED_WORKER_COUNT = 4
 
 # Plafond du nombre de clés suivies en mémoire. Sans lui, l'unique route publique du service
 # offrirait un levier de saturation mémoire à qui n'a même pas de compte.
+#
+# Il s'applique **par seau**, et le repli en compte un par quota distinct : deux portées de même
+# plafond et de même fenêtre partagent donc leur seau, seule la clé les sépare. C'est ce qui
+# permet d'ajouter des portées sans multiplier la mémoire du repli — `COSTLY_QUOTAS` en compte
+# une dizaine pour cinq quotas distincts.
 MAX_TRACKED_KEYS = 50_000
 
 logger = logging.getLogger(__name__)
@@ -380,11 +386,16 @@ def client_key(request: Request) -> str:
 
 
 class RateLimited:
-    """Dépendance FastAPI réutilisable : `Depends(RateLimited("scene", 30, 60))`.
+    """Dépendance FastAPI posée sur les routes coûteuses : `Depends(costly("scene"))`.
 
-    Se pose sur les routes coûteuses (génération de scène, export) où la protection ne porte pas
-    sur des identifiants mais sur le temps processeur. Le `scope` sépare les compteurs : une route
-    saturée ne doit pas fermer les autres.
+    La protection ne porte pas ici sur des identifiants mais sur le **temps processeur** : ces
+    routes calculent, et un calcul n'a pas besoin d'être malveillant pour saturer les workers. Le
+    `scope` sépare les compteurs, pour qu'une route saturée n'en ferme pas d'autres.
+
+    La clé est l'adresse du visiteur et non le compte : la dépendance est déclarée au niveau de la
+    route, donc FastAPI la résout **avant** `CurrentUser`. C'est délibéré — refuser avant d'avoir
+    résolu une identité est ce qui rend le refus bon marché, et c'est la seule façon de couvrir
+    aussi la vue publique, qui n'a pas d'identité à résoudre.
     """
 
     def __init__(self, scope: str, max_events: int, window_seconds: float) -> None:
@@ -400,6 +411,57 @@ class RateLimited:
         # de sécurité, quelle que soit la route qui l'a émis. Le faire aux deux endroits
         # produirait deux lignes pour un seul refus.
         raise too_many_attempts(decision.retry_after)
+
+
+# Un plafond n'est pas un nombre de requêtes « raisonnable » : c'est un budget de temps processeur
+# par minute et par adresse. Les durées ci-dessous sont des médianes mesurées sur l'application
+# réelle, pièce vide de 5 x 4 m avec un percement, douze appels après chauffe — la même sonde qui a
+# servi à calibrer ces quotas les rejoue.
+#
+# Deux routes de même coût partagent délibérément un seau. Leur donner un compteur chacune
+# reviendrait à doubler le budget en alternant, alors qu'elles produisent le même travail.
+COSTLY_QUOTAS: dict[str, Quota] = {
+    # 3,8 ms. Servie par le cache de scène la plupart du temps, et l'éditeur la redemande après
+    # chaque enregistrement : c'est la lecture la plus fréquente du produit, d'où le plafond haut.
+    "scene": Quota(120, 60.0),
+    # 5,0 ms.
+    "inspection": Quota(60, 60.0),
+    # 5,2 ms.
+    "laying_plan": Quota(60, 60.0),
+    # 3,8 ms, JSON et CSV confondus — c'est le même calcul rendu deux fois.
+    "takeoff": Quota(60, 60.0),
+    # 132 ms pour une salle de bain, **633 ms** pour une cuisine accessible en cinq variantes.
+    # C'est de très loin le calcul le plus cher du produit : sans plafond, une boucle sur cette
+    # seule route tient les quatre workers occupés depuis un compte gratuit. Six par minute reste
+    # généreux pour un humain qui demande une implantation et regarde le résultat.
+    "layout": Quota(6, 60.0),
+    # 8,7 ms sur une pièce, mais la durée croît avec le plan, et le chemin asynchrone occupe en
+    # plus un worker Celery pour le même rendu. Les deux chemins partagent le seau.
+    "export_pdf": Quota(12, 60.0),
+    # Suivi de tâche et téléchargement : bon marché, mais interrogés en boucle par un client qui
+    # attend son fichier.
+    "export_read": Quota(120, 60.0),
+    # Reconstruit le métré, donc la scène, puis applique le barème ligne à ligne.
+    "quote_build": Quota(20, 60.0),
+    # Rendu Factur-X : PDF/A-3 et XML CII, produits par le même chemin.
+    "quote_render": Quota(20, 60.0),
+    # Seule route atteignable sans compte, et chaque appel déclenche un calcul de scène complet.
+    # Le plafond reprend celui du compteur mémoire qu'elle utilisait auparavant, mais il est
+    # désormais **partagé** par les quatre workers au lieu d'être multiplié par quatre.
+    "public_view": Quota(60, 60.0),
+}
+
+
+def costly(scope: str) -> RateLimited:
+    """Dépendance de débit d'une route coûteuse, au tarif calibré pour son `scope`.
+
+    Le plafond vient de `COSTLY_QUOTAS` et jamais de nombres écrits à côté du `@router.get` :
+    dispersés sur les routes, ils divergent, et plus personne ne peut dire quel budget processeur
+    le service accepte de céder à une adresse. Un `scope` inconnu lève ici, au chargement du
+    module — donc au démarrage, et non au premier appel de la route.
+    """
+    quota = COSTLY_QUOTAS[scope]
+    return RateLimited(scope, quota.max_events, quota.window_seconds)
 
 
 def too_many_attempts(retry_after: int) -> HTTPException:

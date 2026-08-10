@@ -25,18 +25,41 @@ La distinction n'est pas théorique : une demande d'effacement portant sur un cl
 
 | Donnée | Durée | Appliqué par |
 |---|---|---|
-| Compte et chantiers | Vie du compte | `DELETE /api/auth/me` → `services/account.py::delete_account`, puis les cascades `ON DELETE` posées en base |
-| Organisation sans plus aucun membre | Supprimée avec le dernier membre | `services/account.py::delete_account` (suppression explicite : la cascade de `membership` la laisserait en résidu) |
+| Compte | Vie du compte | `DELETE /api/auth/me` → `services/account.py::delete_account` |
+| Chantiers | Vie de l'**organisation**, pas du compte qui les a créés | `project.organization_id ON DELETE CASCADE`. `project.owner_id` est en `SET NULL` : ce n'est qu'une trace de création, elle n'emporte rien (spec §10, A13) |
+| Organisation sans plus aucun membre | Supprimée avec le dernier membre, **sauf** si elle porte un document émis | `services/account.py::delete_account` (suppression explicite : la cascade de `membership` la laisserait en résidu) |
 | Jeton de réinitialisation | 1 heure | `services/account.py::RESET_TOKEN_TTL`, plus `consumed_at` qui interdit le rejeu |
 | Invitation | Jusqu'à acceptation ou expiration | `Invitation.expires_at` |
-| Lien de partage | Jusqu'à révocation ou échéance | `SharedView`, `POST /api/projects/{id}/shared-views` |
-| Devis et factures émis | 10 ans (art. L. 123-22 du code de commerce) | **Aucune purge automatique** — voir §5 |
+| Lien de partage | Jusqu'à révocation ou échéance, **jamais au-delà de la durée du palier** | `app/api/share.py::share_link_days` — durée par défaut *et* plafond, lus dans `plan_catalog.limits["share_link_days"]` |
+| Devis et factures émis | 10 ans (art. L. 123-22 du code de commerce) | Conservés par la fermeture de compte (voir ci-dessous). **Aucune purge automatique au terme des dix ans** — voir §5 |
 | Compte inactif 3 ans | Signalement puis suppression | **Non implémenté** — voir §5 |
 | Journaux applicatifs | 30 jours | Politique de l'hébergeur — **à confirmer au déploiement** |
 | Sauvegardes | 35 jours glissants | Politique de l'hébergeur — **à confirmer au déploiement** |
 
 L'obligation comptable de dix ans est la **seule** qui prime sur une demande d'effacement, et elle
 ne porte que sur les documents commerciaux **émis** : un devis en brouillon n'est pas concerné.
+
+### 2.1 Ce que fait exactement la fermeture d'un compte
+
+La règle ci-dessus n'était, jusqu'à la vague 6, qu'une phrase de ce document : le code supprimait
+l'organisation dont le partant était seul membre, et `quote.organization_id` étant en
+`ON DELETE CASCADE`, les devis émis et les factures partaient avec. C'est l'artisan qui aurait été
+redressé. `DELETE /api/auth/me` a donc **deux** issues, décidées par `delete_account` et non par
+l'utilisateur, et toutes deux répondent 204 :
+
+1. **Effacement complet** — le cas courant. Le compte est supprimé, ses organisations devenues
+   vides avec lui, et ses appartenances comme ses jetons tombent par cascade.
+2. **Pseudonymisation** — dès qu'une de ces organisations porte un devis émis ou une facture.
+   L'organisation reste, la ligne `user` reste, et elle est vidée : adresse e-mail remplacée par
+   `compte-supprime-<id>@supprime.invalid` (domaine réservé par la RFC 2606, donc non routable),
+   mot de passe rendu illisible, `is_active` à faux, `token_version` incrémenté — donc toutes les
+   sessions fermées — et jetons de réinitialisation effacés. Le compte quitte au passage toutes
+   ses autres organisations.
+
+Le choix est assumé et écrit en spec §10 (A13). L'autre option — refuser la fermeture en 409 tant
+qu'un document émis existe — rendrait l'article 17 inatteignable : aucune route ne supprime un
+document émis, par construction. La pseudonymisation fait disparaître la personne et laisse la
+pièce comptable, ce qui est exactement ce que l'article 17.3.b autorise.
 
 ---
 
@@ -77,6 +100,13 @@ contractuelles types **et** une mise à jour de la page publique **avant** sa mi
   de l'adresse sans la stocker ailleurs.
 - **Consentement explicite** : la case d'acceptation des CGU à l'inscription est `required`, et
   elle porte les liens vers les CGU et la politique de confidentialité.
+- **L'effacement de l'un ne détruit pas les données des autres** : `project.owner_id` est en
+  `SET NULL`. Les deux chemins de destruction silencieuse — les chantiers des collègues, les
+  factures émises — sont couverts par des tests de non-régression dans `tests/test_rgpd.py`,
+  écrits à partir des sondes qui les avaient mis au jour.
+- **Aucun lien de partage sans échéance** : `app/api/share.py::share_link_days` applique la durée
+  du palier comme valeur par défaut *et* comme plafond. Un lien permanent n'aurait aucune durée de
+  conservation à opposer.
 
 ---
 
@@ -98,3 +128,9 @@ contrats qui appartiennent à l'exploitant.
    elles dépendent entièrement du contrat d'hébergement, qui n'existe pas encore.
 5. **Aucune procédure de notification de violation** au-delà de la phrase de la politique. Le
    délai de soixante-douze heures suppose une astreinte et un canal, pas seulement une intention.
+6. **La page publique ne décrit pas encore la pseudonymisation** (§2.1). Ce fichier et
+   `frontend/src/views/LegalView.vue` doivent dire la même chose, et c'est aujourd'hui le seul
+   point où ils divergent. Dans le même mouvement : `DELETE /api/auth/me` répond 204 avec un corps
+   vide, donc rien n'annonce à l'intéressé laquelle des deux issues s'est appliquée à son compte —
+   ce que l'article 12 demande. Le corriger change le contrat de la route, donc l'instantané
+   OpenAPI et le client du frontend.

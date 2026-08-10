@@ -1143,17 +1143,31 @@ def _draw_cover(
 
 
 def render_project_pdf(
-    project: dict[str, Any], generated_at: datetime, *, watermark: bool = False
+    project: dict[str, Any],
+    generated_at: datetime,
+    *,
+    watermark: bool = False,
+    elevations: bool = True,
 ) -> bytes:
     """Génère le PDF complet d'un projet et le renvoie en mémoire.
 
     `generated_at` est injecté plutôt que lu depuis l'horloge : c'est ce qui rend la sortie
     reproductible et donc testable octet par octet.
 
-    `watermark` est un argument nommé, décidé par l'appelant **serveur** d'après les droits du
-    compte, et n'est jamais lu depuis la requête (`docs/strategie-produit.md` §4) : un filigrane
-    que le client peut désactiver ne protège rien. Il vaut `False` par défaut, de sorte qu'aucun
-    appelant existant ne l'obtienne par accident — c'est l'offre qui doit le demander.
+    `watermark` et `elevations` sont des arguments nommés, décidés par l'appelant **serveur**
+    d'après les droits du compte, et jamais lus depuis la requête (`docs/strategie-produit.md` §4) :
+    un filigrane que le client peut désactiver ne protège rien, et une planche qu'il peut réclamer
+    n'est pas une fonctionnalité payante.
+
+    Leurs défauts sont opposés, et c'est voulu. `watermark=False` fait qu'aucun appelant existant
+    n'obtient un filigrane par accident — c'est l'offre qui doit le demander. `elevations=True`
+    fait qu'aucun appelant n'obtient un dossier **amputé** par accident : retirer des planches en
+    silence serait la panne la plus difficile à voir des deux, puisque le document resterait
+    parfaitement valide et bien formé (spec §10, amendement A14).
+
+    Sans les élévations, le dossier garde sa page de garde, le plan coté de chaque pièce et les
+    récapitulatifs : la pagination annoncée par la page de garde suit, parce qu'elle est calculée
+    sur la même liste que le dessin.
     """
     buffer = io.BytesIO()
     pdf = pdfcanvas.Canvas(buffer, pagesize=PAGE_SIZE)
@@ -1168,17 +1182,22 @@ def render_project_pdf(
     schedule: list[tuple[dict[str, Any], list[WallElevation], int, int]] = []
     number = 1
     for room in rooms:
-        elevations = room_elevations(room)
-        schedule.append((room, elevations, number, number + len(elevations)))
-        number += 1 + len(elevations)
+        # Le palier décide **avant** la numérotation, et non au moment de dessiner : la page de
+        # garde annonce les planches, et un dossier qui annoncerait des élévations qu'il n'imprime
+        # pas serait pire qu'un dossier qui n'en a pas.
+        sheets_of_room = room_elevations(room) if elevations else []
+        schedule.append((room, sheets_of_room, number, number + len(sheets_of_room)))
+        number += 1 + len(sheets_of_room)
     total_sheets = number - 1
 
     _draw_cover(pdf, str(project["name"]), schedule, generated_at, watermark=watermark)
 
-    for room, elevations, first_sheet, _last_sheet in schedule:
+    # `plates` et non `elevations` : le nom du paramètre est pris, et le masquer ici ferait
+    # dépendre le droit du palier de l'ordre des boucles au premier remaniement.
+    for room, plates, first_sheet, _last_sheet in schedule:
         sheets = {
             elevation.face_label: f"{first_sheet + 1 + index}/{total_sheets}"
-            for index, elevation in enumerate(elevations)
+            for index, elevation in enumerate(plates)
         }
         _draw_room_page(
             pdf,
@@ -1190,7 +1209,7 @@ def render_project_pdf(
         )
         _end_page(pdf, watermark=watermark)
 
-        for index, elevation in enumerate(elevations):
+        for index, elevation in enumerate(plates):
             _draw_wall_elevation(
                 pdf,
                 elevation,

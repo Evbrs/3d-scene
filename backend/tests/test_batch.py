@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.plan import MAX_BATCH_OPERATIONS
 from app.services.seed import seed_catalog
+from app.services.seed_plans import PLAN_BUSINESS
+from tests.conftest import subscribe
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
 
@@ -406,12 +408,16 @@ async def test_a_batch_cannot_write_a_placement_in_the_other_frame(
     assert "autre repère" in response.json()["detail"]
 
 
-async def test_a_viewer_cannot_apply_a_batch(auth_client: AsyncClient) -> None:
+async def test_a_viewer_cannot_apply_a_batch(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """Écrire le plan demande `editor` : le lot suit exactement les routes qu'il remplace."""
     from tests.test_permissions_locataire import logged_in
 
     plan = await _plan(auth_client)
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    # Le second siège est payant depuis A14, et ce test a besoin d'un lecteur, pas d'un mur.
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
 
     async with logged_in("lecteur-lot@exemple.fr") as lecteur:
         invitation = await auth_client.post(

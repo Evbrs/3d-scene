@@ -29,6 +29,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.pricing import (
     CostingOverride,
@@ -40,7 +41,9 @@ from app.services.pricing import (
     resolve_price_code,
     vat_buckets_from,
 )
+from app.services.seed_plans import PLAN_BUSINESS
 from app.services.seed_prices import DEFAULT_PRICE_BOOK_NAME, DEFAULT_PRICE_ITEMS
+from tests.conftest import subscribe
 from tests.test_permissions_locataire import logged_in
 from tests.test_takeoff_api import build_room
 
@@ -559,10 +562,15 @@ async def test_invoice_numbers_have_their_own_continuous_series(auth_client: Asy
 # --- Rôles ----------------------------------------------------------------------------------------
 
 
-async def test_an_editor_prepares_a_quote_but_does_not_issue_it(auth_client: AsyncClient) -> None:
+async def test_an_editor_prepares_a_quote_but_does_not_issue_it(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """Émettre engage l'entreprise sur un prix : c'est un geste d'`admin`, pas de production."""
     project, _room = await build_room(auth_client)
     organization_id = await organization_of(auth_client)
+    # Une entreprise qui a un compagnon paie ses sièges (A14) : le mur du travail à plusieurs a son
+    # propre test, ce qui se joue ici est le partage des rôles autour du devis.
+    await subscribe(session, organization_id, PLAN_BUSINESS)
 
     async with logged_in("compagnon@exemple.fr") as compagnon:
         invitation = await auth_client.post(
@@ -584,10 +592,13 @@ async def test_an_editor_prepares_a_quote_but_does_not_issue_it(auth_client: Asy
         assert refuse_bareme.status_code == 403, refuse_bareme.text
 
 
-async def test_a_viewer_reads_a_quote_but_never_writes_one(auth_client: AsyncClient) -> None:
+async def test_a_viewer_reads_a_quote_but_never_writes_one(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     project, _room = await build_room(auth_client)
     quote = await create_quote(auth_client, project["id"])
     organization_id = await organization_of(auth_client)
+    await subscribe(session, organization_id, PLAN_BUSINESS)
 
     async with logged_in("client-interne@exemple.fr") as lecteur:
         invitation = await auth_client.post(

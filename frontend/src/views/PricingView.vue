@@ -172,8 +172,14 @@ function labelOf(dictionary: Record<string, string> | undefined, key: string): s
 
       <p class="essai">
         L'essai du palier Artisan dure {{ catalog.trial_days }} jours, sans carte bancaire. Il ne
-        démarre pas à l'inscription mais au premier geste qui en a besoin : votre premier devis,
-        votre premier export sans filigrane, votre deuxième chantier.
+        démarre pas à l'inscription mais au premier geste qui en a besoin — votre premier devis,
+        votre premier export sans filigrane, votre troisième pièce, votre deuxième chantier — et ce
+        geste-là aboutit.
+      </p>
+      <p class="honnetete">
+        Cette grille ne liste que des fonctionnalités déjà livrées : chaque ligne est refusée par le
+        serveur lorsqu'elle n'est pas comprise dans votre palier. Rien n'y figure au titre de ce qui
+        est prévu.
       </p>
 
       <p class="raccourcis">
@@ -310,6 +316,15 @@ function labelOf(dictionary: Record<string, string> | undefined, key: string): s
 .essai {
   max-width: 48rem;
   margin-top: 1.5rem;
+}
+
+/* Une page de vente qui annonce ce qui n'existe pas n'est pas seulement un défaut produit
+   (`docs/spec-complete.md` §10, amendement A14) : le dire ici est ce qui rend la promesse
+   vérifiable par le lecteur. */
+.honnetete {
+  max-width: 48rem;
+  color: var(--texte-doux);
+  font-size: 0.9rem;
 }
 
 .raccourcis {

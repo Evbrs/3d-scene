@@ -27,9 +27,11 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import app as fastapi_app
-from tests.conftest import USER_PASSWORD
+from app.services.seed_plans import PLAN_BUSINESS
+from tests.conftest import USER_PASSWORD, subscribe
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
 VUE_PARTAGEE: dict[str, Any] = {"camera_preset": "face", "room_index": 0}
@@ -382,7 +384,7 @@ async def test_the_quote_list_never_leaks_another_organization(
 
 
 async def test_owner_id_no_longer_grants_anything(
-    auth_client: AsyncClient, other_client: AsyncClient
+    auth_client: AsyncClient, other_client: AsyncClient, session: AsyncSession
 ) -> None:
     """Le cœur du lot : deux comptes d'une même organisation se voient, `owner_id` ou non.
 
@@ -392,6 +394,10 @@ async def test_owner_id_no_longer_grants_anything(
     """
     project = (await auth_client.post("/api/projects", json={"name": "Chantier partagé"})).json()
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    # Inviter est payant depuis l'amendement A14, et l'essai — palier Artisan, un siège — ne
+    # l'ouvre pas. Ce test porte sur le cloisonnement, pas sur la grille : l'entreprise paie donc
+    # ses sièges, comme celle de n'importe quel client à plusieurs.
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
     collegue = (await other_client.get("/api/auth/me")).json()
 
     invitation = await auth_client.post(
@@ -415,7 +421,7 @@ async def test_owner_id_no_longer_grants_anything(
 
 
 async def test_a_pending_invitation_grants_nothing_before_acceptance(
-    auth_client: AsyncClient, other_client: AsyncClient
+    auth_client: AsyncClient, other_client: AsyncClient, session: AsyncSession
 ) -> None:
     """Être invité n'est pas être membre.
 
@@ -424,6 +430,10 @@ async def test_a_pending_invitation_grants_nothing_before_acceptance(
     """
     project = (await auth_client.post("/api/projects", json={"name": "Pas encore partagé"})).json()
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    # Inviter est payant depuis l'amendement A14, et l'essai — palier Artisan, un siège — ne
+    # l'ouvre pas. Ce test porte sur le cloisonnement, pas sur la grille : l'entreprise paie donc
+    # ses sièges, comme celle de n'importe quel client à plusieurs.
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
     invite = (await other_client.get("/api/auth/me")).json()
 
     invitation = await auth_client.post(
@@ -436,7 +446,9 @@ async def test_a_pending_invitation_grants_nothing_before_acceptance(
     assert (await other_client.get(f"/api/organizations/{organization_id}")).status_code == 404
 
 
-async def test_a_viewer_reads_but_never_writes(auth_client: AsyncClient) -> None:
+async def test_a_viewer_reads_but_never_writes(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """Un rôle insuffisant donne 403 et non 404 : le lecteur sait déjà que l'objet existe.
 
     Lui répondre 404 lui ferait croire à une suppression, et transformerait une question de droits
@@ -444,6 +456,10 @@ async def test_a_viewer_reads_but_never_writes(auth_client: AsyncClient) -> None
     """
     project = (await auth_client.post("/api/projects", json={"name": "En lecture seule"})).json()
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    # Inviter est payant depuis l'amendement A14, et l'essai — palier Artisan, un siège — ne
+    # l'ouvre pas. Ce test porte sur le cloisonnement, pas sur la grille : l'entreprise paie donc
+    # ses sièges, comme celle de n'importe quel client à plusieurs.
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
 
     async with logged_in("lecteur@exemple.fr") as lecteur:
         invitation = await auth_client.post(
@@ -469,7 +485,7 @@ async def test_a_viewer_reads_but_never_writes(auth_client: AsyncClient) -> None
 
 
 async def test_an_editor_writes_the_plan_but_does_not_delete_the_project(
-    auth_client: AsyncClient,
+    auth_client: AsyncClient, session: AsyncSession
 ) -> None:
     """La suppression d'un chantier entier demande `admin`.
 
@@ -478,6 +494,10 @@ async def test_an_editor_writes_the_plan_but_does_not_delete_the_project(
     """
     project = (await auth_client.post("/api/projects", json={"name": "Chantier"})).json()
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    # Inviter est payant depuis l'amendement A14, et l'essai — palier Artisan, un siège — ne
+    # l'ouvre pas. Ce test porte sur le cloisonnement, pas sur la grille : l'entreprise paie donc
+    # ses sièges, comme celle de n'importe quel client à plusieurs.
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
 
     async with logged_in("editeur@exemple.fr") as editeur:
         invitation = await auth_client.post(

@@ -19,6 +19,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlmodel import SQLModel, col, select
@@ -31,7 +32,7 @@ from app.models.billing_plan import (
     UsageMetric,
 )
 from app.models.organization import Organization
-from app.models.plan import Project
+from app.models.plan import Project, Room
 from app.models.user import User
 from app.services.quotas import (
     active_project_count,
@@ -529,3 +530,175 @@ async def test_the_downgrade_is_idempotent(
     assert len(await enforce_active_project_limit(session, entitlement)) == 2
     await session.commit()
     assert await enforce_active_project_limit(session, entitlement) == []
+
+
+# --- Le plafond de pièces par chantier (spec §10, amendement A14) ---------------------------------
+
+
+async def test_the_room_ceiling_stops_the_third_room_and_never_the_third_project(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """« 2 pièces par chantier » figurait sur la page tarifs et ne s'appliquait nulle part.
+
+    Le plafond porte sur **le chantier**, pas sur l'entreprise : deux pièces dans un chantier
+    n'empêchent pas d'en dessiner deux dans un autre. Une garde posée sur l'organisation aurait
+    passé les mêmes sondes tout en refusant le second chantier d'un client, et c'est la raison pour
+    laquelle ce test ouvre un deuxième chantier avant de conclure.
+    """
+    premier, organization_id = await _project_of(auth_client)
+    await _consume_trial_for(session, organization_id)
+
+    for nom in ("Salon", "Cuisine"):
+        creee = await auth_client.post(
+            f"/api/projects/{premier}/rooms", json={"name": nom, "polygon": CARRE}
+        )
+        assert creee.status_code == 201, creee.text
+
+    troisieme = await auth_client.post(
+        f"/api/projects/{premier}/rooms", json={"name": "Chambre", "polygon": CARRE}
+    )
+    assert troisieme.status_code == 429, troisieme.text
+    corps = troisieme.json()
+    assert corps["code"] == "quota_exceeded"
+    assert corps["metric"] == "rooms_per_project"
+    assert corps["limit"] == 2
+    assert corps["current"] == 2
+    assert corps["required_plan"] == TRIAL_PLAN_CODE
+
+    # Le plafond de chantiers actifs est un autre mur, et il n'a pas bougé : ce compte n'a droit
+    # qu'à un chantier, ce qui prouve au passage que les deux gardes ne se confondent pas.
+    second = await auth_client.post("/api/projects", json={"name": "Second chantier"})
+    assert second.status_code == 429, second.text
+    assert second.json()["metric"] == UsageMetric.PROJECTS_ACTIVE
+
+
+async def test_a_room_deleted_then_redrawn_does_not_consume_the_quota_twice(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Le plafond est un **état**, pas un cumul de créations.
+
+    C'est la différence entre « 2 pièces par chantier » et « 2 pièces créées » : la seconde
+    lecture punirait un relevé refait, qui est le geste le plus banal d'un chantier.
+    """
+    project_id, organization_id = await _project_of(auth_client)
+    await _consume_trial_for(session, organization_id)
+
+    premiere = await auth_client.post(
+        f"/api/projects/{project_id}/rooms", json={"name": "Salon", "polygon": CARRE}
+    )
+    await auth_client.post(
+        f"/api/projects/{project_id}/rooms", json={"name": "Cuisine", "polygon": CARRE}
+    )
+    assert (
+        await auth_client.delete(f"/api/rooms/{premiere.json()['id']}")
+    ).status_code == 204
+
+    refaite = await auth_client.post(
+        f"/api/projects/{project_id}/rooms", json={"name": "Salon refait", "polygon": CARRE}
+    )
+    assert refaite.status_code == 201, refaite.text
+
+
+async def test_the_batch_route_is_plafonnee_on_its_balance_and_not_on_its_creations(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """La route de lot est le second endroit d'où naît une pièce : la laisser dehors suffirait.
+
+    Elle est plafonnée sur son **solde** : un lot qui supprime une pièce pour en créer une autre
+    ne change pas le compte, et le refuser serait faux. Un lot qui dépasse est refusé **en entier**,
+    conformément au tout-ou-rien de l'amendement A6 — aucune de ses pièces n'est écrite.
+    """
+    project_id, organization_id = await _project_of(auth_client)
+    await _consume_trial_for(session, organization_id)
+
+    creation = await auth_client.post(
+        f"/api/projects/{project_id}/rooms", json={"name": "Salon", "polygon": CARRE}
+    )
+    room_id = int(creation.json()["id"])
+
+    trop = await auth_client.post(
+        f"/api/projects/{project_id}/batch",
+        json={
+            "operations": [
+                {"op": "create_room", "room": {"name": "Cuisine", "polygon": CARRE}},
+                {"op": "create_room", "room": {"name": "Chambre", "polygon": CARRE}},
+            ]
+        },
+    )
+    assert trop.status_code == 429, trop.text
+    assert trop.json()["metric"] == "rooms_per_project"
+    assert await _room_count(session, project_id) == 1, "un lot refusé n'écrit rien"
+
+    # Même lot, précédé de la suppression de la pièce existante : le solde est de +1, il passe.
+    echange = await auth_client.post(
+        f"/api/projects/{project_id}/batch",
+        json={
+            "operations": [
+                {"op": "delete_room", "room_id": room_id},
+                {"op": "create_room", "room": {"name": "Cuisine", "polygon": CARRE}},
+                {"op": "create_room", "room": {"name": "Chambre", "polygon": CARRE}},
+            ]
+        },
+    )
+    assert echange.status_code == 200, echange.text
+    assert await _room_count(session, project_id) == 2
+
+
+async def test_the_third_room_opens_the_trial_instead_of_refusing(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Sur un compte neuf, la troisième pièce **aboutit** et ouvre l'essai.
+
+    C'est la forme imposée par `docs/strategie-produit.md` §4 : le premier geste monétisé n'est
+    jamais refusé sèchement, il déclenche l'essai sans carte et se termine normalement.
+    """
+    project_id, organization_id = await _project_of(auth_client)
+
+    for nom in ("Salon", "Cuisine", "Chambre"):
+        creee = await auth_client.post(
+            f"/api/projects/{project_id}/rooms", json={"name": nom, "polygon": CARRE}
+        )
+        assert creee.status_code == 201, creee.text
+
+    abonnements = (
+        await session.execute(
+            select(Subscription).where(col(Subscription.organization_id) == organization_id)
+        )
+    ).scalars().all()
+    assert [abonnement.plan_code for abonnement in abonnements] == [TRIAL_PLAN_CODE]
+
+
+CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
+
+
+async def _project_of(client: AsyncClient) -> tuple[int, int]:
+    """Un chantier vide et l'organisation personnelle qui le porte."""
+    project_id = int(
+        (await client.post("/api/projects", json={"name": "Chantier"})).json()["id"]
+    )
+    organization_id = int((await client.get("/api/organizations")).json()[0]["id"])
+    return project_id, organization_id
+
+
+async def _room_count(session: AsyncSession, project_id: int) -> int:
+    """Pièces réellement en base : c'est ce qu'un lot refusé ne doit pas avoir écrit."""
+    rows = (
+        await session.execute(select(Room).where(col(Room.project_id) == project_id))
+    ).scalars().all()
+    return len(rows)
+
+
+async def _consume_trial_for(session: AsyncSession, organization_id: int) -> None:
+    """Place l'organisation dans l'état « essai déjà fait et terminé », le seul où le mur ferme."""
+    passe = datetime.now(UTC) - timedelta(days=20)
+    session.add(
+        Subscription(
+            organization_id=organization_id,
+            plan_code=TRIAL_PLAN_CODE,
+            status=SubscriptionStatus.TRIALING,
+            current_period_start=passe,
+            current_period_end=passe + timedelta(days=14),
+            trial_ends_at=passe + timedelta(days=14),
+        )
+    )
+    await session.commit()

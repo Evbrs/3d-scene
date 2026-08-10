@@ -38,14 +38,22 @@ from app.models.billing_plan import (
 )
 from app.models.plan import Project
 from app.services.seed_plans import (
+    ENFORCEMENT_POINTS,
     FEATURE_EXPORTS_WITHOUT_WATERMARK,
+    FEATURE_LABELS,
     FEATURE_QUOTES,
     LIMIT_ACTIVE_PROJECTS,
+    LIMIT_ENFORCEMENT_POINTS,
+    LIMIT_LABELS,
+    LIMIT_SEATS,
     PLAN_ARTISAN,
     PLAN_BUSINESS,
     PLAN_DISCOVERY,
+    PLAN_GRID,
     PLAN_NETWORK,
 )
+from tests.conftest import subscribe
+from tests.test_permissions_locataire import logged_in
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
 
@@ -65,6 +73,16 @@ def _watermarked(content: bytes) -> bool:
         )
         if payload is not None
     )
+
+
+def _page_count(content: bytes) -> int:
+    """Nombre de pages du PDF, lu dans les objets `/Type /Page` du fichier.
+
+    Compté sur les octets plutôt qu'avec une bibliothèque de lecture : le dépôt n'en embarque
+    aucune, et la structure produite par reportlab déclare une page par objet, sans indirection.
+    `/Type /Pages` — le nœud de l'arbre, au pluriel — est exclu par la borne de mot.
+    """
+    return len(re.findall(rb"/Type\s*/Page[^s]", content))
 
 
 def _decoded(payload: bytes) -> bytes | None:
@@ -395,7 +413,11 @@ async def test_the_watermark_disappears_with_the_plan_and_never_with_a_query_par
     propre = (await auth_client.get(f"/api/projects/{project_id}/exports/pdf/direct")).content
 
     assert not _watermarked(propre)
-    assert len(propre) < len(filigrane), "le filigrane en moins sur chaque page, donc plus léger"
+    # Le fichier abonné est **plus lourd**, et c'est le sens attendu depuis l'amendement A14 : il
+    # perd le filigrane mais gagne les quatre planches d'élévation que le palier gratuit n'a pas.
+    # Comparer les tailles ne dirait plus grand-chose ; on compte les pages, qui sont ce que le
+    # palier change réellement.
+    assert _page_count(propre) > _page_count(filigrane)
 
 
 async def test_a_replayed_export_task_is_not_billed_twice(
@@ -584,3 +606,237 @@ async def test_the_account_page_reports_usage_against_the_limits(
     # Les métriques produit sont rendues, sans plafond : elles servent à comprendre, pas à bloquer.
     assert par_metrique[UsageMetric.ACTIVATION]["limit"] is None
     assert etat["plan"]["code"] == PLAN_DISCOVERY
+
+
+# --- La grille ne vend que ce qui existe (spec §10, amendement A14) -------------------------------
+
+
+def test_every_published_feature_names_the_guard_that_refuses_it() -> None:
+    """Une ligne de la page tarifs sans garde est une promesse de vente sans contrepartie.
+
+    Six clés — marque blanche, signature « bon pour accord », variantes chiffrées, SSO,
+    statistiques par agence, API — étaient affichées « ✓ » en face de 79 € sans exister nulle part.
+    Ce test est ce qui empêche la septième : ajouter une fonctionnalité à la grille impose de dire
+    où elle est refusée, et retirer la garde sans retirer la ligne échoue ici.
+
+    Il ne remplace pas les tests de comportement plus bas — une entrée dans la table ne prouve pas
+    que la garde fonctionne — il empêche l'**oubli**, qui est ce qui s'est réellement produit.
+    """
+    assert set(FEATURE_LABELS) == set(ENFORCEMENT_POINTS)
+    assert set(LIMIT_LABELS) == set(LIMIT_ENFORCEMENT_POINTS)
+
+
+def test_the_grid_carries_no_feature_the_product_does_not_have() -> None:
+    """Les six clés retirées ne doivent revenir ni dans les libellés, ni dans un palier semé.
+
+    Nommées une par une, et non déduites : le jour où l'une est **construite**, ce test doit être
+    modifié à la main, et cette modification est exactement la relecture qu'on veut provoquer.
+    """
+    jamais_construites = {
+        "white_label",
+        "client_signature",
+        "priced_variants",
+        "sso",
+        "agency_stats",
+        "api",
+    }
+    assert jamais_construites.isdisjoint(FEATURE_LABELS)
+    for entree in PLAN_GRID:
+        assert jamais_construites.isdisjoint(entree["features"]), entree["code"]
+
+
+async def test_the_public_pricing_page_never_serves_an_unimplemented_feature(
+    client: AsyncClient,
+) -> None:
+    """La sonde de la revue, retournée : ce que la page publique annonce doit exister.
+
+    Elle interroge la route réelle et non le module de semis — c'est la réponse HTTP que lit un
+    prospect, et c'est elle qui affichait un « ✓ » mensonger.
+    """
+    body = (await client.get("/api/plans")).json()
+
+    assert set(body["feature_labels"]) == set(ENFORCEMENT_POINTS)
+    for plan in body["plans"]:
+        annoncees = {cle for cle, accordee in plan["features"].items() if accordee}
+        assert annoncees <= set(ENFORCEMENT_POINTS), plan["code"]
+
+
+async def test_the_compliance_check_is_walled_and_the_first_call_opens_the_trial(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """`compliance_check` était annoncé bloqué au palier gratuit et répondait 200.
+
+    Deux moitiés, et les deux comptent : sur un compte neuf le contrôle **aboutit** en ouvrant
+    l'essai — refuser sèchement le premier geste monétisé serait le contraire de la stratégie §4 —
+    et une fois l'essai consommé il est refusé, avec le palier à prendre.
+    """
+    project_id, organization_id = await _project_and_organization(auth_client)
+
+    premier = await auth_client.get(f"/api/projects/{project_id}/inspection")
+    assert premier.status_code == 200, premier.text
+
+    abonnements = (
+        await session.execute(
+            select(Subscription).where(col(Subscription.organization_id) == organization_id)
+        )
+    ).scalars().all()
+    assert [abonnement.plan_code for abonnement in abonnements] == [PLAN_ARTISAN]
+
+
+async def test_once_the_trial_is_spent_the_three_analyses_are_refused_by_their_own_plan(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Les trois moteurs, et le palier que chacun demande.
+
+    Le contrôle de conformité et le calepinage arrivent avec Artisan, l'aménagement automatique
+    avec Entreprise : la grille §4 les place à deux endroits différents, et le corps du refus doit
+    le dire — c'est lui que le frontend lit pour proposer le bon palier.
+    """
+    project_id, organization_id = await _project_and_organization(auth_client)
+    room_id = int(
+        (
+            await auth_client.post(
+                f"/api/projects/{project_id}/rooms",
+                json={"name": "Salle d'eau", "polygon": CARRE},
+            )
+        ).json()["id"]
+    )
+    await _consume_trial(session, organization_id)
+
+    inspection = await auth_client.get(f"/api/projects/{project_id}/inspection")
+    assert inspection.status_code == 402, inspection.text
+    assert inspection.json()["feature"] == "compliance_check"
+    assert inspection.json()["required_plan"] == PLAN_ARTISAN
+
+    calepinage = await auth_client.get(f"/api/projects/{project_id}/laying-plan")
+    assert calepinage.status_code == 402, calepinage.text
+    assert calepinage.json()["feature"] == "tiling_waste"
+    assert calepinage.json()["required_plan"] == PLAN_ARTISAN
+
+    amenagement = await auth_client.post(f"/api/rooms/{room_id}/layouts", json={"count": 2})
+    assert amenagement.status_code == 402, amenagement.text
+    assert amenagement.json()["feature"] == "auto_layout"
+    # L'essai ne suffit pas : l'aménagement demande un palier au-dessus de celui qu'il offre.
+    assert amenagement.json()["required_plan"] == PLAN_BUSINESS
+
+
+async def test_the_free_dossier_arrives_without_its_dimensioned_elevations(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """`dimensioned_elevations` s'applique au **contenu**, jamais au téléchargement.
+
+    §4 place l'export filigrané dans ce que le palier gratuit inclut et les élévations cotées dans
+    ce qu'il bloque : deux lignes distinctes, dont une seule était appliquée. Le fichier continue de
+    se télécharger — c'est la règle de A11 et elle n'est pas négociable — mais il n'a plus que la
+    page de garde et le plan coté de la pièce.
+    """
+    project_id, organization_id = await _project_and_organization(auth_client)
+    await _consume_trial(session, organization_id)
+
+    gratuit = await auth_client.get(f"/api/projects/{project_id}/exports/pdf/direct")
+    assert gratuit.status_code == 200, gratuit.text
+    assert gratuit.headers["content-type"] == "application/pdf"
+    # Page de garde + plan coté de l'unique pièce, et rien d'autre. Quatre murs, donc quatre
+    # planches d'élévation en moins.
+    assert _page_count(gratuit.content) == 2
+
+    abonnement = (
+        await session.execute(
+            select(Subscription).where(col(Subscription.organization_id) == organization_id)
+        )
+    ).scalars().one()
+    abonnement.status = SubscriptionStatus.ACTIVE
+    abonnement.trial_ends_at = None
+    abonnement.current_period_end = datetime.now(UTC) + timedelta(days=20)
+    await session.commit()
+
+    abonne = await auth_client.get(f"/api/projects/{project_id}/exports/pdf/direct")
+    assert _page_count(abonne.content) == 6
+
+
+async def test_inviting_a_second_person_is_refused_by_the_feature_then_by_the_seats(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """Deux refus distincts, et c'est ce qui rend la proposition commerciale juste.
+
+    402 quand le palier n'ouvre pas le travail à plusieurs, 429 quand il l'ouvre et que les places
+    sont prises. Les confondre proposerait un changement de palier à une entreprise qui n'a besoin
+    que d'un siège de plus.
+    """
+    _project_id, organization_id = await _project_and_organization(auth_client)
+    await _consume_trial(session, organization_id)
+
+    refus = await auth_client.post(
+        f"/api/organizations/{organization_id}/invitations",
+        json={"email": "compagnon@exemple.fr", "role": "editor"},
+    )
+    assert refus.status_code == 402, refus.text
+    assert refus.json()["feature"] == "multi_seat"
+    assert refus.json()["required_plan"] == PLAN_BUSINESS
+
+    # Palier Entreprise, mais ramené à un seul siège par une négociation : la fonctionnalité est
+    # ouverte, le plafond ne l'est pas.
+    await subscribe(session, organization_id, PLAN_BUSINESS)
+    await _set_limit(session, PLAN_BUSINESS, LIMIT_SEATS, 1)
+
+    plafond = await auth_client.post(
+        f"/api/organizations/{organization_id}/invitations",
+        json={"email": "compagnon@exemple.fr", "role": "editor"},
+    )
+    assert plafond.status_code == 429, plafond.text
+    assert plafond.json()["code"] == "quota_exceeded"
+    assert plafond.json()["metric"] == LIMIT_SEATS
+    assert plafond.json()["current"] == 1
+
+    await _set_limit(session, PLAN_BUSINESS, LIMIT_SEATS, 15)
+    accepte = await auth_client.post(
+        f"/api/organizations/{organization_id}/invitations",
+        json={"email": "compagnon@exemple.fr", "role": "editor"},
+    )
+    assert accepte.status_code == 201, accepte.text
+
+
+async def test_only_an_admin_may_burn_the_single_trial_of_the_company(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    """L'essai est unique et non renouvelable : un `editor` ne le grille pas d'un clic.
+
+    Le rôle `editor` est celui qu'on obtient en rejoignant une entreprise. Laisser ce bouton à sa
+    portée revenait à laisser n'importe quel salarié consommer, un lundi matin, ce que le patron
+    gardait pour le chantier de la semaine suivante.
+    """
+    _project_id, organization_id = await _project_and_organization(auth_client)
+    await subscribe(session, organization_id, PLAN_BUSINESS)
+
+    async with logged_in("compagnon@exemple.fr") as compagnon:
+        invitation = await auth_client.post(
+            f"/api/organizations/{organization_id}/invitations",
+            json={"email": "compagnon@exemple.fr", "role": "editor"},
+        )
+        assert invitation.status_code == 201, invitation.text
+        await compagnon.post(
+            "/api/invitations/accept", json={"token": invitation.json()["token"]}
+        )
+
+        refus = await compagnon.post(
+            f"/api/organizations/{organization_id}/subscription/trial"
+        )
+        assert refus.status_code == 403, refus.text
+
+    # Le propriétaire, lui, l'ouvre — la route n'est pas cassée, elle est cloisonnée.
+    assert (
+        await auth_client.post(f"/api/organizations/{organization_id}/subscription/trial")
+    ).status_code == 201
+
+
+async def _project_and_organization(client: AsyncClient) -> tuple[int, int]:
+    """Un chantier avec une pièce, et l'organisation personnelle qui le porte."""
+    project_id = int(
+        (await client.post("/api/projects", json={"name": "Chantier"})).json()["id"]
+    )
+    created = await client.post(
+        f"/api/projects/{project_id}/rooms", json={"name": "Salon", "polygon": CARRE}
+    )
+    assert created.status_code == 201, created.text
+    organization_id = int((await client.get("/api/organizations")).json()[0]["id"])
+    return project_id, organization_id

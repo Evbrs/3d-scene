@@ -21,6 +21,8 @@ from sqlmodel import col, select
 from app.api.organizations import hash_invitation_token, slugify
 from app.models.base import utcnow
 from app.models.organization import Invitation, Membership, Organization, OrganizationRole
+from app.services.seed_plans import PLAN_BUSINESS
+from tests.conftest import subscribe
 from tests.test_permissions_locataire import logged_in
 
 # Jeu complet de mentions légales : c'est exactement ce qu'un devis d'artisan doit porter.
@@ -51,6 +53,24 @@ async def _first_organization(client: AsyncClient) -> dict[str, object]:
     organizations = (await client.get("/api/organizations")).json()
     assert len(organizations) == 1
     return dict(organizations[0])
+
+
+async def _organization_that_pays_for_seats(
+    client: AsyncClient, session: AsyncSession
+) -> dict[str, object]:
+    """Organisation personnelle du compte, abonnée au palier qui ouvre le travail à plusieurs.
+
+    Inviter est payant depuis l'amendement A14 : c'est la ligne qui distingue le palier Entreprise,
+    et l'essai — palier Artisan, un siège — ne l'ouvre pas. Les tests ci-dessous portent sur la
+    gouvernance et sur les rôles, jamais sur la grille tarifaire ; sans cet abonnement, ils
+    mesureraient le mur de paiement au lieu de ce qu'ils cherchent. Le mur lui-même est vérifié
+    dans `test_offres.py`.
+    """
+    organization = await _first_organization(client)
+    identifier = organization["id"]
+    assert isinstance(identifier, int)
+    await subscribe(session, identifier, PLAN_BUSINESS)
+    return organization
 
 
 # --- Slug -------------------------------------------------------------------------------------
@@ -246,8 +266,10 @@ async def test_the_creator_becomes_owner_without_any_invitation(
     assert membership.role is OrganizationRole.OWNER
 
 
-async def test_the_member_list_shows_email_and_role(auth_client: AsyncClient) -> None:
-    organization = await _first_organization(auth_client)
+async def test_the_member_list_shows_email_and_role(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    organization = await _organization_that_pays_for_seats(auth_client, session)
 
     async with logged_in("compagnon@exemple.fr") as compagnon:
         invitation = await auth_client.post(
@@ -264,9 +286,11 @@ async def test_the_member_list_shows_email_and_role(auth_client: AsyncClient) ->
     assert par_email["titulaire@exemple.fr"]["role"] == "owner"
 
 
-async def test_an_admin_can_neither_create_nor_touch_an_owner(auth_client: AsyncClient) -> None:
+async def test_an_admin_can_neither_create_nor_touch_an_owner(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """Sans cette règle, `admin` et `owner` sont le même rôle, à une requête près."""
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
     titulaire = (await auth_client.get("/api/auth/me")).json()
 
     async with logged_in("second@exemple.fr") as second:
@@ -305,13 +329,15 @@ async def test_an_admin_can_neither_create_nor_touch_an_owner(auth_client: Async
         assert invitation_lecteur.status_code == 201, invitation_lecteur.text
 
 
-async def test_the_last_owner_can_neither_leave_nor_be_demoted(auth_client: AsyncClient) -> None:
+async def test_the_last_owner_can_neither_leave_nor_be_demoted(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """Une organisation sans propriétaire n'a plus personne pour inviter, payer, ou fermer.
 
     Seule une intervention en base la débloquerait : c'est exactement le genre d'impasse qu'un
     produit ne doit pas laisser fabriquer en un clic.
     """
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
     titulaire = (await auth_client.get("/api/auth/me")).json()
 
     depart = await auth_client.delete(
@@ -340,9 +366,11 @@ async def test_the_last_owner_can_neither_leave_nor_be_demoted(auth_client: Asyn
     assert (await auth_client.get(f"/api/organizations/{organization['id']}")).status_code == 404
 
 
-async def test_anyone_may_leave_an_organization_on_their_own(auth_client: AsyncClient) -> None:
+async def test_anyone_may_leave_an_organization_on_their_own(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """Quitter ne demande aucun rôle : c'est le pendant du droit de partir."""
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
 
     async with logged_in("passant@exemple.fr") as passant:
         invitation = await auth_client.post(
@@ -372,7 +400,7 @@ async def test_only_the_hash_of_the_invitation_token_is_stored(
     """Une copie de la base ne doit pas permettre de rejoindre les organisations qu'elle
     contient : c'est tout l'objet du hachage.
     """
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
 
     created = await auth_client.post(
         f"/api/organizations/{organization['id']}/invitations",
@@ -401,14 +429,14 @@ async def test_only_the_hash_of_the_invitation_token_is_stored(
 
 
 async def test_an_invitation_only_works_for_the_address_it_was_sent_to(
-    auth_client: AsyncClient, other_client: AsyncClient
+    auth_client: AsyncClient, other_client: AsyncClient, session: AsyncSession
 ) -> None:
     """Le jeton seul ne suffit pas.
 
     Un lien transféré — ou intercepté dans une boîte mail — ne doit pas ouvrir l'organisation à un
     compte qui n'était pas l'invité.
     """
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
     invitation = await auth_client.post(
         f"/api/organizations/{organization['id']}/invitations",
         json={"email": "destinataire@exemple.fr", "role": "admin"},
@@ -421,8 +449,10 @@ async def test_an_invitation_only_works_for_the_address_it_was_sent_to(
     assert (await other_client.get(f"/api/organizations/{organization['id']}")).status_code == 404
 
 
-async def test_an_invitation_cannot_be_used_twice(auth_client: AsyncClient) -> None:
-    organization = await _first_organization(auth_client)
+async def test_an_invitation_cannot_be_used_twice(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
+    organization = await _organization_that_pays_for_seats(auth_client, session)
     invitation = await auth_client.post(
         f"/api/organizations/{organization['id']}/invitations",
         json={"email": "unique@exemple.fr", "role": "viewer"},
@@ -440,7 +470,7 @@ async def test_an_invitation_cannot_be_used_twice(auth_client: AsyncClient) -> N
 async def test_an_expired_invitation_is_refused(
     auth_client: AsyncClient, session: AsyncSession
 ) -> None:
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
     invitation = await auth_client.post(
         f"/api/organizations/{organization['id']}/invitations",
         json={"email": "tardif@exemple.fr", "role": "editor", "expires_in_days": 1},
@@ -473,14 +503,16 @@ async def test_an_unknown_token_says_exactly_the_same_thing_as_an_expired_one(
     assert inconnu.json()["detail"] == "Invitation introuvable ou expirée"
 
 
-async def test_an_invitation_cannot_demote_the_last_owner(auth_client: AsyncClient) -> None:
+async def test_an_invitation_cannot_demote_the_last_owner(
+    auth_client: AsyncClient, session: AsyncSession
+) -> None:
     """L'invitation est un second chemin vers le rôle : elle doit buter sur la même règle.
 
     Sans ce contrôle, un `admin` invitait le dernier `owner` en `viewer` et l'organisation se
     retrouvait sans propriétaire au premier clic de celui-ci — un contournement complet de la
     protection posée sur le changement de rôle.
     """
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
     titulaire = (await auth_client.get("/api/auth/me")).json()
 
     async with logged_in("adjoint@exemple.fr") as adjoint:
@@ -514,7 +546,7 @@ async def test_accepting_an_invitation_upgrades_an_existing_pending_membership(
     `uq_membership_user_organization` l'interdit en base ; la route doit donc mettre à jour la
     ligne existante plutôt que d'en ajouter une, sinon la seconde invitation sort en 500.
     """
-    organization = await _first_organization(auth_client)
+    organization = await _organization_that_pays_for_seats(auth_client, session)
 
     async with logged_in("hesitant@exemple.fr") as hesitant:
         premiere = await auth_client.post(

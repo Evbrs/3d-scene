@@ -59,7 +59,10 @@ METRIC_LENGTH = 40
 IDEMPOTENCY_KEY_LENGTH = 120
 EXTERNAL_ID_LENGTH = 120
 
-# Durée de l'essai du palier Artisan, sans carte (`docs/strategie-produit.md` §4).
+# Durée de l'essai sans carte (`docs/strategie-produit.md` §4). C'est la **valeur initiale** de
+# `plan_catalog.trial_days`, plus jamais la vérité : allonger l'essai à 30 jours pour une campagne
+# est une ligne SQL, comme un plafond déplacé ou une remise (spec §10, amendement A14). Elle reste
+# ici parce que le semis et la migration ont besoin d'une valeur de départ.
 TRIAL_DAYS = 14
 
 
@@ -130,6 +133,7 @@ class PlanCatalog(TimestampedModel, table=True):
         CheckConstraint(
             "seat_price_cents >= 0", name="ck_plan_catalog_seat_price_not_negative"
         ),
+        CheckConstraint("trial_days >= 0", name="ck_plan_catalog_trial_days_not_negative"),
     )
 
     code: str = Field(primary_key=True, max_length=PLAN_CODE_LENGTH)
@@ -159,6 +163,12 @@ class PlanCatalog(TimestampedModel, table=True):
             MutableDict.as_mutable(json_type()), nullable=False, server_default=text("'{}'")
         ),
     )
+
+    # Durée de l'essai sans carte **offert par ce palier**, en jours. Zéro veut dire « aucun
+    # essai », et c'est le défaut : seul le palier d'essai (`seed_plans.TRIAL_PLAN_CODE`) en porte
+    # un. Ici et non dans une constante Python, pour la même raison que les limites — allonger
+    # l'essai d'une campagne commerciale ne doit pas être un déploiement.
+    trial_days: int = Field(default=0, sa_column_kwargs={"server_default": text("0")})
 
     # Un palier négocié pour un réseau particulier existe en base sans figurer sur la page tarifs.
     is_public: bool = Field(default=True, sa_column_kwargs={"server_default": true()})

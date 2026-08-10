@@ -15,6 +15,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.services.export_pdf import render_project_pdf
 from app.services.seed import seed_catalog
+from app.services.seed_plans import PLAN_ARTISAN
+from tests.conftest import subscribe
 from tests.test_export_pdf import _pdf_text
 
 CARRE: list[list[float]] = [[0, 0], [400, 0], [400, 300], [0, 300]]
@@ -111,6 +113,11 @@ async def test_the_synchronous_export_returns_a_pdf(auth_client: AsyncClient) ->
     assert response.content.startswith(b"%PDF-")
 
 
+async def _organization_of(client: AsyncClient) -> int:
+    """Identifiant de l'organisation personnelle du compte, créée au premier chantier."""
+    return int((await client.get("/api/organizations")).json()[0]["id"])
+
+
 async def test_the_elevation_names_the_furniture_it_draws(
     auth_client: AsyncClient, session: AsyncSession
 ) -> None:
@@ -119,9 +126,14 @@ async def test_the_elevation_names_the_furniture_it_draws(
     Le chargement de l'export ne lisait que `furniture_type_id` : sur une planche portant
     plusieurs meubles, le document ne disait plus lequel allait où. Le test passe par la route
     réelle, seul moyen de prouver que le nom traverse bien la base et pas seulement le rendu.
+
+    L'entreprise est abonnée : les planches d'élévation sont une fonctionnalité payante depuis
+    l'amendement A14, et un palier gratuit reçoit le dossier sans elles. Le mur lui-même est vérifié
+    dans `test_offres.py` ; ce qui se joue ici est le nom porté par le dessin.
     """
     await seed_catalog(session)
     project = (await auth_client.post("/api/projects", json={"name": "À nommer"})).json()
+    await subscribe(session, await _organization_of(auth_client), PLAN_ARTISAN)
     room = (
         await auth_client.post(
             f"/api/projects/{project['id']}/rooms", json={"name": "Salle de bains",
@@ -321,13 +333,18 @@ async def test_the_pdf_is_never_rendered_on_the_event_loop(
     seen: list[str] = []
     original = export_pdf.render_project_pdf
 
-    # `watermark` est décidé par le serveur d'après le palier (`app/services/quotas.py`) et passé
-    # nommément : sans ce paramètre, l'espion refuse l'appel réel de la route.
+    # `watermark` et `elevations` sont décidés par le serveur d'après le palier
+    # (`app/services/quotas.py`) et passés nommément : sans ces paramètres, l'espion refuse l'appel
+    # réel de la route.
     def spy(
-        project: dict[str, object], generated_at: datetime, *, watermark: bool = False
+        project: dict[str, object],
+        generated_at: datetime,
+        *,
+        watermark: bool = False,
+        elevations: bool = True,
     ) -> bytes:
         seen.append(threading.current_thread().name)
-        return original(project, generated_at, watermark=watermark)
+        return original(project, generated_at, watermark=watermark, elevations=elevations)
 
     monkeypatch.setattr("app.api.exports.render_project_pdf", spy)
     response = await auth_client.get(f"/api/projects/{project_id}/exports/pdf/direct")

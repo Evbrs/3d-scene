@@ -97,6 +97,18 @@ class Covering(BaseModel):
     unit_width_cm: Centimeters | None = None
     unit_height_cm: Centimeters | None = None
     pattern: LayingPattern | None = None
+    # Taux de chute imposé pour cette face, en points de base (800 = 8 %). Absent, c'est la
+    # provision du motif qui s'applique (`app/geometry/quantities.py`), et c'est le cas courant.
+    #
+    # Il vit ici et non sur `price_item` (spec §10, amendement A14) : la chute est une propriété
+    # **physique** de la pose — coupes de rive, casse, rattrapage de trame — au même titre que le
+    # motif et les dimensions d'unité, qui sont déjà ici. Ce n'est pas du chiffrage, et c'est ce
+    # qui la distingue de `face_costing`. Le poseur qui sait que le grand format lui coûte 15 % le
+    # dit sur la face qu'il vient de décrire, sans quitter l'écran.
+    #
+    # Borné à 100 % : au-delà on commanderait plus du double de la surface posée, ce qui est une
+    # faute de frappe et non un choix de métier.
+    waste_ratio_bp: Annotated[int, Field(ge=0, le=10_000)] | None = None
 
 
 # --- Element ----------------------------------------------------------------------------------

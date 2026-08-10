@@ -59,6 +59,8 @@ from app.intelligence.rules import (
     Severity,
     inspect_scene,
 )
+from app.services.seed_plans import PLAN_BUSINESS
+from tests.conftest import subscribe
 
 FIXTURES = Path(__file__).parent / "intelligence" / "fixtures"
 
@@ -1087,6 +1089,11 @@ async def build_project(client: AsyncClient) -> dict[str, Any]:
     return {"project": project, "room": room}
 
 
+async def organization_of(client: AsyncClient) -> int:
+    """Identifiant de l'organisation personnelle du compte."""
+    return int((await client.get("/api/organizations")).json()[0]["id"])
+
+
 async def test_the_inspection_route_returns_a_typed_report(auth_client: AsyncClient) -> None:
     built = await build_project(auth_client)
 
@@ -1147,10 +1154,13 @@ async def test_the_laying_plan_route_says_how_to_lay_and_not_only_how_much(
 
 
 async def test_the_layout_route_proposes_without_writing_anything(
-    auth_client: AsyncClient,
+    auth_client: AsyncClient, session: AsyncSession
 ) -> None:
     """Aucune ligne créée : le client choisit, le moteur propose."""
     built = await build_project(auth_client)
+    # L'aménagement automatique est une fonctionnalité du palier Entreprise (A14), et l'essai
+    # n'offre qu'Artisan : le mur a son propre test, celui-ci porte sur l'absence d'écriture.
+    await subscribe(session, await organization_of(auth_client), PLAN_BUSINESS)
     before = (await auth_client.get(f"/api/rooms/{built['room']['id']}")).json()
 
     response = await auth_client.post(
@@ -1187,14 +1197,20 @@ async def test_the_layout_route_refuses_an_unknown_field(auth_client: AsyncClien
 
 
 async def test_a_viewer_reads_the_inspection_but_never_asks_for_a_layout(
-    auth_client: AsyncClient,
+    auth_client: AsyncClient, session: AsyncSession
 ) -> None:
     """Le rôle exigé pour l'aménagement est `editor` : c'est le calcul le plus cher de l'API, et
-    une proposition n'a de sens que pour quelqu'un qui peut ensuite modifier le plan."""
+    une proposition n'a de sens que pour quelqu'un qui peut ensuite modifier le plan.
+
+    L'entreprise est au palier Entreprise : c'est le seul qui ouvre à la fois le second siège et
+    l'aménagement automatique (A14). Sans lui, le refus observé serait celui du mur de paiement, et
+    le test cesserait de dire quoi que ce soit sur les rôles.
+    """
     from tests.test_permissions_locataire import logged_in
 
     built = await build_project(auth_client)
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
 
     async with logged_in("lecteur-ia@exemple.fr") as lecteur:
         invitation = await auth_client.post(

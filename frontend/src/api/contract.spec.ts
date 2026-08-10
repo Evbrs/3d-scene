@@ -150,6 +150,70 @@ describe('contrat avec le backend', () => {
     }
   })
 
+  it('toute la chaîne commerciale a un appelant dans le client', () => {
+    // Le constat qui a motivé ce test : 24 chemins publiés sur 58 n'étaient appelés par aucune
+    // ligne de `client.ts`, et parmi eux la chaîne commerciale entière. Un backend complet et
+    // testé, mais aucun écran pour produire un devis — donc rien à vendre.
+    //
+    // Publier une route et ne jamais l'appeler ne casse aucun test : c'est précisément pour cela
+    // que la vérification doit être écrite. Elle échoue si l'un de ces appels disparaît.
+    const appeles = new Set(calledEndpoints().map((appel) => `${appel.method} ${appel.path}`))
+
+    const attendus = [
+      // Métré : la preuve gratuite que le calcul est juste.
+      'get /api/projects/{}/takeoff',
+      'get /api/projects/{}/takeoff.csv',
+      // Chiffrage imposé face par face.
+      'get /api/projects/{}/costings',
+      'put /api/faces/{}/costing',
+      'delete /api/faces/{}/costing',
+      // Devis : le premier mur de paiement gardait une route qu'aucun écran n'appelait.
+      'get /api/projects/{}/quotes',
+      'post /api/projects/{}/quotes',
+      'get /api/quotes',
+      'get /api/quotes/{}',
+      'patch /api/quotes/{}',
+      'post /api/quotes/{}/issue',
+      'post /api/quotes/{}/invoice',
+      'get /api/quotes/{}/pdf',
+      'get /api/quotes/{}/invoice.pdf',
+      'get /api/quotes/{}/invoice.xml',
+      // Barème : sans lui, aucune ligne de devis n'a de prix.
+      'get /api/organizations/{}/price-books',
+      'post /api/organizations/{}/price-books',
+      'get /api/price-books/{}/items',
+      'post /api/price-books/{}/items',
+      'patch /api/price-items/{}',
+      'delete /api/price-items/{}',
+      // Multi-locataire : la raison d'être commerciale du palier à 79 €, jusqu'ici inutilisable
+      // sans ouvrir une console SQL.
+      'get /api/organizations/{}',
+      'patch /api/organizations/{}',
+      'get /api/organizations/{}/members',
+      'patch /api/organizations/{}/members/{}',
+      'delete /api/organizations/{}/members/{}',
+      'get /api/organizations/{}/invitations',
+      'post /api/organizations/{}/invitations',
+      'post /api/invitations/accept',
+    ]
+
+    expect(attendus.filter((operation) => !appeles.has(operation))).toEqual([])
+  })
+
+  it('les routes de la chaîne commerciale existent bien au contrat', () => {
+    // Contrepartie du test précédent : il vérifie qu'on appelle, celui-ci qu'on appelle quelque
+    // chose de publié. Sans lui, une faute de frappe recopiée à l'identique dans les deux listes
+    // passerait inaperçue.
+    const operations = schemaOperations()
+
+    expect(operations.get('/api/projects/{}/takeoff')?.has('get')).toBe(true)
+    expect(operations.get('/api/quotes/{}/issue')?.has('post')).toBe(true)
+    expect(operations.get('/api/quotes/{}/issue')?.has('get')).toBe(false)
+    expect(operations.get('/api/faces/{}/costing')?.has('put')).toBe(true)
+    expect(operations.get('/api/faces/{}/costing')?.has('patch')).toBe(false)
+    expect(operations.get('/api/invitations/accept')?.has('post')).toBe(true)
+  })
+
   it('les champs du scene graph consommés par le viewer sont ceux du backend', () => {
     // Vérification de forme : le scene graph est un dictionnaire libre côté OpenAPI, donc on
     // s'assure au moins que la route existe et renvoie du JSON.

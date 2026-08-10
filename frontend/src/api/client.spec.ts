@@ -238,6 +238,107 @@ describe('lecture d’un conflit 409', () => {
   })
 })
 
+describe('chaîne commerciale', () => {
+  it('émet le devis par un POST, sans corps à inventer', async () => {
+    respondWith({ '/api/quotes/12/issue': [() => jsonResponse(200, { id: 12, status: 'sent' })] })
+
+    await api.issueQuote(12)
+
+    const appel = pathsCalled('/api/quotes/12/issue')[0]
+    expect(appel?.init?.method).toBe('POST')
+    expect(appel?.init?.body).toBeUndefined()
+  })
+
+  it('remplace le chiffrage d’une face par un PUT, pas par un PATCH', async () => {
+    respondWith({ '/api/faces/7/costing': [() => jsonResponse(200, { id: 1, face_id: 7 })] })
+
+    await api.setFaceCosting(7, {
+      price_item_code: 'PEINT-MUR',
+      override_quantity: '12.5',
+      override_unit_price_cents: 2400,
+    })
+
+    const appel = pathsCalled('/api/faces/7/costing')[0]
+    // La route est un remplacement complet : un PATCH laisserait l'ambiguïté entre « ne touche
+    // pas » et « efface » sur trois champs qui sont tous facultatifs.
+    expect(appel?.init?.method).toBe('PUT')
+    // La quantité reste une chaîne décimale de bout en bout : la faire transiter par un nombre
+    // JavaScript perdrait les millièmes que le serveur, lui, conserve.
+    expect(JSON.parse(String(appel?.init?.body)).override_quantity).toBe('12.5')
+  })
+
+  it('n’envoie au PATCH d’un devis que les champs qu’on veut changer', async () => {
+    respondWith({ '/api/quotes/12': [() => jsonResponse(200, { id: 12, status: 'accepted' })] })
+
+    await api.updateQuote(12, { status: 'accepted' })
+
+    // Le serveur applique `exclude_unset` : un champ envoyé « pour la forme » serait écrit, et
+    // sur un document déjà émis il vaudrait un 409.
+    expect(JSON.parse(String(pathsCalled('/api/quotes/12')[0]?.init?.body))).toEqual({
+      status: 'accepted',
+    })
+  })
+
+  it('joint le jeton pour lire un PDF, qu’un simple lien n’aurait pas porté', async () => {
+    api.storeToken('valide')
+    respondWith({ '/api/quotes/12/pdf': [() => new Response('%PDF', { status: 200 })] })
+
+    await api.downloadQuotePdf(12)
+
+    const appel = pathsCalled('/api/quotes/12/pdf')[0]
+    expect(new Headers(appel?.init?.headers).get('Authorization')).toBe('Bearer valide')
+  })
+
+  it('rejoue le téléchargement d’une facture après renouvellement du jeton', async () => {
+    api.storeToken('expire')
+    respondWith({
+      '/api/quotes/12/invoice.pdf': [
+        () => jsonResponse(401, { detail: 'Jeton expiré' }),
+        () => new Response('%PDF', { status: 200 }),
+      ],
+      '/api/auth/refresh': [() => jsonResponse(200, { access_token: 'frais' })],
+    })
+
+    // Sans ce rejeu, une facture demandée en fin de session échouait juste après avoir été
+    // produite — et rien ne distinguait ce 401 d'un refus de droits.
+    await api.downloadInvoicePdf(12)
+
+    expect(pathsCalled('/api/quotes/12/invoice.pdf')).toHaveLength(2)
+    expect(api.storedToken()).toBe('frais')
+  })
+
+  it('n’abandonne pas le rejeu au premier échec du métré en CSV', async () => {
+    api.storeToken('expire')
+    respondWith({
+      '/api/projects/3/takeoff.csv': [() => jsonResponse(401, { detail: 'Jeton expiré' })],
+      '/api/auth/refresh': [() => jsonResponse(401, { detail: 'Session close' })],
+    })
+
+    await expect(api.downloadTakeoffCsv(3)).rejects.toMatchObject({ status: 401 })
+
+    // Un seul appel : le rafraîchissement ayant été refusé, on ne rejoue pas dans le vide.
+    expect(pathsCalled('/api/projects/3/takeoff.csv')).toHaveLength(1)
+    expect(api.storedToken()).toBeNull()
+  })
+
+  it('retire un membre par un DELETE et un rôle par un PATCH', async () => {
+    respondWith({
+      '/api/organizations/4/members/9': [
+        () => new Response(null, { status: 204 }),
+        () => jsonResponse(200, { user_id: 9, email: 'a@b.fr', role: 'admin' }),
+      ],
+    })
+
+    await api.removeMember(4, 9)
+    await api.updateMemberRole(4, 9, 'admin')
+
+    const appels = pathsCalled('/api/organizations/4/members/9')
+    expect(appels[0]?.init?.method).toBe('DELETE')
+    expect(appels[1]?.init?.method).toBe('PATCH')
+    expect(JSON.parse(String(appels[1]?.init?.body))).toEqual({ role: 'admin' })
+  })
+})
+
 describe('contrôle de conformité', () => {
   it('n’envoie le mode accessible que lorsqu’il est demandé', async () => {
     const rapport = {

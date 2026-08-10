@@ -8,17 +8,30 @@
 
 import type {
   Covering,
+  CostedFaceKind,
   Face,
+  FaceCosting,
   FurnitureType,
   InspectionReport,
+  Invitation,
+  InvitationCreated,
   LayingPlan,
   LayoutProposals,
+  Member,
+  OrganizationRole,
   Page,
   PlanElement,
+  PriceBook,
+  PriceItem,
+  PriceUnit,
   Project,
   ProjectSummary,
+  Quote,
+  QuoteStatus,
+  QuoteSummary,
   Room,
   SceneGraph,
+  Takeoff,
 } from '@/api/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -698,16 +711,6 @@ export function readExportStatus(projectId: number, taskId: string): Promise<Exp
 }
 
 /**
- * URL de téléchargement d'un export.
- *
- * Écrite en toutes lettres et à un seul endroit : c'est ce que `contract.spec.ts` confronte au
- * schéma OpenAPI. Une URL assemblée morceau par morceau échapperait à cette vérification.
- */
-export function exportDownloadUrl(projectId: number, filename: string): string {
-  return `${API_BASE_URL}/api/projects/${projectId}/exports/${encodeURIComponent(filename)}`
-}
-
-/**
  * Attend qu'un export soit prêt, en sondant le serveur.
  *
  * L'attente est bornée : au-delà de `EXPORT_TIMEOUT_MS`, on rend la main avec un message plutôt
@@ -736,29 +739,28 @@ export async function waitForPdfExport(
 }
 
 /**
- * Récupère le PDF produit.
+ * Récupère un fichier servi par une route authentifiée.
  *
- * Un simple lien ne suffit pas : la route exige l'en-tête `Authorization`, que le navigateur ne
- * joint pas à une navigation. Le fichier est donc lu ici, avec le même unique rejeu après
- * renouvellement du jeton que les autres appels — sans lui, un export lancé en fin de session
- * échouerait juste après avoir été généré.
+ * Un simple lien ne suffit pas : ces routes exigent l'en-tête `Authorization`, que le navigateur
+ * ne joint pas à une navigation. Le fichier est donc lu ici, avec le même unique rejeu après
+ * renouvellement du jeton que les autres appels — sans lui, un document demandé en fin de session
+ * échouerait juste après avoir été produit.
+ *
+ * Écrit une seule fois pour les six fichiers du produit (dossier PDF, métré CSV, devis PDF,
+ * facture PDF et XML) : cinq recopies du rejeu, c'est cinq occasions de l'oublier quelque part.
  */
-export async function downloadExport(
-  projectId: number,
-  filename: string,
-  allowRetry = true,
-): Promise<Blob> {
+async function downloadBlob(path: string, allowRetry = true): Promise<Blob> {
   const headers = new Headers()
   const token = storedToken()
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const response = await fetch(exportDownloadUrl(projectId, filename), { headers })
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers })
 
   if (response.status === 401 && token) {
     if (allowRetry && (await refreshSession())) {
-      return downloadExport(projectId, filename, false)
+      return downloadBlob(path, false)
     }
     clearToken()
     sessionLostHandler?.()
@@ -767,6 +769,10 @@ export async function downloadExport(
     throw new ApiError(response.status, `Erreur HTTP ${response.status}`)
   }
   return response.blob()
+}
+
+export function downloadExport(projectId: number, filename: string): Promise<Blob> {
+  return downloadBlob(`/api/projects/${projectId}/exports/${encodeURIComponent(filename)}`)
 }
 
 // --- Partage de vue (P8) --------------------------------------------------------------------
@@ -896,14 +902,330 @@ export function startTrial(organizationId: number): Promise<Entitlement> {
   })
 }
 
+/**
+ * L'entreprise, avec son identité légale.
+ *
+ * Ces champs ne sont pas administratifs : sans SIRET, forme juridique, capital, RCS et assurance
+ * décennale, un devis émis n'est pas valable et la facture ne porte pas ses mentions obligatoires
+ * (`app/services/facturx.py`). Ils sont tous facultatifs côté serveur — c'est à l'écran de dire
+ * lesquels manquent avant qu'un document parte chez un client.
+ */
 export interface Organization {
   id: number
   name: string
   slug: string
+  created_at?: string
+  siret?: string | null
+  legal_form?: string | null
+  share_capital_cents?: number | null
+  rcs?: string | null
+  vat_number?: string | null
+  address_line1?: string | null
+  address_line2?: string | null
+  postal_code?: string | null
+  city?: string | null
+  country?: string | null
+  phone?: string | null
+  billing_email?: string | null
+  logo_url?: string | null
+  decennial_insurer?: string | null
+  decennial_policy_number?: string | null
+  decennial_coverage_area?: string | null
 }
 
 export function listOrganizations(): Promise<Organization[]> {
   return request<Organization[]>('/api/organizations')
+}
+
+export function readOrganization(organizationId: number): Promise<Organization> {
+  return request<Organization>(`/api/organizations/${organizationId}`)
+}
+
+/**
+ * Met à jour l'identité de l'entreprise.
+ *
+ * Le `slug` n'y figure pas : il apparaît dans des URL déjà diffusées, et le serveur le refuse.
+ * N'envoyer que les champs modifiés serait inutile ici — la route remplace ce qu'on lui donne, et
+ * le formulaire est complet.
+ */
+export function updateOrganization(
+  organizationId: number,
+  payload: OrganizationPayload,
+): Promise<Organization> {
+  return request<Organization>(`/api/organizations/${organizationId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export type OrganizationPayload = Partial<Omit<Organization, 'id' | 'slug' | 'created_at'>>
+
+// --- Équipe : membres et invitations ------------------------------------------------------------
+
+export function listMembers(organizationId: number): Promise<Member[]> {
+  return request<Member[]>(`/api/organizations/${organizationId}/members`)
+}
+
+export function updateMemberRole(
+  organizationId: number,
+  userId: number,
+  role: OrganizationRole,
+): Promise<Member> {
+  return request<Member>(`/api/organizations/${organizationId}/members/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  })
+}
+
+export function removeMember(organizationId: number, userId: number): Promise<void> {
+  return request<void>(`/api/organizations/${organizationId}/members/${userId}`, {
+    method: 'DELETE',
+  })
+}
+
+export function listInvitations(organizationId: number): Promise<Invitation[]> {
+  return request<Invitation[]>(`/api/organizations/${organizationId}/invitations`)
+}
+
+/**
+ * Invite une adresse. La réponse porte le jeton **en clair, une seule fois** : la base n'en garde
+ * que le hachage, donc l'appelant qui ne le transmet pas immédiatement l'a perdu.
+ */
+export function inviteMember(
+  organizationId: number,
+  email: string,
+  role: OrganizationRole,
+  expiresInDays = 7,
+): Promise<InvitationCreated> {
+  return request<InvitationCreated>(`/api/organizations/${organizationId}/invitations`, {
+    method: 'POST',
+    body: JSON.stringify({ email, role, expires_in_days: expiresInDays }),
+  })
+}
+
+/**
+ * Accepte une invitation. Le jeton seul ne suffit pas : le serveur exige que l'adresse invitée
+ * soit celle du compte connecté, pour qu'un lien transféré n'ouvre pas l'entreprise à un tiers.
+ */
+export function acceptInvitation(token: string): Promise<Member> {
+  return request<Member>('/api/invitations/accept', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+}
+
+// --- Métré (`docs/strategie-produit.md` §3.1) ----------------------------------------------------
+
+/**
+ * Métré du projet : surfaces nettes par face, linéaires, calepinage, totaux.
+ *
+ * Volontairement **hors du mur de paiement** : on prouve que le calcul est juste avant de demander
+ * de payer. C'est le devis chiffré qui est payant, pas la mesure.
+ */
+export function readTakeoff(projectId: number): Promise<Takeoff> {
+  return request<Takeoff>(`/api/projects/${projectId}/takeoff`)
+}
+
+/** Le même métré au format tableur : le pont vers le classeur de prix déjà en usage. */
+export function downloadTakeoffCsv(projectId: number): Promise<Blob> {
+  return downloadBlob(`/api/projects/${projectId}/takeoff.csv`)
+}
+
+// --- Chiffrage imposé face par face --------------------------------------------------------------
+
+export function listFaceCostings(projectId: number): Promise<FaceCosting[]> {
+  return request<FaceCosting[]>(`/api/projects/${projectId}/costings`)
+}
+
+/**
+ * Pose — ou remplace — le chiffrage d'une face.
+ *
+ * `PUT` et non `PATCH`, comme le serveur : les trois champs sont tous facultatifs, et un
+ * remplacement complet lève l'ambiguïté entre « ne touche pas » et « efface ». La quantité voyage
+ * en **chaîne** décimale pour ne pas perdre de millièmes en route.
+ */
+export function setFaceCosting(
+  faceId: number,
+  payload: {
+    price_item_code: string | null
+    override_quantity: string | null
+    override_unit_price_cents: number | null
+  },
+): Promise<FaceCosting> {
+  return request<FaceCosting>(`/api/faces/${faceId}/costing`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteFaceCosting(faceId: number): Promise<void> {
+  return request<void>(`/api/faces/${faceId}/costing`, { method: 'DELETE' })
+}
+
+// --- Barème -------------------------------------------------------------------------------------
+
+export function listPriceBooks(organizationId: number): Promise<PriceBook[]> {
+  return request<PriceBook[]>(`/api/organizations/${organizationId}/price-books`)
+}
+
+export function createPriceBook(
+  organizationId: number,
+  name: string,
+  options: { is_default?: boolean; seed_default_items?: boolean } = {},
+): Promise<PriceBook> {
+  return request<PriceBook>(`/api/organizations/${organizationId}/price-books`, {
+    method: 'POST',
+    body: JSON.stringify({ name, ...options }),
+  })
+}
+
+export function listPriceItems(priceBookId: number): Promise<PriceItem[]> {
+  return request<PriceItem[]>(`/api/price-books/${priceBookId}/items`)
+}
+
+export interface PriceItemPayload {
+  code: string
+  label: string
+  unit: PriceUnit
+  unit_price_cents: number
+  vat_rate_bp: number
+}
+
+export function createPriceItem(
+  priceBookId: number,
+  payload: PriceItemPayload,
+): Promise<PriceItem> {
+  return request<PriceItem>(`/api/price-books/${priceBookId}/items`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * Modifie une ligne de barème. Le `code` en est absent volontairement : c'est la clé de
+ * rattachement du métré et des devis passés, et le renommer casserait les correspondances déjà
+ * faites. Une ligne dont le code est faux se supprime et se recrée.
+ */
+export function updatePriceItem(
+  priceItemId: number,
+  payload: Partial<Omit<PriceItemPayload, 'code'>>,
+): Promise<PriceItem> {
+  return request<PriceItem>(`/api/price-items/${priceItemId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deletePriceItem(priceItemId: number): Promise<void> {
+  return request<void>(`/api/price-items/${priceItemId}`, { method: 'DELETE' })
+}
+
+// --- Devis et facture ----------------------------------------------------------------------------
+
+/** Une ligne saisie à la main, ajoutée aux lignes déduites du métré. */
+export interface QuoteLineInput {
+  label: string
+  unit: PriceUnit
+  /** Décimale en chaîne : le serveur l'accepte ainsi et n'en perd aucun millième. */
+  quantity: string
+  unit_price_cents: number
+  vat_rate_bp: number
+}
+
+/**
+ * Demande de devis : le client, et ce que le métré ne peut pas deviner.
+ *
+ * `default_price_codes` est indexé par nature de face (`wall`, `floor`, `ceiling`) : c'est le
+ * « tous les murs en peinture, tous les sols en carrelage » qui évite soixante rattachements à la
+ * main sur un projet de douze pièces.
+ */
+export interface QuotePayload {
+  client_name: string
+  client_is_consumer: boolean
+  client_email?: string | null
+  client_phone?: string | null
+  client_address_line1?: string | null
+  client_postal_code?: string | null
+  client_city?: string | null
+  site_address_line1?: string | null
+  site_postal_code?: string | null
+  site_city?: string | null
+  notes?: string | null
+  price_book_id?: number | null
+  valid_for_days?: number | null
+  default_price_codes: Partial<Record<CostedFaceKind, string>>
+  include_skirting: boolean
+  include_cornice: boolean
+  include_openings: boolean
+  extra_lines: QuoteLineInput[]
+}
+
+export function listQuotes(): Promise<QuoteSummary[]> {
+  return request<QuoteSummary[]>('/api/quotes')
+}
+
+export function listProjectQuotes(projectId: number): Promise<QuoteSummary[]> {
+  return request<QuoteSummary[]>(`/api/projects/${projectId}/quotes`)
+}
+
+/**
+ * Crée un devis **brouillon** depuis le métré. Sans numéro : il n'est attribué qu'à l'émission,
+ * sinon chaque brouillon abandonné ferait un trou dans une suite qui doit être continue.
+ *
+ * C'est le premier mur de paiement du produit : un 402 ici n'est pas une panne, c'est l'offre.
+ */
+export function createQuote(projectId: number, payload: QuotePayload): Promise<Quote> {
+  return request<Quote>(`/api/projects/${projectId}/quotes`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function readQuote(quoteId: number): Promise<Quote> {
+  return request<Quote>(`/api/quotes/${quoteId}`)
+}
+
+/**
+ * Modifie un devis. Le serveur n'applique que les champs **présents** dans le corps : n'envoyer
+ * que ce qui change est donc une obligation, pas une optimisation.
+ *
+ * Dès que le document est émis, seul `status` est encore accepté — tout le reste rend un 409.
+ */
+export function updateQuote(
+  quoteId: number,
+  changes: { status?: QuoteStatus } & Partial<Omit<QuotePayload, 'default_price_codes'>>,
+): Promise<Quote> {
+  return request<Quote>(`/api/quotes/${quoteId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+/** Émet le devis : lui attribue son numéro et le fige. Le geste qui engage l'entreprise. */
+export function issueQuote(quoteId: number): Promise<Quote> {
+  return request<Quote>(`/api/quotes/${quoteId}/issue`, { method: 'POST' })
+}
+
+/**
+ * Transforme un devis **accepté** en facture, aux mêmes lignes et aux mêmes prix. Rien n'est
+ * recopié : c'est le même document qui change d'état.
+ */
+export function convertToInvoice(quoteId: number): Promise<Quote> {
+  return request<Quote>(`/api/quotes/${quoteId}/invoice`, { method: 'POST' })
+}
+
+export function downloadQuotePdf(quoteId: number): Promise<Blob> {
+  return downloadBlob(`/api/quotes/${quoteId}/pdf`)
+}
+
+/** Facture au format Factur-X : PDF/A-3 lisible avec le XML CII embarqué. */
+export function downloadInvoicePdf(quoteId: number): Promise<Blob> {
+  return downloadBlob(`/api/quotes/${quoteId}/invoice.pdf`)
+}
+
+/** Le XML CII seul, pour qui alimente déjà une plateforme avec ses propres outils. */
+export function downloadInvoiceXml(quoteId: number): Promise<Blob> {
+  return downloadBlob(`/api/quotes/${quoteId}/invoice.xml`)
 }
 
 export function openApiSchema(): Promise<Record<string, unknown>> {

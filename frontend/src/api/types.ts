@@ -19,6 +19,16 @@ export interface Covering {
   unit_width_cm?: number | null
   unit_height_cm?: number | null
   pattern?: LayingPattern | null
+  /**
+   * Taux de chute imposé pour cette face, en **points de base** : 800 = 8 % (spec §10,
+   * amendement A14). Absent, c'est la provision du motif de pose qui s'applique côté serveur.
+   *
+   * Il est ici parce que le client doit pouvoir le renvoyer intact : la fusion du revêtement
+   * réécrit le dictionnaire entier, et un champ que le type ignore serait effacé au premier
+   * changement de couleur — c'est le défaut que la vague 1 avait corrigé sur `material` et
+   * `pattern`.
+   */
+  waste_ratio_bp?: number | null
 }
 
 /**
@@ -312,4 +322,286 @@ export interface LayoutProposals {
   weights: Record<string, number>
   proposals: LayoutProposal[]
   warnings: string[]
+}
+
+// --- Métré (`docs/strategie-produit.md` §3.1) -----------------------------------------------------
+
+/**
+ * Ce que le métré ne sait pas établir sort à `null`, **jamais à zéro**.
+ *
+ * La distinction est le cœur du contrat de `app/geometry/quantities.py::build_takeoff` : un zéro
+ * s'additionne sans bruit et donne un devis trop bas, une inconnue se voit. Les écrans doivent
+ * donc afficher un tiret pour `null`, et jamais « 0 ».
+ */
+export type Mesure = number | null
+
+/**
+ * Calepinage d'une face : ce qu'on commande, ce qu'on pose entier, ce qu'on coupe.
+ *
+ * `pattern` n'est pas typé `LayingPattern` : le métré accepte un motif qu'il ne connaît pas, le
+ * provisionne comme une pose droite et le signale dans `warnings`. Le restreindre ici ferait
+ * mentir le type sur ce que le serveur envoie réellement.
+ *
+ * `full_units` et `cut_units` sont nuls dès que la pose n'est pas alignée sur les bords de la face
+ * (diagonale, chevron, bâton rompu) : il n'y a alors ni colonnes ni rangs à compter.
+ */
+export interface Tiling {
+  pattern: string
+  unit_width_cm: number
+  unit_height_cm: number
+  unit_area_m2: number
+  waste_ratio: number
+  ordered_area_m2: number
+  units_total: number
+  full_units: Mesure
+  cut_units: Mesure
+}
+
+export interface TakeoffFace {
+  face_id: number
+  face_label: string
+  kind: FaceKind
+  /** Nuls sur un sol et un plafond : une dalle n'a ni longueur ni hauteur de mur. */
+  length_m: Mesure
+  height_m: Mesure
+  gross_area_m2: Mesure
+  openings_area_m2: Mesure
+  net_area_m2: Mesure
+  opening_count: number
+  door_count: number
+  window_count: number
+  skirting_deduction_ml: Mesure
+  material: string | null
+  tiling: Tiling | null
+}
+
+/** Les calepinages regroupés par référence : la forme d'une commande de matériaux. */
+export interface TakeoffCovering {
+  material: string | null
+  pattern: string
+  unit_width_cm: number
+  unit_height_cm: number
+  waste_ratio: number
+  net_area_m2: number
+  ordered_area_m2: number
+  units_total: number
+  full_units: Mesure
+  cut_units: Mesure
+}
+
+/** Mobilier compté **à l'unité** et sans aucun montant (spec §10, amendement A7). */
+export interface TakeoffFurniture {
+  furniture_type_slug: string
+  width_cm: number
+  height_cm: number
+  depth_cm: number
+  footprint_m2: number
+  count: number
+  free_count: number
+  on_face_count: number
+}
+
+export interface TakeoffRoom {
+  room_id: number | null
+  name: string | null
+  ceiling_height_m: Mesure
+  wall_thickness_m: Mesure
+  perimeter_ml: Mesure
+  net_perimeter_ml: Mesure
+  skirting_ml: Mesure
+  cornice_ml: Mesure
+  floor_area_m2: Mesure
+  ceiling_area_m2: Mesure
+  volume_m3: Mesure
+  wall_gross_area_m2: Mesure
+  wall_openings_area_m2: Mesure
+  wall_net_area_m2: Mesure
+  opening_count: number
+  door_count: number
+  window_count: number
+  faces: TakeoffFace[]
+  coverings: TakeoffCovering[]
+  /** Clé **absente** quand la pièce n'en porte aucun : son absence vaut zéro, pas « inconnu ». */
+  furniture?: TakeoffFurniture[]
+  warnings: string[]
+}
+
+export interface TakeoffTotals {
+  room_count: number
+  floor_area_m2: Mesure
+  ceiling_area_m2: Mesure
+  wall_gross_area_m2: Mesure
+  wall_openings_area_m2: Mesure
+  wall_net_area_m2: Mesure
+  volume_m3: Mesure
+  perimeter_ml: Mesure
+  skirting_ml: Mesure
+  cornice_ml: Mesure
+  opening_count: number
+  door_count: number
+  window_count: number
+  coverings: TakeoffCovering[]
+  furniture?: TakeoffFurniture[]
+}
+
+export interface Takeoff {
+  units: Record<string, string>
+  project_id: number | null
+  rooms: TakeoffRoom[]
+  totals: TakeoffTotals
+  /** Non décoratif : les totaux sont **partiels** dès que cette liste n'est pas vide. */
+  warnings: string[]
+}
+
+// --- Barème, devis et facture (`docs/strategie-produit.md` §2 et §3.1) ----------------------------
+
+/** Les quatre unités du barème : deux que le métré produit, deux que l'artisan saisit. */
+export type PriceUnit = 'm2' | 'ml' | 'u' | 'forfait'
+
+/** Nature d'une face, telle que `default_price_codes` la nomme côté serveur. */
+export type CostedFaceKind = 'wall' | 'floor' | 'ceiling'
+
+export interface PriceBook {
+  id: number
+  organization_id: number
+  name: string
+  is_default: boolean
+}
+
+/**
+ * Une ligne de barème. Les montants sont des **centimes entiers**, les taux des points de base
+ * (1000 = 10 %). Ni les uns ni les autres ne doivent passer par un flottant pour être calculés.
+ */
+export interface PriceItem {
+  id: number
+  price_book_id: number
+  code: string
+  label: string
+  unit: PriceUnit
+  unit_price_cents: number
+  vat_rate_bp: number
+}
+
+/**
+ * Décision explicite de l'artisan sur une face : elle prime sur tout le reste du chiffrage.
+ *
+ * Les trois champs sont indépendants — imposer le seul code, la seule quantité (une reprise
+ * partielle relevée sur place) ou le seul prix (un tarif négocié).
+ */
+export interface FaceCosting {
+  id: number
+  face_id: number
+  price_item_code: string | null
+  /** Décimale transportée en **chaîne** : la reprendre en flottant perdrait des millièmes. */
+  override_quantity: string | null
+  override_unit_price_cents: number | null
+}
+
+/**
+ * Cycle de vie d'un devis. L'ordre compte : `draft` est le seul état où le document se modifie
+ * encore. Dès `sent`, il porte un numéro, il est parti chez le client, et il est figé.
+ */
+export type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'refused' | 'invoiced'
+
+export interface QuoteLine {
+  id: number
+  position: number
+  label: string
+  unit: PriceUnit
+  /** Décimale en chaîne, pour la même raison que `FaceCosting.override_quantity`. */
+  quantity: string
+  unit_price_cents: number
+  vat_rate_bp: number
+  total_ht_cents: number
+  /** La face d'où vient la ligne, quand elle vient du métré. */
+  source_face_id?: number | null
+  source_price_item_code?: string | null
+}
+
+/** La TVA est calculée par taux sur la somme des bases, jamais ligne à ligne. */
+export interface VatBucket {
+  rate_bp: number
+  base_cents: number
+  tax_cents: number
+}
+
+export interface QuoteSummary {
+  id: number
+  status: QuoteStatus
+  number?: string | null
+  invoice_number?: string | null
+  client_name: string
+  total_ht_cents: number
+  total_ttc_cents: number
+  issued_at?: string | null
+  valid_until?: string | null
+}
+
+export interface Quote extends QuoteSummary {
+  organization_id: number
+  project_id?: number | null
+  project_name?: string | null
+  total_tva_cents: number
+  lines: QuoteLine[]
+  vat_breakdown: VatBucket[]
+  /** Faces que le chiffrage n'a pas su rattacher : le devis a l'air complet et ne l'est pas. */
+  warnings: string[]
+  invoiced_at?: string | null
+  due_date?: string | null
+  client_is_consumer: boolean
+  client_email?: string | null
+  client_phone?: string | null
+  client_address_line1?: string | null
+  client_address_line2?: string | null
+  client_postal_code?: string | null
+  client_city?: string | null
+  client_country?: string | null
+  client_vat_number?: string | null
+  site_address_line1?: string | null
+  site_address_line2?: string | null
+  site_postal_code?: string | null
+  site_city?: string | null
+  payment_terms?: string | null
+  late_penalty_rate_bp: number
+  recovery_indemnity_cents: number
+  mediator_name?: string | null
+  mediator_url?: string | null
+  notes?: string | null
+  vat_attestation_required: boolean
+  vat_attestation_over_two_years?: boolean | null
+  vat_attestation_premises_use?: string | null
+  vat_attestation_signatory?: string | null
+  vat_attestation_signed_at?: string | null
+}
+
+// --- Multi-locataire : entreprise, membres, invitations -------------------------------------------
+
+/** Quatre rôles, chacun explicable en une phrase à un artisan. */
+export type OrganizationRole = 'owner' | 'admin' | 'editor' | 'viewer'
+
+export interface Member {
+  user_id: number
+  email: string
+  role: OrganizationRole
+  invited_at?: string | null
+  accepted_at?: string | null
+}
+
+export interface Invitation {
+  id: number
+  organization_id: number
+  email: string
+  role: OrganizationRole
+  expires_at: string
+  accepted_at?: string | null
+}
+
+/**
+ * Réponse de création d'invitation : **seul endroit** où le jeton en clair existe.
+ *
+ * La base n'en garde que le hachage. Une invitation perdue se réémet, elle ne se retrouve pas —
+ * l'écran doit donc le dire au moment où il l'affiche.
+ */
+export interface InvitationCreated extends Invitation {
+  token: string
 }

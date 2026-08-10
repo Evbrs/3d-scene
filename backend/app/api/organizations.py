@@ -14,6 +14,12 @@ Trois précautions structurent le module :
 3. **On ne délègue pas plus haut que soi.** Un `admin` ne fabrique pas d'`owner` et ne touche pas
    à un `owner` : sans cette règle, le rôle d'administrateur serait équivalent à celui de
    propriétaire, en une requête.
+
+Le travail à plusieurs est enfin **payant**, et il l'est depuis l'amendement A14. « Plusieurs
+utilisateurs, rôles et invitations » est la ligne qui distingue le palier Entreprise de tous les
+autres dans `docs/strategie-produit.md` §4, et le nombre de sièges y est annoncé palier par palier.
+Rien ne les appliquait : un compte gratuit invitait autant de monde qu'il voulait. Les deux gardes
+sont sur l'invitation, seul endroit d'où un second siège peut naître.
 """
 
 import hashlib
@@ -25,7 +31,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlmodel import col, select
 
 from app.api.auth import normalize_email
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import METRIC_SEATS, CurrentUser, RequireFeature, RequireQuota, SessionDep
 from app.api.permissions import (
     accessible_organization_ids,
     find_membership,
@@ -52,8 +58,21 @@ from app.schemas.organization import (
     OrganizationRead,
     OrganizationUpdate,
 )
+from app.services.seed_plans import FEATURE_MULTI_SEAT, LIMIT_SEATS
 
 router = APIRouter(prefix="/api", tags=["organisations"])
+
+# Les deux gardes du travail à plusieurs, dans cet ordre et pas dans l'autre. La fonctionnalité
+# d'abord : un palier qui n'ouvre pas le multi-utilisateur doit s'entendre dire « il vous faut
+# Entreprise » (402) et non « vous avez atteint votre plafond de 1 siège » (429), qui laisserait
+# croire qu'un siège de plus se rachète à l'unité. Le plafond ensuite, pour l'entreprise qui a bien
+# le droit d'inviter mais qui a rempli ses quinze places.
+REQUIRE_MULTI_SEAT = RequireFeature(FEATURE_MULTI_SEAT)
+REQUIRE_SEAT_QUOTA = RequireQuota(
+    METRIC_SEATS,
+    LIMIT_SEATS,
+    reassurance="Les sièges supplémentaires se facturent à l'unité sur le palier Entreprise.",
+)
 
 # 32 octets encodés en URL-safe base64, soit 256 bits : le jeton d'invitation n'est jamais
 # devinable, ce qui rend inutile toute limitation de débit sur son échange.
@@ -419,11 +438,21 @@ async def invite_member(
     Le jeton en clair n'apparaît que dans cette réponse : c'est à l'appelant de l'acheminer. La
     base n'en garde que le hachage, donc le relire est impossible — une invitation perdue se
     réémet, elle ne se retrouve pas.
+
+    C'est ici que le travail à plusieurs se paie (spec §10, amendement A14). Deux refus distincts et
+    non un seul : 402 quand le palier n'ouvre pas le multi-utilisateur, 429 quand il l'ouvre mais
+    que les sièges sont pris. Les confondre ferait proposer un changement de palier à une entreprise
+    qui n'a besoin que d'un siège de plus.
+
+    Le plafond se compte sur les appartenances **acceptées** : une invitation en attente n'ouvre
+    aucun accès, et la faire compter laisserait une invitation oubliée bloquer une embauche.
     """
     actor = await require_membership(
         session, organization_id, current_user, OrganizationRole.ADMIN
     )
     _refuse_delegation_above(actor, payload.role)
+    await REQUIRE_MULTI_SEAT(session, organization_id)
+    await REQUIRE_SEAT_QUOTA(session, organization_id)
 
     token = secrets.token_urlsafe(INVITATION_TOKEN_BYTES)
     invitation = Invitation(

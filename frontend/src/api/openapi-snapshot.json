@@ -426,6 +426,19 @@
               }
             ],
             "title": "Unit Width Cm"
+          },
+          "waste_ratio_bp": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waste Ratio Bp"
           }
         },
         "title": "Covering",
@@ -6736,7 +6749,7 @@
     },
     "/api/auth/me": {
       "delete": {
-        "description": "Ferme le compte et efface ses données (RGPD art. 17).\n\nRefusé — 409 — quand le compte est le dernier propriétaire accepté d'une organisation qui\ncompte d'autres membres. Ce n'est pas une restriction du droit à l'effacement : c'est le refus\nde détruire les données d'un tiers au passage. `project.owner_id` porte un\n`ON DELETE CASCADE` : partir emporterait tous les chantiers **créés** par ce compte, y compris\nceux que ses collègues éditent tous les jours. Le message nomme les organisations à transmettre\nd'abord.",
+        "description": "Ferme le compte et efface ses données (RGPD art. 17).\n\nDeux issues, et **aucune** ne détruit les données d'un tiers (spec §10, amendement A13) :\n\n- le compte est effacé, et les chantiers qu'il avait **créés** restent à l'entreprise —\n  `project.owner_id` est en `SET NULL`, ce n'est qu'une trace de création (A1) ;\n- il est **pseudonymisé** quand une des organisations à effacer porte encore un devis émis ou\n  une facture : la comptabilité se conserve dix ans, et la supprimer exposerait l'artisan à un\n  redressement. Le résultat est le même pour lui — plus aucune donnée personnelle, plus aucune\n  session, plus aucun accès — et `services/account.py` décide lequel des deux s'applique.\n\nReste un seul refus, en 409, et il est de **gouvernance** : un compte qui est le dernier\npropriétaire accepté d'une organisation habitée ne peut pas partir, sinon plus personne ne\npeut y inviter, payer ni fermer l'entreprise. Le message nomme les organisations à transmettre\nd'abord.",
         "operationId": "delete_current_account_api_auth_me_delete",
         "requestBody": {
           "content": {
@@ -8029,7 +8042,7 @@
         ]
       },
       "post": {
-        "description": "Invite une adresse e-mail à rejoindre l'organisation.\n\nLe jeton en clair n'apparaît que dans cette réponse : c'est à l'appelant de l'acheminer. La\nbase n'en garde que le hachage, donc le relire est impossible — une invitation perdue se\nréémet, elle ne se retrouve pas.",
+        "description": "Invite une adresse e-mail à rejoindre l'organisation.\n\nLe jeton en clair n'apparaît que dans cette réponse : c'est à l'appelant de l'acheminer. La\nbase n'en garde que le hachage, donc le relire est impossible — une invitation perdue se\nréémet, elle ne se retrouve pas.\n\nC'est ici que le travail à plusieurs se paie (spec §10, amendement A14). Deux refus distincts et\nnon un seul : 402 quand le palier n'ouvre pas le multi-utilisateur, 429 quand il l'ouvre mais\nque les sièges sont pris. Les confondre ferait proposer un changement de palier à une entreprise\nqui n'a besoin que d'un siège de plus.\n\nLe plafond se compte sur les appartenances **acceptées** : une invitation en attente n'ouvre\naucun accès, et la faire compter laisserait une invitation oubliée bloquer une embauche.",
         "operationId": "invite_member_api_organizations__organization_id__invitations_post",
         "parameters": [
           {
@@ -8408,7 +8421,7 @@
     },
     "/api/organizations/{organization_id}/subscription/trial": {
       "post": {
-        "description": "Ouvre l'essai de 14 jours du palier Artisan, sans carte.\n\nIdempotente en pratique : un essai déjà consommé ne rend pas une erreur mais l'état courant.\nRenvoyer un 409 obligerait le frontend à traiter un cas qui ne change rien pour l'utilisateur —\nil voulait connaître ses droits, il les obtient.\n\n`editor` suffit : c'est le rôle qui pose le geste monétisé (dessiner, chiffrer, exporter), et\nl'essai est déclenché par ce geste-là. Exiger `admin` ferait échouer l'ouverture automatique au\nmoment précis où elle doit être invisible.",
+        "description": "Ouvre l'essai de 14 jours du palier Artisan, sans carte.\n\nIdempotente en pratique : un essai déjà consommé ne rend pas une erreur mais l'état courant.\nRenvoyer un 409 obligerait le frontend à traiter un cas qui ne change rien pour l'utilisateur —\nil voulait connaître ses droits, il les obtient.\n\n**`admin` et non `editor`.** L'argument inverse tenait tant qu'on confondait cette route avec\nl'ouverture *automatique* de l'essai : celle-ci n'est pas une route, elle est décidée par\n`RequireFeature` et `RequireQuota` au moment où le geste monétisé aboutit, et aucun rôle n'y est\nexigé au-delà de celui du geste lui-même. Cette route-ci est un bouton, et ce qu'il consomme est\nl'essai **unique et non renouvelable** de l'entreprise. Le laisser à `editor` — le rôle qu'on\nobtient en rejoignant une organisation — permettait à n'importe quel salarié de le griller d'un\nclic, un lundi matin, alors que le patron le gardait pour le chantier de la semaine suivante.",
         "operationId": "open_trial_api_organizations__organization_id__subscription_trial_post",
         "parameters": [
           {
@@ -9520,7 +9533,7 @@
     },
     "/api/projects/{project_id}/rooms": {
       "post": {
-        "description": "Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond).",
+        "description": "Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond).\n\nLe plafond de pièces du palier est appliqué ici et dans la route de lot, les deux seuls endroits\noù une pièce naît (spec §10, amendement A14).",
         "operationId": "create_room_api_projects__project_id__rooms_post",
         "parameters": [
           {
@@ -9687,7 +9700,7 @@
         ]
       },
       "post": {
-        "description": "Crée un lien de partage sur un projet de son organisation.\n\nRéservé aux `editor` : publier un lien fait sortir la géométrie du plan hors du service, ce\nqu'un rôle de simple lecture n'a pas à pouvoir décider.",
+        "description": "Crée un lien de partage sur un projet de son organisation.\n\nRéservé aux `editor` : publier un lien fait sortir la géométrie du plan hors du service, ce\nqu'un rôle de simple lecture n'a pas à pouvoir décider.\n\n**Le lien a toujours une échéance** (spec §10, amendement A13). Sans durée demandée, c'est\ncelle du palier qui s'applique ; une durée demandée y est rabotée. Le chemin par défaut\nfabriquait jusqu'ici un lien **permanent** sur la géométrie d'un logement, alors que\n`docs/rgpd.md` annonce « jusqu'à révocation ou échéance » : une durée de conservation qu'aucun\ncode n'applique n'est pas une politique, c'est une phrase.",
         "operationId": "create_shared_view_api_projects__project_id__shared_views_post",
         "parameters": [
           {
@@ -9837,7 +9850,7 @@
     },
     "/api/public/views/{token}": {
       "get": {
-        "description": "Lecture publique d'une vue partagée. **Aucune authentification.**\n\nLe message d'erreur est le même pour un jeton inexistant, révoqué ou expiré : les distinguer\npermettrait de confirmer qu'un lien a existé.",
+        "description": "Lecture publique d'une vue partagée. **Aucune authentification.**\n\nLe message d'erreur est le même pour un jeton inexistant, révoqué ou expiré : les distinguer\npermettrait de confirmer qu'un lien a existé.\n\nLe plafond de débit est une dépendance et non un test en tête de corps : posé au niveau de la\nroute, il est évalué avant que quoi que ce soit ne soit lu en base, et il répond avec\n`Retry-After` — ce que la vérification manuelle qu'il remplace ne faisait pas.",
         "operationId": "read_public_view_api_public_views__token__get",
         "parameters": [
           {
@@ -10541,7 +10554,7 @@
     },
     "/api/rooms/{room_id}/layouts": {
       "post": {
-        "description": "Deux ou trois implantations de mobilier **valides** et classées, pour la pièce demandée.\n\nUn `POST` alors que rien n'est écrit : le verbe est celui du corps de requête, pas celui d'un\neffet de bord. Aucune ligne n'est créée — le client choisit une proposition et crée lui-même\nles éléments, parce qu'un moteur qui poserait d'autorité quinze meubles dans le plan d'un\nartisan serait un moteur qu'on désactive au premier essai.\n\nLe rôle exigé est `editor` et non `viewer`, pour deux raisons : la proposition n'a de sens que\npour quelqu'un qui peut ensuite modifier le plan, et c'est le calcul le plus coûteux de l'API —\nl'ouvrir en lecture seule en ferait le levier de charge le moins cher du produit.",
+        "description": "Deux ou trois implantations de mobilier **valides** et classées, pour la pièce demandée.\n\nUn `POST` alors que rien n'est écrit : le verbe est celui du corps de requête, pas celui d'un\neffet de bord. Aucune ligne n'est créée — le client choisit une proposition et crée lui-même\nles éléments, parce qu'un moteur qui poserait d'autorité quinze meubles dans le plan d'un\nartisan serait un moteur qu'on désactive au premier essai.\n\nLe rôle exigé est `editor` et non `viewer`, pour deux raisons : la proposition n'a de sens que\npour quelqu'un qui peut ensuite modifier le plan, et c'est le calcul le plus coûteux de l'API —\nl'ouvrir en lecture seule en ferait le levier de charge le moins cher du produit. Le rôle ne\nsuffisait pourtant pas : un `editor` est ce qu'on devient en s'inscrivant, donc le plafond de\ndébit est ici la vraie protection, pas le contrôle d'accès.",
         "operationId": "propose_room_layouts_api_rooms__room_id__layouts_post",
         "parameters": [
           {

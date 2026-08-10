@@ -11,20 +11,34 @@ Les trois calculs sont du calcul numérique pur, donc bloquants. Rendus sur la b
 ils gèleraient **toutes** les requêtes en cours pendant leur durée — c'est déjà l'arbitrage retenu
 pour `build_scene_graph` et `build_takeoff`, et l'aménagement automatique est de loin le plus cher
 des trois.
+
+Les déporter dans un fil les empêche de figer le service, il ne les rend pas gratuits : mesuré,
+l'aménagement d'une cuisine accessible en cinq variantes coûte **633 ms** de processeur. Les trois
+routes portent donc un plafond de débit calibré sur ce coût (`app/core/rate_limit.py`), et celui de
+l'aménagement est vingt fois plus serré que celui des deux lectures.
+
+Les trois sont enfin des **fonctionnalités payantes**, et le sont depuis l'amendement A14. Elles
+figuraient dans la grille tarifaire depuis leur écriture — « contrôle de conformité » et
+« calepinage » au palier Artisan, « aménagement automatique » au palier Entreprise — sans qu'une
+seule ligne ne le vérifie : un compte gratuit obtenait les trois en 200. Le mur est ici, à
+l'entrée de chaque route, et jamais dans le moteur : `rules.py` et `layout.py` restent des
+fonctions pures, testables par fixtures sans base ni abonnement.
 """
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
+from sqlmodel import col, select
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, RequireFeature, SessionDep
 from app.api.permissions import get_owned_project, get_owned_room
 from app.api.scene import scene_for_project
-from app.intelligence.ergonomy import Thresholds
+from app.core.rate_limit import costly
+from app.intelligence.ergonomy import Thresholds, thresholds_from
 from app.intelligence.layout import plan_project_tiling, propose_layouts
 from app.intelligence.rules import inspect_scene
-from app.models.organization import OrganizationRole
+from app.models.organization import Organization, OrganizationRole
 from app.models.plan import Project
 from app.schemas.intelligence import (
     InspectionRead,
@@ -33,8 +47,44 @@ from app.schemas.intelligence import (
     LayoutRequest,
 )
 from app.services.quotas import register_ai_run
+from app.services.seed_plans import (
+    FEATURE_AUTO_LAYOUT,
+    FEATURE_COMPLIANCE_CHECK,
+    FEATURE_TILING_WASTE,
+)
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
+
+# Les trois murs de ce module. `docs/strategie-produit.md` §4 les place à deux paliers différents :
+# la conformité et le calepinage arrivent avec Artisan, l'aménagement automatique avec Entreprise.
+# Comme partout, le premier geste refusé ouvre l'essai sans carte et aboutit.
+REQUIRE_COMPLIANCE_CHECK = RequireFeature(FEATURE_COMPLIANCE_CHECK)
+REQUIRE_TILING_WASTE = RequireFeature(FEATURE_TILING_WASTE)
+REQUIRE_AUTO_LAYOUT = RequireFeature(FEATURE_AUTO_LAYOUT)
+
+
+async def _thresholds_for(
+    session: SessionDep, organization_id: int, *, accessible: bool
+) -> Thresholds:
+    """Seuils d'usage de l'organisation : les défauts du produit, corrigés par ses surcharges.
+
+    A12 refuse tout seuil venu du corps d'une requête — « il suffirait de demander 10 cm de passage
+    pour rendre conforme un plan invivable » — en s'accordant une porte de sortie : « un réglage par
+    organisation est une ligne SQL ». Cette lecture est cette porte. Sans elle, la règle interdisait
+    un abus sans offrir la moindre alternative à l'entreprise qui travaille sous une norme
+    différente, ce qui n'est pas tenable (amendement A14).
+
+    Le seul paramètre que le client garde est le **mode** accessible, et il ne relâche aucun seuil :
+    il en resserre.
+    """
+    overrides = (
+        await session.execute(
+            select(col(Organization.inspection_thresholds)).where(
+                col(Organization.id) == organization_id
+            )
+        )
+    ).scalar_one_or_none()
+    return thresholds_from(overrides, accessible=accessible)
 
 
 async def _count_run(
@@ -66,7 +116,11 @@ async def _count_run(
     await session.commit()
 
 
-@router.get("/projects/{project_id}/inspection", response_model=InspectionRead)
+@router.get(
+    "/projects/{project_id}/inspection",
+    response_model=InspectionRead,
+    dependencies=[Depends(costly("inspection"))],
+)
 async def read_inspection(
     project_id: int,
     session: SessionDep,
@@ -92,8 +146,11 @@ async def read_inspection(
     accompagné d'un avertissement ne veut pas dire « conforme ».
     """
     project = await get_owned_project(session, project_id, current_user)
+    await REQUIRE_COMPLIANCE_CHECK(session, project.organization_id)
     scene, _ = await scene_for_project(session, project_id, project.version)
-    thresholds = Thresholds(accessible=accessible)
+    thresholds = await _thresholds_for(
+        session, project.organization_id, accessible=accessible
+    )
     report = await run_in_threadpool(inspect_scene, scene, thresholds)
     await _count_run(
         session,
@@ -105,7 +162,11 @@ async def read_inspection(
     return report
 
 
-@router.get("/projects/{project_id}/laying-plan", response_model=LayingPlanRead)
+@router.get(
+    "/projects/{project_id}/laying-plan",
+    response_model=LayingPlanRead,
+    dependencies=[Depends(costly("laying_plan"))],
+)
 async def read_laying_plan(
     project_id: int, session: SessionDep, current_user: CurrentUser
 ) -> dict[str, Any]:
@@ -121,13 +182,18 @@ async def read_laying_plan(
     surface et le taux de chute.
     """
     project = await get_owned_project(session, project_id, current_user)
+    await REQUIRE_TILING_WASTE(session, project.organization_id)
     scene, _ = await scene_for_project(session, project_id, project.version)
     plan = await run_in_threadpool(plan_project_tiling, scene)
     await _count_run(session, project, current_user, kind="laying_plan")
     return plan
 
 
-@router.post("/rooms/{room_id}/layouts", response_model=LayoutProposalsRead)
+@router.post(
+    "/rooms/{room_id}/layouts",
+    response_model=LayoutProposalsRead,
+    dependencies=[Depends(costly("layout"))],
+)
 async def propose_room_layouts(
     room_id: int,
     payload: LayoutRequest,
@@ -143,12 +209,15 @@ async def propose_room_layouts(
 
     Le rôle exigé est `editor` et non `viewer`, pour deux raisons : la proposition n'a de sens que
     pour quelqu'un qui peut ensuite modifier le plan, et c'est le calcul le plus coûteux de l'API —
-    l'ouvrir en lecture seule en ferait le levier de charge le moins cher du produit.
+    l'ouvrir en lecture seule en ferait le levier de charge le moins cher du produit. Le rôle ne
+    suffisait pourtant pas : un `editor` est ce qu'on devient en s'inscrivant, donc le plafond de
+    débit est ici la vraie protection, pas le contrôle d'accès.
     """
     room = await get_owned_room(session, room_id, current_user, OrganizationRole.EDITOR)
     project = await get_owned_project(
         session, room.project_id, current_user, OrganizationRole.EDITOR
     )
+    await REQUIRE_AUTO_LAYOUT(session, project.organization_id)
     scene, _ = await scene_for_project(session, room.project_id, project.version)
 
     room_scene = next(
@@ -160,11 +229,14 @@ async def propose_room_layouts(
         # course pour une panne.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pièce introuvable")
 
+    thresholds = await _thresholds_for(
+        session, project.organization_id, accessible=payload.accessible
+    )
     proposals = await run_in_threadpool(
         lambda: propose_layouts(
             room_scene,
             program=payload.program,
-            thresholds=Thresholds(accessible=payload.accessible),
+            thresholds=thresholds,
             count=payload.count,
         )
     )

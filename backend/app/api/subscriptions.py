@@ -26,7 +26,7 @@ from fastapi import APIRouter, status
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import require_membership
-from app.models.billing_plan import TRIAL_DAYS, UsageMetric
+from app.models.billing_plan import UsageMetric
 from app.models.organization import OrganizationRole
 from app.schemas.subscription import (
     EntitlementRead,
@@ -48,6 +48,7 @@ from app.services.seed_plans import (
     LIMIT_LABELS,
     METRIC_LABELS,
     METRIC_LIMITS,
+    trial_days_of,
 )
 
 router = APIRouter(prefix="/api", tags=["abonnement"])
@@ -72,7 +73,10 @@ async def read_plans(session: SessionDep) -> PlanCatalogRead:
         feature_labels=FEATURE_LABELS,
         limit_labels=LIMIT_LABELS,
         metric_labels=METRIC_LABELS,
-        trial_days=TRIAL_DAYS,
+        # Lue sur le palier d'essai du catalogue et non sur une constante : la page tarifs annonce
+        # la durée réellement appliquée par `start_trial`, y compris après un `UPDATE` de campagne
+        # (spec §10, amendement A14).
+        trial_days=trial_days_of(plans),
     )
 
 
@@ -152,11 +156,15 @@ async def open_trial(
     Renvoyer un 409 obligerait le frontend à traiter un cas qui ne change rien pour l'utilisateur —
     il voulait connaître ses droits, il les obtient.
 
-    `editor` suffit : c'est le rôle qui pose le geste monétisé (dessiner, chiffrer, exporter), et
-    l'essai est déclenché par ce geste-là. Exiger `admin` ferait échouer l'ouverture automatique au
-    moment précis où elle doit être invisible.
+    **`admin` et non `editor`.** L'argument inverse tenait tant qu'on confondait cette route avec
+    l'ouverture *automatique* de l'essai : celle-ci n'est pas une route, elle est décidée par
+    `RequireFeature` et `RequireQuota` au moment où le geste monétisé aboutit, et aucun rôle n'y est
+    exigé au-delà de celui du geste lui-même. Cette route-ci est un bouton, et ce qu'il consomme est
+    l'essai **unique et non renouvelable** de l'entreprise. Le laisser à `editor` — le rôle qu'on
+    obtient en rejoignant une organisation — permettait à n'importe quel salarié de le griller d'un
+    clic, un lundi matin, alors que le patron le gardait pour le chantier de la semaine suivante.
     """
-    await require_membership(session, organization_id, current_user, OrganizationRole.EDITOR)
+    await require_membership(session, organization_id, current_user, OrganizationRole.ADMIN)
 
     await start_trial(session, organization_id)
     entitlement = await resolve_entitlement(session, organization_id)

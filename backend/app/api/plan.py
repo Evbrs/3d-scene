@@ -15,7 +15,13 @@ from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import col, select
 
 from app.api.conflicts import STALE_MESSAGE, ConflictAwareRoute, PlanConflict
-from app.api.deps import CurrentUser, ProjectReadOnly, RequireQuota, SessionDep
+from app.api.deps import (
+    METRIC_ROOMS_PER_PROJECT,
+    CurrentUser,
+    ProjectReadOnly,
+    RequireQuota,
+    SessionDep,
+)
 from app.api.permissions import (
     accessible_organization_ids,
     default_organization_id,
@@ -67,7 +73,7 @@ from app.services.faces import (
     sync_room_faces,
 )
 from app.services.quotas import record_activation
-from app.services.seed_plans import LIMIT_ACTIVE_PROJECTS
+from app.services.seed_plans import LIMIT_ACTIVE_PROJECTS, LIMIT_ROOMS_PER_PROJECT
 
 router = APIRouter(prefix="/api", tags=["plan"], route_class=ConflictAwareRoute)
 
@@ -78,6 +84,18 @@ REQUIRE_PROJECT_QUOTA = RequireQuota(
     LIMIT_ACTIVE_PROJECTS,
     reassurance=(
         "Les chantiers en trop passent en lecture seule, ils ne sont jamais supprimés."
+    ),
+)
+
+# Plafond de **pièces par chantier**. Il figure sur la page tarifs depuis l'origine — « 2 pièces »
+# au palier Découverte — et n'était appliqué nulle part : la troisième, la quatrième et la
+# cinquième pièce se créaient en 201 (spec §10, amendement A14). Le plafond porte sur un chantier
+# et non sur l'organisation, d'où le `subject_id` passé à l'appel.
+REQUIRE_ROOM_QUOTA = RequireQuota(
+    METRIC_ROOMS_PER_PROJECT,
+    LIMIT_ROOMS_PER_PROJECT,
+    reassurance=(
+        "Vos pièces existantes ne sont pas touchées : c'est la suivante qui demande un palier."
     ),
 )
 
@@ -352,15 +370,22 @@ async def _load_full_room(session: SessionDep, room_id: int) -> Room:
 async def create_room(
     project_id: int, payload: RoomCreate, session: SessionDep, current_user: CurrentUser
 ) -> Room:
-    """Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond)."""
+    """Crée une pièce et génère ses faces (murs lettrés A, B, C… + sol + plafond).
+
+    Le plafond de pièces du palier est appliqué ici et dans la route de lot, les deux seuls endroits
+    où une pièce naît (spec §10, amendement A14).
+    """
     project = await get_owned_project(
         session, project_id, current_user, OrganizationRole.EDITOR
     )
 
+    # Avant `_claim_project`, comme toute lecture de base : après, le projet est marqué modifié et
+    # le moindre autoflush remonterait une collision de version. La garde peut ouvrir l'essai, donc
+    # écrire — raison de plus pour la placer ici.
+    await REQUIRE_ROOM_QUOTA(session, project.organization_id, subject_id=project_id)
+
     # Métrique produit, posée une seule fois par entreprise. La première pièce dessinée est le
     # geste qui prouve que le produit a été compris — pas l'inscription, pas le chantier vide.
-    # Écrite **avant** `_claim_project`, comme toute lecture de base : après, le projet est marqué
-    # modifié et le moindre autoflush remonterait une collision de version.
     await record_activation(session, project.organization_id, user_id=current_user.id)
 
     values = payload.model_dump()
@@ -976,6 +1001,7 @@ async def apply_batch(
     rooms = await _batch_rooms(session, project_id, payload.operations)
     elements = await _batch_elements(session, project_id, payload.operations)
     await _check_furniture_types(session, _batch_furniture_type_ids(payload.operations))
+    await _check_room_quota(session, project, payload.operations, project_id=project_id)
 
     current_version = project.version
     await _claim_project(session, project, payload.version)
@@ -1005,6 +1031,33 @@ async def apply_batch(
     await _commit_or_conflict(session, project)
     await _hydrate_batch_results(session, results)
     return BatchResponse(version=project.version, results=results)
+
+
+async def _check_room_quota(
+    session: SessionDep,
+    project: Project,
+    operations: list[BatchOperation],
+    *,
+    project_id: int,
+) -> None:
+    """Applique le plafond de pièces au **solde** du lot, avant d'en appliquer la moindre ligne.
+
+    Le lot est tout-ou-rien : ce qu'il faut plafonner est donc le nombre de pièces qu'il laissera
+    derrière lui, `créations - suppressions`, et non le nombre de créations qu'il contient. Un lot
+    qui supprime une pièce pour en créer une autre ne consomme rien, et le refuser serait faux.
+
+    Un solde nul ou négatif n'interroge même pas le catalogue : un lot qui n'augmente pas le compte
+    n'a aucune raison de heurter un plafond, pas même celui d'un chantier déjà au-dessus (une pièce
+    de trop peut alors être supprimée par lot, ce qui est exactement ce qu'on veut).
+    """
+    created = sum(1 for operation in operations if isinstance(operation, CreateRoomOp))
+    deleted = sum(1 for operation in operations if isinstance(operation, DeleteRoomOp))
+    needed = created - deleted
+    if needed <= 0:
+        return
+    await REQUIRE_ROOM_QUOTA(
+        session, project.organization_id, needed=needed, subject_id=project_id
+    )
 
 
 def _batch_furniture_type_ids(operations: list[BatchOperation]) -> set[int | None]:

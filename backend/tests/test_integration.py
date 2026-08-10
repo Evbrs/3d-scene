@@ -10,7 +10,7 @@ import asyncio
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import col, select
+from sqlmodel import select
 
 from app.models.plan import Element, Face, Project, Room, SharedView
 from app.services.seed import seed_catalog
@@ -177,12 +177,18 @@ async def test_the_maximum_polygon_size_is_enforced(auth_client: AsyncClient) ->
 # --- Cycles de vie et cascades -----------------------------------------------------------------
 
 
-async def test_deleting_a_user_removes_everything_they_own(
+async def test_closing_an_account_removes_everything_it_owned(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """RGPD : le droit à l'effacement suppose une suppression en cascade complète."""
-    from app.models.user import User
+    """RGPD : le droit à l'effacement suppose une suppression en cascade complète.
 
+    Le chemin exercé est la **route réelle** et non un `session.delete(user)` : depuis
+    l'amendement A13, `project.owner_id` est en `SET NULL` et ne détruit plus rien par lui-même —
+    il n'était qu'une trace de création (A1), et une trace qui emportait les chantiers des
+    collègues du partant était le défaut, pas la garantie. Ce qui efface le plan, c'est la
+    suppression de l'organisation dont le compte était le seul membre, et c'est
+    `services/account.py::delete_account` qui la décide.
+    """
     await client.post(
         "/api/auth/register",
         json={"email": "efface@exemple.fr", "password": "motdepasse-efface-2026"},
@@ -207,11 +213,10 @@ async def test_deleting_a_user_removes_everything_they_own(
         json={"state": {"camera_preset": "dessus"}},
     )
 
-    user = (
-        await session.execute(select(User).where(col(User.email) == "efface@exemple.fr"))
-    ).scalar_one()
-    await session.delete(user)
-    await session.commit()
+    closed = await client.request(
+        "DELETE", "/api/auth/me", json={"current_password": "motdepasse-efface-2026"}
+    )
+    assert closed.status_code == 204, closed.text
 
     # `SharedView` est inclus volontairement : c'est un jeton d'accès **public** encore vivant,
     # la ligne la plus sensible à laisser derrière soi.

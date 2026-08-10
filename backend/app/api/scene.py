@@ -7,7 +7,7 @@ asynchrone contredirait la décision et priverait P9 de sa mesure de référence
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, select
@@ -16,6 +16,7 @@ from app.api.conflicts import ConflictAwareRoute
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
 from app.core.cache import catalog_fingerprint, scene_cache
+from app.core.rate_limit import costly
 from app.geometry.scene import OPENING_SLUGS, build_scene_graph
 from app.models.plan import Element, Face, FurnitureType, Project, Room
 
@@ -152,7 +153,7 @@ async def load_scene_inputs(
     return project, catalog
 
 
-@router.get("/projects/{project_id}/scene")
+@router.get("/projects/{project_id}/scene", dependencies=[Depends(costly("scene"))])
 async def read_scene_graph(
     project_id: int,
     session: SessionDep,

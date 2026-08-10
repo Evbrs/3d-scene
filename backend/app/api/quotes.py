@@ -22,7 +22,7 @@ demande `admin`** — engager l'entreprise et fixer ses prix ne sont pas des ges
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
@@ -35,8 +35,12 @@ from app.api.permissions import (
     require_membership,
 )
 from app.api.takeoff import compute_takeoff
+from app.core.rate_limit import costly
 from app.models.base import utcnow
 from app.models.billing import (
+    DEFAULT_LATE_PENALTY_RATE_BP,
+    DEFAULT_PAYMENT_DAYS,
+    DEFAULT_RECOVERY_INDEMNITY_CENTS,
     DEFAULT_VALIDITY_DAYS,
     DocumentSeries,
     FaceCosting,
@@ -100,9 +104,6 @@ _NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ressou
 SERIES_PREFIX = {DocumentSeries.QUOTE: "DEV", DocumentSeries.INVOICE: "FAC"}
 NUMBER_DIGITS = 4
 
-# Délai de paiement par défaut d'une facture entre professionnels, à défaut d'accord contraire.
-DEFAULT_PAYMENT_DAYS = 30
-
 # Transitions autorisées d'un devis. Tout le reste est refusé en 409 : un statut qui remonte
 # (« accepté » redevenu « brouillon ») effacerait la trace d'un accord client.
 ALLOWED_TRANSITIONS: dict[QuoteStatus, frozenset[QuoteStatus]] = {
@@ -147,6 +148,78 @@ COPIED_CLIENT_FIELDS = (
 
 def _conflict(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+# --- Défauts commerciaux de l'entreprise ----------------------------------------------------------
+
+
+class CommercialDefaults:
+    """Les mentions commerciales que l'entreprise a réglées une fois pour toutes.
+
+    `docs/strategie-produit.md` §2 : « le produit doit rendre ces champs paramétrables plutôt que
+    codés en dur — c'est la seule manière de suivre une réglementation qui bouge ». Jusqu'à
+    l'amendement A14 ils l'étaient par **devis** et jamais par entreprise : un artisan qui accorde
+    45 jours à son donneur d'ordre devait le ressaisir à chaque document, et se contentait donc du
+    délai de 30 jours de la constante — c'est-à-dire écrivait sur ses factures une condition qui
+    n'était pas la sienne.
+
+    Trois niveaux, du plus précis au plus général : ce que la demande de devis a saisi, puis le
+    défaut de l'organisation, puis la constante réglementaire de `app/models/billing.py`. Une
+    colonne à `NULL` **et rien d'autre** fait descendre d'un niveau : zéro est une valeur, pas une
+    absence, et les confondre écrirait « paiement à 0 jour » sur une facture.
+    """
+
+    def __init__(self, organization: Organization | None) -> None:
+        self._organization = organization
+
+    def _of(self, field: str, fallback: int) -> int:
+        value = getattr(self._organization, field, None) if self._organization else None
+        return fallback if value is None else int(value)
+
+    @property
+    def validity_days(self) -> int:
+        return self._of("default_validity_days", DEFAULT_VALIDITY_DAYS)
+
+    @property
+    def payment_days(self) -> int:
+        return self._of("default_payment_days", DEFAULT_PAYMENT_DAYS)
+
+    @property
+    def late_penalty_rate_bp(self) -> int:
+        return self._of("default_late_penalty_rate_bp", DEFAULT_LATE_PENALTY_RATE_BP)
+
+    @property
+    def recovery_indemnity_cents(self) -> int:
+        return self._of("default_recovery_indemnity_cents", DEFAULT_RECOVERY_INDEMNITY_CENTS)
+
+    def text_defaults(self) -> dict[str, str]:
+        """Mentions **textuelles** réglées par l'entreprise, celles qui sont vides étant omises.
+
+        Rendues à part des nombres : elles ne s'écrivent sur le devis que si l'entreprise en a une,
+        et une chaîne vide n'est pas une mention — l'imprimer laisserait un intitulé sans contenu.
+        """
+        pairs = (
+            ("payment_terms", "default_payment_terms"),
+            ("mediator_name", "default_mediator_name"),
+            ("mediator_url", "default_mediator_url"),
+        )
+        return {
+            target: str(value)
+            for target, source in pairs
+            if (value := getattr(self._organization, source, None))
+        }
+
+
+async def _commercial_defaults(
+    session: SessionDep, organization_id: int
+) -> CommercialDefaults:
+    """Défauts commerciaux de l'organisation, lus en une requête."""
+    organization = (
+        await session.execute(
+            select(Organization).where(col(Organization.id) == organization_id)
+        )
+    ).scalar_one_or_none()
+    return CommercialDefaults(organization)
 
 
 # --- Numérotation ---------------------------------------------------------------------------------
@@ -556,7 +629,12 @@ async def _costings_for(session: SessionDep, project_id: int) -> dict[int, Costi
 
 
 @router.post(
-    "/projects/{project_id}/quotes", response_model=QuoteRead, status_code=status.HTTP_201_CREATED
+    "/projects/{project_id}/quotes",
+    response_model=QuoteRead,
+    status_code=status.HTTP_201_CREATED,
+    # Établir un devis reconstruit le métré, donc la scène, puis applique le barème ligne à ligne :
+    # c'est la route d'écriture la plus chère du produit.
+    dependencies=[Depends(costly("quote_build"))],
 )
 async def create_quote(
     project_id: int, payload: QuoteCreate, session: SessionDep, current_user: CurrentUser
@@ -583,6 +661,7 @@ async def create_quote(
     book = await _resolve_price_book(session, project, payload.price_book_id)
     references = await _references_for(session, book.id or 0)
     costings = await _costings_for(session, project_id)
+    defaults = await _commercial_defaults(session, project.organization_id)
     takeoff = await compute_takeoff(session, project_id, project.version)
 
     plan = build_quote_lines(
@@ -602,13 +681,21 @@ async def create_quote(
         project_id=project_id,
         project_name=project.name,
         status=QuoteStatus.DRAFT,
-        valid_until=utcnow() + timedelta(days=payload.valid_for_days or DEFAULT_VALIDITY_DAYS),
+        valid_until=utcnow() + timedelta(days=payload.valid_for_days or defaults.validity_days),
         client_name=payload.client_name,
+        late_penalty_rate_bp=defaults.late_penalty_rate_bp,
+        recovery_indemnity_cents=defaults.recovery_indemnity_cents,
         warnings=list(plan.warnings),
     )
-    # `exclude_none` : un champ laissé vide garde la valeur par défaut de la colonne — c'est ainsi
-    # que l'indemnité de recouvrement et le taux de pénalité restent renseignés sans que l'artisan
-    # ait à les ressaisir sur chaque devis.
+    # Les mentions textuelles de l'entreprise d'abord, la saisie du devis ensuite : `supplied` est
+    # appliqué après et l'emporte donc, ce qui est l'ordre voulu — un devis peut toujours déroger
+    # aux conditions générales de l'entreprise, l'inverse n'aurait aucun sens.
+    for field, value in defaults.text_defaults().items():
+        setattr(quote, field, value)
+
+    # `exclude_none` : un champ laissé vide garde ce que les défauts de l'entreprise viennent d'y
+    # écrire — c'est ainsi que l'indemnité de recouvrement et le taux de pénalité restent
+    # renseignés sans que l'artisan ait à les ressaisir sur chaque devis.
     supplied = payload.model_dump(include=set(COPIED_CLIENT_FIELDS), exclude_none=True)
     for field, value in supplied.items():
         setattr(quote, field, value)
@@ -790,7 +877,8 @@ async def issue_quote(quote_id: int, session: SessionDep, current_user: CurrentU
     quote.status = QuoteStatus.SENT
     quote.issued_at = now
     if quote.valid_until is None:
-        quote.valid_until = now + timedelta(days=DEFAULT_VALIDITY_DAYS)
+        defaults = await _commercial_defaults(session, quote.organization_id)
+        quote.valid_until = now + timedelta(days=defaults.validity_days)
     quote.updated_at = now
 
     # Consommation comptée à l'émission et non à la création : un brouillon abandonné ne consomme
@@ -836,7 +924,10 @@ async def convert_to_invoice(
         session, quote.organization_id, DocumentSeries.INVOICE, now
     )
     quote.invoiced_at = now
-    quote.due_date = now + timedelta(days=DEFAULT_PAYMENT_DAYS)
+    # Le délai de paiement est celui de l'entreprise, pas celui du produit : un artisan qui accorde
+    # 45 jours à son donneur d'ordre l'a écrit une fois sur son organisation (A14).
+    defaults = await _commercial_defaults(session, quote.organization_id)
+    quote.due_date = now + timedelta(days=defaults.payment_days)
     quote.status = QuoteStatus.INVOICED
     quote.updated_at = now
 
@@ -869,6 +960,9 @@ async def _document_for(
     "/quotes/{quote_id}/pdf",
     response_class=Response,
     responses={200: {"content": {"application/pdf": {}}, "description": "Devis au format PDF"}},
+    # Les trois rendus Factur-X partagent un seau : c'est le même document construit puis mis en
+    # forme, et leur donner un compteur chacun triplerait le budget en alternant les formats.
+    dependencies=[Depends(costly("quote_render"))],
 )
 async def download_quote_pdf(
     quote_id: int, session: SessionDep, current_user: CurrentUser
@@ -894,6 +988,7 @@ async def download_quote_pdf(
     responses={
         200: {"content": {"application/pdf": {}}, "description": "Facture Factur-X (PDF/A-3)"}
     },
+    dependencies=[Depends(costly("quote_render"))],
 )
 async def download_invoice_pdf(
     quote_id: int, session: SessionDep, current_user: CurrentUser
@@ -920,6 +1015,7 @@ async def download_invoice_pdf(
     "/quotes/{quote_id}/invoice.xml",
     response_class=Response,
     responses={200: {"content": {"application/xml": {}}, "description": "XML CII seul"}},
+    dependencies=[Depends(costly("quote_render"))],
 )
 async def download_invoice_xml(
     quote_id: int, session: SessionDep, current_user: CurrentUser

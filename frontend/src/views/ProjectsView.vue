@@ -73,7 +73,18 @@ onMounted(refresh)
   <section>
     <h1>Mes projets</h1>
 
+    <!-- La chaîne commerciale est atteignable depuis l'écran d'accueil : sans ces trois liens,
+         le devis, le barème et l'équipe n'existent que pour qui connaît leur adresse. -->
     <p class="raccourcis">
+      <RouterLink to="/devis">
+        Mes devis
+      </RouterLink>
+      <RouterLink to="/bareme">
+        Mon barème
+      </RouterLink>
+      <RouterLink to="/entreprise">
+        Mon entreprise
+      </RouterLink>
       <RouterLink to="/compte">
         Mon compte
       </RouterLink>
@@ -162,6 +173,12 @@ onMounted(refresh)
               </RouterLink>
               <RouterLink :to="`/projets/${project.id}/vue-3d`">
                 Vue 3D
+              </RouterLink>
+              <RouterLink :to="`/projets/${project.id}/metre`">
+                Métré
+              </RouterLink>
+              <RouterLink :to="`/projets/${project.id}/devis`">
+                Devis
               </RouterLink>
               <button
                 type="button"

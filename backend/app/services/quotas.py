@@ -37,21 +37,22 @@ from sqlmodel import SQLModel, col, select
 
 from app.models.base import utcnow
 from app.models.billing_plan import (
-    TRIAL_DAYS,
     PlanCatalog,
     Subscription,
     SubscriptionStatus,
     UsageCounter,
     UsageMetric,
 )
-from app.models.organization import Organization
-from app.models.plan import Project
+from app.models.organization import Membership, Organization
+from app.models.plan import Project, Room
 from app.services.seed_plans import (
+    FEATURE_DIMENSIONED_ELEVATIONS,
     FEATURE_EXPORTS_WITHOUT_WATERMARK,
     FREE_PLAN_CODE,
     LIMIT_ACTIVE_PROJECTS,
     TRIAL_PLAN_CODE,
     ensure_plans_seeded,
+    trial_days_of,
 )
 
 # Statuts qui ouvrent encore les droits du palier. `past_due` en fait partie : couper l'accès d'un
@@ -242,17 +243,26 @@ async def _organization_birth(session: AsyncSession, organization_id: int) -> da
 async def start_trial(
     session: AsyncSession, organization_id: int, *, now: datetime | None = None
 ) -> Subscription | None:
-    """Ouvre l'essai de 14 jours du palier Artisan, sans carte. `None` s'il a déjà été consommé.
+    """Ouvre l'essai du palier Artisan, sans carte. `None` s'il a déjà été consommé.
 
     Déclenché au **premier geste monétisé**, jamais à l'inscription : un essai qui démarre à
     l'inscription est consommé par quelqu'un qui n'a pas encore compris le produit
     (`docs/strategie-produit.md` §4).
 
+    La **durée** est lue sur le palier d'essai du catalogue et non sur une constante Python
+    (amendement A14) : allonger l'essai à 30 jours le temps d'une campagne est le levier commercial
+    le plus souvent tiré, et il n'avait aucune raison de coûter un déploiement. Une durée nulle veut
+    dire « aucun essai offert » : la fonction n'ouvre alors rien, et le geste est refusé
+    normalement — c'est un réglage licite, pas une panne.
+
     L'unicité est tenue ici et non par un index : une organisation qui a déjà une ligne
     d'abonnement — même résiliée — n'y a plus droit.
     """
     moment = _as_utc(now or utcnow())
-    await load_plans(session)
+    plans = await load_plans(session)
+    days = trial_days_of(plans)
+    if days <= 0:
+        return None
 
     already = (
         await session.execute(
@@ -264,7 +274,7 @@ async def start_trial(
     if already:
         return None
 
-    ends_at = moment + timedelta(days=TRIAL_DAYS)
+    ends_at = moment + timedelta(days=days)
     subscription = Subscription(
         organization_id=organization_id,
         plan_code=TRIAL_PLAN_CODE,
@@ -499,6 +509,46 @@ async def usage_snapshot(session: AsyncSession, entitlement: Entitlement) -> dic
 # --- Projets actifs et déclassement --------------------------------------------------------------
 
 
+async def room_count(session: AsyncSession, project_id: int) -> int:
+    """Pièces d'un chantier — l'état que plafonne `rooms_per_project`.
+
+    Un **état** et non un cumul, comme `projects_active` : le plafond annoncé sur la page tarifs est
+    « 2 pièces par chantier », pas « 2 pièces créées par mois ». Compter des créations laisserait
+    une pièce supprimée puis redessinée consommer deux fois le quota.
+    """
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Room)
+                .where(col(Room.project_id) == project_id)
+            )
+        ).scalar_one()
+    )
+
+
+async def seat_count(session: AsyncSession, organization_id: int) -> int:
+    """Sièges occupés : les appartenances **acceptées**.
+
+    Les invitations en attente ne comptent pas. Une ligne sans `accepted_at` n'ouvre aucun accès
+    (`app/models/organization.py`), et faire payer un siège pour quelqu'un qui n'a pas répondu
+    serait faux dans les deux sens : l'entreprise le paierait sans l'avoir, et une invitation
+    oubliée bloquerait l'embauche suivante.
+    """
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(Membership)
+                .where(
+                    col(Membership.organization_id) == organization_id,
+                    col(Membership.accepted_at).is_not(None),
+                )
+            )
+        ).scalar_one()
+    )
+
+
 async def active_project_count(session: AsyncSession, organization_id: int) -> int:
     """Chantiers non archivés de l'organisation."""
     return int(
@@ -598,7 +648,31 @@ async def register_ai_run(
     )
 
 
-# --- Exports PDF : filigrane et comptage ----------------------------------------------------------
+# --- Exports PDF : filigrane, planches et comptage ------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExportGrants:
+    """Ce que le palier accorde sur **ce** dossier d'export, décidé par le serveur seul.
+
+    Deux décisions et non une, depuis l'amendement A14. `docs/strategie-produit.md` §4 place
+    l'« export PDF filigrané » dans ce que le palier gratuit **inclut**, et les « élévations
+    cotées » dans ce qu'il **bloque** : ce sont bien deux lignes distinctes de la grille, et le
+    produit n'en appliquait qu'une.
+
+    La forme du refus est celle qu'impose A11 et elle n'est pas négociable : le fichier **se
+    télécharge quand même**. Un palier gratuit reçoit la page de garde, le plan coté de chaque
+    pièce et le récapitulatif, le tout filigrané ; il ne reçoit pas les planches d'élévation. Rien
+    n'est bloqué, quelque chose est retiré — et ce qui reste prouve que le calcul est juste.
+    """
+
+    watermark: bool
+    elevations: bool
+
+    @classmethod
+    def refused(cls) -> "ExportGrants":
+        """Le dossier le plus pauvre : servi quand on ne sait pas à qui appartient le chantier."""
+        return cls(watermark=True, elevations=False)
 
 
 async def register_pdf_export(
@@ -608,14 +682,13 @@ async def register_pdf_export(
     idempotency_key: str,
     project_id: int | None = None,
     user_id: int | None = None,
-) -> bool:
-    """Compte un export PDF et rend `True` si le fichier doit porter le filigrane.
+) -> ExportGrants:
+    """Compte un export PDF et rend ce que le palier accorde sur le dossier produit.
 
-    Le serveur, et lui seul, décide du filigrane : un filigrane apposé côté navigateur se retire
-    en dix secondes par la console (`docs/strategie-produit.md` §4). Aucune route n'accepte donc
-    de paramètre — la réponse se déduit du palier, ici, et le fichier filigrané **se télécharge
-    quand même**. Bloquer le téléchargement ferait douter du résultat ; le livrer filigrané le
-    prouve.
+    Le serveur, et lui seul, décide : un filigrane apposé côté navigateur se retire en dix secondes
+    par la console (`docs/strategie-produit.md` §4). Aucune route n'accepte donc de paramètre — les
+    deux réponses se déduisent du palier, ici, et le fichier **se télécharge quand même**. Bloquer
+    le téléchargement ferait douter du résultat ; le livrer amputé et filigrané le prouve.
     """
     entitlement = await resolve_entitlement(session, organization_id)
     await record_usage(
@@ -627,19 +700,22 @@ async def register_pdf_export(
         user_id=user_id,
         metadata={"project_id": project_id},
     )
-    return not entitlement.has(FEATURE_EXPORTS_WITHOUT_WATERMARK)
+    return ExportGrants(
+        watermark=not entitlement.has(FEATURE_EXPORTS_WITHOUT_WATERMARK),
+        elevations=entitlement.has(FEATURE_DIMENSIONED_ELEVATIONS),
+    )
 
 
-async def register_pdf_export_for_task(project_id: int, task_id: str) -> bool:
+async def register_pdf_export_for_task(project_id: int, task_id: str) -> ExportGrants:
     """Même décision, prise depuis un worker Celery — donc hors de tout contexte HTTP.
 
     La clé d'idempotence **est** l'identifiant de la tâche : un rejeu après incident du courtier
     reprend la même, l'événement n'est pas réécrit et le compteur ne bouge pas. Sans elle, une
     panne de Redis se traduirait en surfacturation.
 
-    Le filigrane est recalculé ici plutôt que passé en argument de la tâche : un argument sérialisé
-    dans le courtier survit à un changement de palier, et rejouer une tâche vieille de deux jours
-    ressortirait un fichier propre pour un compte redevenu gratuit.
+    Les droits sont recalculés ici plutôt que passés en arguments de la tâche : un argument
+    sérialisé dans le courtier survit à un changement de palier, et rejouer une tâche vieille de
+    deux jours ressortirait un dossier complet pour un compte redevenu gratuit.
     """
     from app.db import get_session_factory
 
@@ -650,15 +726,15 @@ async def register_pdf_export_for_task(project_id: int, task_id: str) -> bool:
             )
         ).scalar_one_or_none()
         if organization_id is None:
-            # Projet disparu entre la demande et le rendu : on filigrane, parce que ne pas savoir
-            # n'est pas une raison de livrer un document propre.
-            return True
+            # Projet disparu entre la demande et le rendu : ne pas savoir n'est pas une raison de
+            # livrer un document propre.
+            return ExportGrants.refused()
 
-        watermark = await register_pdf_export(
+        grants = await register_pdf_export(
             session,
             organization_id=organization_id,
             idempotency_key=f"{UsageMetric.EXPORTS_PDF}:{task_id}",
             project_id=project_id,
         )
         await session.commit()
-        return watermark
+        return grants

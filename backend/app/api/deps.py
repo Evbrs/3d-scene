@@ -17,6 +17,8 @@ from app.services.quotas import (
     active_project_count,
     counter_value,
     resolve_entitlement,
+    room_count,
+    seat_count,
     start_trial,
 )
 from app.services.seed_plans import required_plan_for_feature, required_plan_for_limit
@@ -95,6 +97,14 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 #
 # Les deux refus portent un corps machine-lisible au premier niveau, comme le 409 du plan : le
 # frontend doit pouvoir proposer le bon palier sans analyser une phrase en français.
+
+
+# Deux « métriques » qui ne sont pas des `UsageMetric` : elles ne comptent aucun geste et ne
+# s'accumulent pas sur une période, ce sont des états qu'on recompte à chaque fois. Elles n'ont
+# donc rien à faire dans le journal d'usage — mais elles nomment le refus dans le corps du 429, et
+# c'est ce nom que le frontend lit pour proposer le bon palier.
+METRIC_SEATS = "seats"
+METRIC_ROOMS_PER_PROJECT = "rooms_per_project"
 
 
 class PaywallError(Exception):
@@ -200,12 +210,20 @@ class RequireFeature:
 
 
 class RequireQuota:
-    """Exige qu'un plafond de la période ne soit pas atteint, essai compris.
+    """Exige qu'un plafond ne soit pas atteint, essai compris.
 
-    `current` est lu par un résolveur : `projects_active` est un **état** (on compte les chantiers
-    non archivés), les autres métriques sont des cumuls lus dans `usage_counter`. Compter les
-    créations de projet à la place dirait combien de chantiers ont été ouverts ce mois-ci, ce qui
-    n'est pas la limite annoncée.
+    `current` est lu par un résolveur, et les trois familles ne se comptent pas au même endroit :
+
+    - `projects_active` et `seats` sont des **états de l'organisation** — chantiers non archivés,
+      appartenances acceptées ;
+    - `rooms_per_project` est un **état d'un objet** : il se compte sur le chantier désigné par
+      `subject_id`, et non sur l'organisation. Le plafond annoncé est « 2 pièces par chantier », pas
+      « 2 pièces en tout » ;
+    - toutes les autres sont des cumuls de période, lus dans `usage_counter`.
+
+    Compter des créations à la place des états dirait combien de pièces ont été dessinées ce
+    mois-ci, ce qui n'est aucune des limites annoncées — et laisserait une pièce supprimée puis
+    redessinée consommer deux fois le quota.
     """
 
     def __init__(
@@ -225,10 +243,15 @@ class RequireQuota:
         self.reassurance = reassurance
 
     async def __call__(
-        self, session: AsyncSession, organization_id: int, *, needed: int = 1
+        self,
+        session: AsyncSession,
+        organization_id: int,
+        *,
+        needed: int = 1,
+        subject_id: int | None = None,
     ) -> Entitlement:
         entitlement = await resolve_entitlement(session, organization_id)
-        current = await self._current(session, entitlement)
+        current = await self._current(session, entitlement, subject_id)
         if self._fits(entitlement, current, needed):
             return entitlement
 
@@ -260,9 +283,17 @@ class RequireQuota:
         limit = entitlement.limit(self.limit_key)
         return limit is None or current + needed <= limit
 
-    async def _current(self, session: AsyncSession, entitlement: Entitlement) -> int:
+    async def _current(
+        self, session: AsyncSession, entitlement: Entitlement, subject_id: int | None
+    ) -> int:
         if self.metric == UsageMetric.PROJECTS_ACTIVE:
             return await active_project_count(session, entitlement.organization_id)
+        if self.metric == METRIC_SEATS:
+            return await seat_count(session, entitlement.organization_id)
+        if self.metric == METRIC_ROOMS_PER_PROJECT:
+            # Sans chantier désigné il n'y a rien à compter, et surtout rien à plafonner : refuser
+            # serait pire que laisser passer, l'appelant a simplement omis `subject_id`.
+            return 0 if subject_id is None else await room_count(session, subject_id)
         return await counter_value(
             session,
             organization_id=entitlement.organization_id,

@@ -10,13 +10,14 @@ import time
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Path, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
 from app.core.celery_app import celery_app
+from app.core.rate_limit import costly
 from app.models.base import utcnow
 from app.services.export_pdf import render_project_pdf
 from app.services.quotas import register_pdf_export
@@ -45,6 +46,10 @@ class ExportStatus(BaseModel):
     "/projects/{project_id}/exports/pdf",
     response_model=ExportAccepted,
     status_code=status.HTTP_202_ACCEPTED,
+    # Même seau que le chemin synchrone : rendre la main tout de suite ne rend pas le rendu
+    # gratuit, il le déplace sur un worker Celery. Sans plafond, la file d'attente devient le
+    # point de saturation à la place de la boucle d'évènements.
+    dependencies=[Depends(costly("export_pdf"))],
 )
 async def request_pdf_export(
     project_id: int, session: SessionDep, current_user: CurrentUser
@@ -62,7 +67,11 @@ async def request_pdf_export(
     )
 
 
-@router.get("/projects/{project_id}/exports/tasks/{task_id}", response_model=ExportStatus)
+@router.get(
+    "/projects/{project_id}/exports/tasks/{task_id}",
+    response_model=ExportStatus,
+    dependencies=[Depends(costly("export_read"))],
+)
 async def read_export_status(
     project_id: int,
     task_id: Annotated[str, Path(min_length=8, max_length=64)],
@@ -100,7 +109,10 @@ async def read_export_status(
     return payload
 
 
-@router.get("/projects/{project_id}/exports/{filename}")
+@router.get(
+    "/projects/{project_id}/exports/{filename}",
+    dependencies=[Depends(costly("export_read"))],
+)
 async def download_export(
     project_id: int,
     filename: Annotated[str, Path(pattern=r"^projet-\d+-[A-Za-z0-9\-]+\.pdf$")],
@@ -131,7 +143,10 @@ async def download_export(
     )
 
 
-@router.get("/projects/{project_id}/exports/pdf/direct")
+@router.get(
+    "/projects/{project_id}/exports/pdf/direct",
+    dependencies=[Depends(costly("export_pdf"))],
+)
 async def export_pdf_synchronously(
     project_id: int,
     session: SessionDep,
@@ -147,10 +162,11 @@ async def export_pdf_synchronously(
     owned = await get_owned_project(session, project_id, current_user)
 
     # Deuxième mur de paiement (`docs/strategie-produit.md` §4) : le fichier **se télécharge
-    # vraiment**, filigrané ou non. Bloquer le téléchargement ferait douter du résultat ; le livrer
-    # filigrané le prouve. Aucun paramètre de requête ne touche à cette décision — un filigrane
-    # apposé côté navigateur se retire en dix secondes par la console.
-    watermark = await register_pdf_export(
+    # vraiment**, filigrané ou non, avec ses planches d'élévation ou sans. Bloquer le téléchargement
+    # ferait douter du résultat ; le livrer filigrané le prouve. Aucun paramètre de requête ne
+    # touche à ces décisions — un filigrane apposé côté navigateur se retire en dix secondes par la
+    # console, et une planche réclamée par le client n'est pas une fonctionnalité payante.
+    grants = await register_pdf_export(
         session,
         organization_id=owned.organization_id,
         # Rien à dédupliquer sur ce chemin : chaque appel est un export réellement produit et
@@ -169,7 +185,13 @@ async def export_pdf_synchronously(
     # ReportLab est purement synchrone : rendu sur la boucle d'événements, il fige toutes les
     # autres requêtes le temps de la génération — la mesure de ce même endpoint donne des
     # centaines de millisecondes sur un plan de quelques pièces.
-    content = await run_in_threadpool(render_project_pdf, project, utcnow(), watermark=watermark)
+    content = await run_in_threadpool(
+        render_project_pdf,
+        project,
+        utcnow(),
+        watermark=grants.watermark,
+        elevations=grants.elevations,
+    )
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     headers = {"Content-Disposition": f'inline; filename="projet-{project_id}.pdf"'}

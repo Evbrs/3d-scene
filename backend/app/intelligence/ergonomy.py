@@ -24,7 +24,7 @@ La direction d'un mur se relit `(cos θ, -sin θ)` dans le plan, `θ` étant le 
 
 import math
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 Point = tuple[float, float]
@@ -148,6 +148,55 @@ class Thresholds:
 
 
 DEFAULT_THRESHOLDS = Thresholds()
+
+# Seuils qu'une organisation a le droit de régler. Exactement ceux que `to_dict` republie, moins
+# `accessible` qui est un **mode** demandé requête par requête et non un réglage d'entreprise.
+#
+# L'égalité entre les deux listes n'est pas cosmétique : on ne peut régler que ce que le rapport
+# relit. Un seuil réglable mais non republié serait un réglage dont personne ne pourrait vérifier
+# l'effet, et un seuil republié mais non réglable serait une promesse en l'air — c'est exactement
+# l'état que l'amendement A12 décrivait comme « une ligne SQL » sans qu'aucune colonne existe.
+OVERRIDABLE_THRESHOLDS: frozenset[str] = frozenset(DEFAULT_THRESHOLDS.to_dict()) - {"accessible"}
+
+
+def thresholds_from(
+    overrides: dict[str, Any] | None, *, accessible: bool = False
+) -> Thresholds:
+    """Seuils d'une organisation : les valeurs par défaut, corrigées par ses surcharges.
+
+    C'est la contrepartie de la règle « aucun seuil n'entre par le corps d'une requête »
+    (spec §10, A12) : elle n'était tenable que si un réglage existait ailleurs, et il n'existait
+    nulle part — `Thresholds` était une dataclass de constantes, l'API la construisait toujours
+    avec ses valeurs par défaut. La surcharge est désormais une colonne JSONB de `organization`,
+    donc bel et bien « une ligne SQL » (A14).
+
+    Une clé inconnue, non numérique ou négative est **ignorée**, jamais fatale : ces valeurs
+    arrivent par `psql` ou par le back-office, et faire échouer chaque inspection sur une faute de
+    frappe transformerait un réglage raté en panne. L'opérateur n'est pas laissé sans retour pour
+    autant — le rapport republie les seuils **appliqués**, et il y verra immédiatement que sa ligne
+    n'a rien changé.
+
+    Zéro est refusé au même titre qu'un négatif : un seuil de passage nul rendrait conforme un
+    couloir inexistant, ce qui est précisément l'abus que A12 écarte.
+    """
+    if not overrides:
+        return Thresholds(accessible=accessible)
+
+    retained: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key not in OVERRIDABLE_THRESHOLDS:
+            continue
+        # `bool` est un `int` en Python : sans ce filtre, `true` deviendrait un seuil de 1 cm.
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            continue
+        if value <= 0:
+            continue
+        retained[key] = float(value)
+
+    # `replace` et non un constructeur à mots-clés : les champs non surchargés gardent alors leur
+    # valeur par défaut sans qu'on ait à les réénumérer, et ajouter un seuil au produit ne demande
+    # pas de revenir ici.
+    return replace(Thresholds(accessible=accessible), **retained)
 
 
 # --- Chaînes ---------------------------------------------------------------------------------

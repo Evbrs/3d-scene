@@ -70,6 +70,19 @@ WASTE_RATIO_BY_PATTERN: dict[str, float] = {
 }
 DEFAULT_PATTERN = "straight"
 
+# Ces provisions sont un **repli**, plus une fatalité (spec §10, amendement A14). Le revêtement
+# peut porter son propre `waste_ratio_bp` — en points de base, 800 = 8 % —, et c'est lui qui gagne
+# quand il est là. Un carreleur qui pose du grand format sait que 8 % est faux pour lui ; jusqu'ici
+# il n'avait aucun moyen de le corriger, alors que ce chiffre alimente la surface à commander,
+# donc la quantité facturée. Une face qui ne le déclare pas retombe exactement sur la table
+# ci-dessus : les fixtures du métré n'ont pas eu à bouger d'un chiffre.
+WASTE_RATIO_KEY = "waste_ratio_bp"
+BASIS_POINTS = 10_000.0
+# Au-delà, on commanderait plus du double de la surface posée : c'est une faute de frappe et non un
+# choix de métier. La borne existe aussi dans le schéma d'entrée (`app/schemas/plan.py`) ; ici elle
+# protège le calcul de ce qui entre par la base ou par une fixture.
+MAX_WASTE_RATIO_BP = 10_000
+
 # Seuls ces motifs posent une trame parallèle aux bords de la face : eux seuls permettent de
 # compter des unités entières et des coupes. Un chevron pose à 45°, sa trame ne se déduit pas des
 # dimensions de la face, et inventer un décompte y serait pire que ne rien annoncer.
@@ -302,6 +315,55 @@ def _trame_counts(
     return (full, cut)
 
 
+def _waste_ratio(
+    covering: dict[str, Any],
+    pattern: str,
+    *,
+    face_label: str,
+    warnings: list[str],
+) -> float:
+    """Taux de chute retenu : celui du revêtement s'il en déclare un, celui du motif sinon.
+
+    L'ordre n'est pas indifférent. La provision du motif est une moyenne de métier ; le poseur, lui,
+    connaît son matériau. Un grand format de 120 x 60 coupé sur quatre rives dépasse largement les
+    8 % d'une pose droite, et le devis doit pouvoir le dire — c'est la surface à commander, donc la
+    quantité facturée (spec §10, amendement A14).
+
+    Une valeur illisible, négative ou au-delà de 100 % n'est pas silencieusement corrigée : on
+    revient au motif **et on l'écrit dans `warnings`**. Un métré qui rattrape sans le dire est un
+    métré dont on ne peut plus expliquer le total au client.
+    """
+    fallback = WASTE_RATIO_BY_PATTERN.get(pattern)
+    if fallback is None:
+        warnings.append(
+            f"face {face_label} : motif de pose « {pattern} » inconnu — chute provisionnée comme "
+            f"une pose droite ({WASTE_RATIO_BY_PATTERN[DEFAULT_PATTERN]:.0%})."
+        )
+        fallback = WASTE_RATIO_BY_PATTERN[DEFAULT_PATTERN]
+
+    declared = covering.get(WASTE_RATIO_KEY)
+    if declared is None:
+        return fallback
+
+    # `bool` est un `int` en Python : `True` passerait pour 1 point de base sans ce filtre.
+    if isinstance(declared, bool) or not isinstance(declared, int | float):
+        warnings.append(
+            f"face {face_label} : taux de chute « {declared} » illisible — provision du motif "
+            f"« {pattern} » appliquée ({fallback:.0%})."
+        )
+        return fallback
+
+    if not 0 <= declared <= MAX_WASTE_RATIO_BP:
+        warnings.append(
+            f"face {face_label} : taux de chute de {declared} points de base hors bornes "
+            f"(0 à {MAX_WASTE_RATIO_BP}) — provision du motif « {pattern} » appliquée "
+            f"({fallback:.0%})."
+        )
+        return fallback
+
+    return float(declared) / BASIS_POINTS
+
+
 def _tiling(
     net_area_cm2: float,
     covering: dict[str, Any],
@@ -337,13 +399,7 @@ def _tiling(
         return None
 
     pattern = str(covering.get("pattern") or DEFAULT_PATTERN)
-    waste_ratio = WASTE_RATIO_BY_PATTERN.get(pattern)
-    if waste_ratio is None:
-        warnings.append(
-            f"face {face_label} : motif de pose « {pattern} » inconnu — chute provisionnée comme "
-            f"une pose droite ({WASTE_RATIO_BY_PATTERN[DEFAULT_PATTERN]:.0%})."
-        )
-        waste_ratio = WASTE_RATIO_BY_PATTERN[DEFAULT_PATTERN]
+    waste_ratio = _waste_ratio(covering, pattern, face_label=face_label, warnings=warnings)
 
     unit_area_cm2 = unit_width_cm * unit_height_cm
     ordered_cm2 = net_area_cm2 * (1.0 + waste_ratio)
@@ -389,15 +445,19 @@ def _group_coverings(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Les calepinages des faces, regroupés par référence de revêtement.
 
     C'est la forme qu'attend une commande de matériaux : « 12,25 m² de carrelage 60 x 60 en pose
-    droite, 38 unités ». Le regroupement se fait sur la matière, le motif et les dimensions
-    d'unité — deux faces qui ne partagent pas ces quatre valeurs ne partagent pas une palette.
+    droite, 38 unités ». Le regroupement se fait sur la matière, le motif, les dimensions d'unité
+    **et le taux de chute retenu** — deux faces qui ne partagent pas ces cinq valeurs ne partagent
+    pas une palette. La chute entre dans la clé depuis l'amendement A14 : elle est réglable par
+    face, et la laisser dehors afficherait sur tout le groupe la provision de la première face
+    rencontrée, alors que les surfaces à commander, elles, resteraient justes. Une ligne de
+    commande dont le taux n'explique pas la quantité est pire qu'une ligne de plus.
 
     Les unités sont **sommées face par face** et non recalculées sur l'aire du groupe : les chutes
     d'un mur ne se réemploient pas sur un autre, et arrondir une fois pour tout le groupe
     sous-estimerait la commande.
     """
-    groups: dict[tuple[str, str, float, float], dict[str, Any]] = {}
-    order: list[tuple[str, str, float, float]] = []
+    groups: dict[tuple[str, str, float, float, float], dict[str, Any]] = {}
+    order: list[tuple[str, str, float, float, float]] = []
     for face in faces:
         tiling = face["tiling"]
         if tiling is None:
@@ -408,6 +468,7 @@ def _group_coverings(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
             tiling["pattern"],
             tiling["unit_width_cm"],
             tiling["unit_height_cm"],
+            tiling["waste_ratio"],
         )
         if key not in groups:
             order.append(key)

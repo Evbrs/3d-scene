@@ -11,15 +11,19 @@ propriétés sont donc traitées comme faisant partie de la fonctionnalité, pas
    est servie. Renvoyer le graphe complet livrait à un lien « salle de bain » le plan intégral du
    logement : surfaces, revêtements, mobilier et dimensions de toutes les autres pièces.
 4. **Limitation de débit** — sans elle, l'endpoint public est un amplificateur : chaque appel
-   déclenche un calcul de scene graph complet.
+   déclenche un calcul de scene graph complet. Elle passe par le **compteur partagé**
+   (`app/core/rate_limit.py`) et non par un seau en mémoire de processus : la production tourne
+   avec quatre workers, un compteur local y multiplie le plafond par quatre et le remet à zéro à
+   chaque redémarrage. Le défaut avait été corrigé pour l'authentification et laissé en place ici,
+   c'est-à-dire sur la seule route que personne n'a besoin de compte pour atteindre.
 """
 
 import secrets
-import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import col, select
 
@@ -27,20 +31,18 @@ from app.api.conflicts import ConflictAwareRoute
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project, require_role
 from app.api.scene import scene_for_project
-from app.core.rate_limit import SlidingWindowRateLimiter
+from app.core.rate_limit import costly
 from app.models.base import utcnow
 from app.models.organization import OrganizationRole
 from app.models.plan import Project, SharedView
 from app.schemas.share import PublicSceneResponse, SharedViewCreate, SharedViewRead
+from app.services.quotas import resolve_entitlement
+from app.services.seed_plans import LIMIT_SHARE_LINK_DAYS
 
 router = APIRouter(tags=["partage"], route_class=ConflictAwareRoute)
 
 # Un jeton de 32 octets encodés en URL-safe base64 : imprévisible, et court à copier-coller.
 TOKEN_BYTES = 32
-
-# Débit du lecteur public. Généreux pour un usage normal (rechargements, plusieurs onglets),
-# assez bas pour rendre l'énumération de jetons et l'abus de calcul inintéressants.
-public_rate_limiter = SlidingWindowRateLimiter(max_attempts=60, window_seconds=60)
 
 # Ancienne clé d'expiration, rangée dans `state` avant que la colonne `expires_at` n'existe. Elle
 # n'est plus jamais écrite : elle n'est lue que pour ne pas rouvrir un partage volontairement
@@ -52,10 +54,32 @@ LEGACY_EXPIRY_KEY = "__expires_at"
 # d'info sensible exposée »), et le lien se transfère.
 DEFAULT_PUBLIC_LABEL = "Vue partagée"
 
+# Durée retenue quand le palier ne déclare aucune limite de partage. A11 pose qu'une limite absente
+# vaut « illimité, jamais zéro », et ce sens de défaillance est le bon pour un **plafond** — il ne
+# doit jamais bloquer un client payant. Mais une durée de **conservation** absente ne vaut pas
+# « éternel » : elle vaut « pas de politique », ce que le RGPD ne permet pas. Le plafond reste donc
+# permissif, et c'est la valeur par défaut qui retombe ici — 30 jours, ce que `docs/rgpd.md` et la
+# grille de `docs/strategie-produit.md` §4 annoncent au palier gratuit.
+FALLBACK_SHARE_LINK_DAYS = 30
 
-def _client_key(request: Request) -> str:
-    client = request.client
-    return client.host if client else "inconnu"
+
+async def share_link_days(
+    session: AsyncSession, organization_id: int, requested: int | None
+) -> int:
+    """Durée de vie effective d'un lien : celle du palier par défaut, et bornée par elle.
+
+    Deux usages de la même limite, et ils ne se comportent pas pareil quand elle est absente du
+    catalogue : la **valeur par défaut** retombe sur `FALLBACK_SHARE_LINK_DAYS`, le **plafond** ne
+    s'applique pas. Voir le commentaire de cette constante.
+
+    Le rabotage est silencieux, et c'est délibéré : `SharedViewRead` rend `expires_at`, donc le
+    propriétaire lit la date réellement retenue. Refuser en 402 la création d'un lien parce qu'on a
+    demandé 365 jours au lieu de 90 arrêterait un geste légitime pour une question de réglage.
+    """
+    limit = (await resolve_entitlement(session, organization_id)).limit(LIMIT_SHARE_LINK_DAYS)
+    if requested is None:
+        return limit if limit is not None else FALLBACK_SHARE_LINK_DAYS
+    return requested if limit is None else min(requested, limit)
 
 
 def _is_closed(shared: SharedView) -> bool:
@@ -123,13 +147,19 @@ async def create_shared_view(
 
     Réservé aux `editor` : publier un lien fait sortir la géométrie du plan hors du service, ce
     qu'un rôle de simple lecture n'a pas à pouvoir décider.
-    """
-    await get_owned_project(session, project_id, current_user, OrganizationRole.EDITOR)
 
-    expires_at = (
-        utcnow() + timedelta(days=payload.expires_in_days)
-        if payload.expires_in_days is not None
-        else None
+    **Le lien a toujours une échéance** (spec §10, amendement A13). Sans durée demandée, c'est
+    celle du palier qui s'applique ; une durée demandée y est rabotée. Le chemin par défaut
+    fabriquait jusqu'ici un lien **permanent** sur la géométrie d'un logement, alors que
+    `docs/rgpd.md` annonce « jusqu'à révocation ou échéance » : une durée de conservation qu'aucun
+    code n'applique n'est pas une politique, c'est une phrase.
+    """
+    project = await get_owned_project(
+        session, project_id, current_user, OrganizationRole.EDITOR
+    )
+
+    expires_at = utcnow() + timedelta(
+        days=await share_link_days(session, project.organization_id, payload.expires_in_days)
     )
     shared = SharedView(
         project_id=project_id,
@@ -194,9 +224,12 @@ async def revoke_shared_view(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/api/public/views/{token}", response_model=PublicSceneResponse)
+@router.get(
+    "/api/public/views/{token}",
+    response_model=PublicSceneResponse,
+    dependencies=[Depends(costly("public_view"))],
+)
 async def read_public_view(
-    request: Request,
     session: SessionDep,
     token: Annotated[str, Path(min_length=16, max_length=64)],
 ) -> PublicSceneResponse:
@@ -204,13 +237,11 @@ async def read_public_view(
 
     Le message d'erreur est le même pour un jeton inexistant, révoqué ou expiré : les distinguer
     permettrait de confirmer qu'un lien a existé.
-    """
-    if not public_rate_limiter.hit(_client_key(request), time.monotonic()):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Trop de requêtes, réessayez plus tard",
-        )
 
+    Le plafond de débit est une dépendance et non un test en tête de corps : posé au niveau de la
+    route, il est évalué avant que quoi que ce soit ne soit lu en base, et il répond avec
+    `Retry-After` — ce que la vérification manuelle qu'il remplace ne faisait pas.
+    """
     not_found = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND, detail="Vue partagée introuvable"
     )

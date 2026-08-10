@@ -297,3 +297,43 @@ async def foreign_keys_enforced(session: AsyncSession) -> bool:
         return True
     result = await session.execute(text("PRAGMA foreign_keys"))
     return bool(result.scalar())
+
+
+async def subscribe(session: AsyncSession, organization_id: int, plan_code: str) -> None:
+    """Abonne une organisation à un palier, **en base** et non par une route.
+
+    Aucune route ne change de palier, et c'est délibéré : aucun encaissement n'est intégré, une
+    telle route laisserait n'importe quel administrateur s'attribuer le palier Entreprise
+    gratuitement (spec §10, amendement A11). Le geste commercial réel est un `UPDATE`, et c'est
+    exactement ce que fait cette fonction.
+
+    À appeler dès qu'un test porte sur **autre chose** que la grille tarifaire et a besoin d'une
+    fonctionnalité payante — le travail à plusieurs, l'aménagement automatique, les élévations
+    cotées. Sans elle, ces tests mesureraient le mur de paiement au lieu de ce qu'ils cherchent, et
+    la seule autre issue serait d'affaiblir leurs assertions.
+
+    L'abonnement est `active` et sans essai : un `trialing` échu ne donnerait aucun droit, et un
+    `trialing` en cours consommerait l'essai unique de l'organisation, ce qui changerait le
+    comportement des tests qui l'observent.
+    """
+    from datetime import timedelta
+
+    from app.models.billing_plan import Subscription, SubscriptionStatus
+    from app.services.quotas import load_plans
+
+    # Le catalogue est semé paresseusement : sans lui, la clé étrangère `plan_code` échouerait sur
+    # un test qui n'a encore touché aucune route de facturation.
+    await load_plans(session)
+
+    now = utcnow()
+    session.add(
+        Subscription(
+            organization_id=organization_id,
+            plan_code=plan_code,
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+            seats=15,
+        )
+    )
+    await session.commit()

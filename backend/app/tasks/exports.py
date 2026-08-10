@@ -147,13 +147,15 @@ def export_project_pdf(self: Any, project_id: int) -> dict[str, Any]:
         raise ValueError(f"projet {project_id} introuvable")
 
     task_id = str(self.request.id or "synchrone")
-    # Le filigrane est décidé **ici**, par le serveur, et la consommation est comptée avec
-    # l'identifiant de tâche pour clé d'idempotence : un rejeu après incident du courtier reprend
-    # la même clé, et ne compte donc pas un second export
-    # (`docs/strategie-produit.md` §4, garde-fous techniques).
-    watermark = run_blocking(register_pdf_export_for_task(project_id, task_id))
+    # Le filigrane **et** les planches d'élévation sont décidés ici, par le serveur, et la
+    # consommation est comptée avec l'identifiant de tâche pour clé d'idempotence : un rejeu après
+    # incident du courtier reprend la même clé, et ne compte donc pas un second export
+    # (`docs/strategie-produit.md` §4, garde-fous techniques ; spec §10, amendement A14).
+    grants = run_blocking(register_pdf_export_for_task(project_id, task_id))
 
-    content = render_project_pdf(project, utcnow(), watermark=watermark)
+    content = render_project_pdf(
+        project, utcnow(), watermark=grants.watermark, elevations=grants.elevations
+    )
     target = export_path(project_id, task_id)
     target.write_bytes(content)
 

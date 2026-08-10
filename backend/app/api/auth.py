@@ -487,11 +487,18 @@ async def delete_current_account(
 ) -> Response:
     """Ferme le compte et efface ses données (RGPD art. 17).
 
-    Refusé — 409 — quand le compte est le dernier propriétaire accepté d'une organisation qui
-    compte d'autres membres. Ce n'est pas une restriction du droit à l'effacement : c'est le refus
-    de détruire les données d'un tiers au passage. `project.owner_id` porte un
-    `ON DELETE CASCADE` : partir emporterait tous les chantiers **créés** par ce compte, y compris
-    ceux que ses collègues éditent tous les jours. Le message nomme les organisations à transmettre
+    Deux issues, et **aucune** ne détruit les données d'un tiers (spec §10, amendement A13) :
+
+    - le compte est effacé, et les chantiers qu'il avait **créés** restent à l'entreprise —
+      `project.owner_id` est en `SET NULL`, ce n'est qu'une trace de création (A1) ;
+    - il est **pseudonymisé** quand une des organisations à effacer porte encore un devis émis ou
+      une facture : la comptabilité se conserve dix ans, et la supprimer exposerait l'artisan à un
+      redressement. Le résultat est le même pour lui — plus aucune donnée personnelle, plus aucune
+      session, plus aucun accès — et `services/account.py` décide lequel des deux s'applique.
+
+    Reste un seul refus, en 409, et il est de **gouvernance** : un compte qui est le dernier
+    propriétaire accepté d'une organisation habitée ne peut pas partir, sinon plus personne ne
+    peut y inviter, payer ni fermer l'entreprise. Le message nomme les organisations à transmettre
     d'abord.
     """
     ok = await run_in_threadpool(
@@ -507,8 +514,8 @@ async def delete_current_account(
             detail=(
                 "Vous êtes le dernier propriétaire de : "
                 + ", ".join(blocking)
-                + ". Nommez un autre propriétaire avant de fermer votre compte, sinon les "
-                "chantiers de vos collègues partiraient avec lui."
+                + ". Nommez un autre propriétaire avant de fermer votre compte : sans "
+                "propriétaire, plus personne ne peut inviter, payer ni fermer l'entreprise."
             ),
         )
 

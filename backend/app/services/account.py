@@ -7,13 +7,23 @@ Trois besoins que le produit n'avait pas et qui bloquaient sa mise en vente :
    signifiait le compte et tous les chantiers perdus définitivement.
 2. **Le droit d'accès et de portabilité** (RGPD art. 15 et 20). Seul l'effacement était traité.
    Tout le modèle est déjà sérialisable : l'export est un parcours, pas une fonctionnalité.
-3. **L'effacement sans dégât collatéral.** Supprimer un compte fait tomber en cascade les projets
-   qu'il a *créés* (`project.owner_id ON DELETE CASCADE`) — y compris ceux d'une entreprise à
-   plusieurs. Le dernier propriétaire d'une organisation habitée est donc refusé plutôt que servi.
+3. **L'effacement sans dégât collatéral.** C'est l'objet de l'amendement A13, et il vise deux
+   destructions que le code faisait en silence, en répondant 204.
 
 Les jetons de réinitialisation suivent exactement la règle des invitations
 (`app/models/organization.py`) : **seul le hachage est en base**, et une ligne consommée est
 conservée pour interdire le rejeu.
+
+Deux règles gouvernent la fermeture, et aucune n'est un choix de confort :
+
+- **Un chantier ne part jamais avec la personne qui l'a créé.** `project.owner_id` portait un
+  `ON DELETE CASCADE` : dès qu'une entreprise comptait un second propriétaire, ou dès que le
+  partant était un simple `editor`, fermer son compte détruisait tous les chantiers qu'il avait
+  ouverts — ceux que ses collègues éditaient tous les jours. La colonne est passée en `SET NULL` :
+  elle n'est qu'une trace de création (A1), et une trace ne détruit rien.
+- **Un document émis survit à son émetteur.** Dix ans (art. L. 123-22 du code de commerce). Quand
+  l'organisation à effacer en porte un, elle reste et c'est le **compte** qui est pseudonymisé :
+  la donnée personnelle disparaît, la pièce comptable reste.
 """
 
 import hashlib
@@ -38,6 +48,18 @@ RESET_TOKEN_BYTES = 32
 # Une heure. Assez pour aller chercher le message et revenir, assez peu pour qu'un lien oublié
 # dans une boîte mail partagée cesse rapidement d'ouvrir le compte.
 RESET_TOKEN_TTL = timedelta(hours=1)
+
+# Adresse donnée au compte pseudonymisé. Le domaine `.invalid` est réservé par la RFC 2606 : il ne
+# se résout nulle part, donc aucun message ne peut partir vers lui par mégarde. L'identifiant y
+# figure pour que l'unicité de la colonne tienne, et parce qu'un compte fermé doit rester
+# distinguable d'un autre dans une trace comptable — c'est ce qui fait une pseudonymisation et non
+# une anonymisation.
+PSEUDONYMIZED_EMAIL = "compte-supprime-{user_id}@supprime.invalid"
+
+# Hachage volontairement illisible. `verify_password` ne lève jamais et rend `False` sur un hachage
+# qu'il ne sait pas relire (`app/core/security.py`) : aucun mot de passe ne rouvre donc le compte,
+# même si quelqu'un remettait `is_active` à vrai depuis le back-office.
+UNUSABLE_PASSWORD_HASH = "!compte-supprime"
 
 
 def hash_account_token(token: str) -> str:
@@ -328,8 +350,14 @@ async def organizations_blocking_deletion(session: AsyncSession, user: User) -> 
     intervention en base la débloquerait. Le refus nomme les organisations concernées, pour que
     l'utilisateur sache quoi transmettre avant de recommencer.
 
+    Ce garde-fou est **de gouvernance et non de sauvegarde** depuis l'amendement A13 : ce qui
+    détruisait les chantiers des collègues n'était pas le rôle du partant mais le
+    `ON DELETE CASCADE` de `project.owner_id`, qui frappait aussi un simple `editor` — que cette
+    fonction ne regarde même pas. La cascade est devenue `SET NULL` ; il ne reste donc ici que la
+    question du pilotage de l'entreprise.
+
     Une organisation dont il est le **seul** membre ne bloque rien : il n'y a personne à laisser
-    derrière, elle part avec le compte.
+    derrière, et son sort est réglé par `delete_account`.
     """
     mine = await _scalars(
         session,
@@ -365,17 +393,82 @@ async def organizations_blocking_deletion(session: AsyncSession, user: User) -> 
     return sorted(organization.name for organization in names)
 
 
+async def organizations_with_issued_documents(
+    session: AsyncSession, organization_ids: list[int]
+) -> set[int]:
+    """Celles de ces organisations qui portent au moins un document **émis**.
+
+    « Émis » et non « établi » : l'obligation comptable de dix ans (art. L. 123-22 du code de
+    commerce) ne porte que sur ce qui est parti chez le client. Un brouillon n'a ni numéro ni date
+    d'émission, il n'entre donc pas dans le décompte et rien n'empêche de l'effacer avec le compte.
+
+    Les deux colonnes sont interrogées et non la seule `issued_at` : un document peut être devenu
+    facture par un chemin qui ne repasserait pas par l'émission, et une facture sans devis émis
+    reste une facture.
+    """
+    if not organization_ids:
+        return set()
+
+    return set(
+        await _scalars(
+            session,
+            select(Quote.organization_id)
+            .where(
+                col(Quote.organization_id).in_(organization_ids),
+                col(Quote.issued_at).is_not(None) | col(Quote.invoice_number).is_not(None),
+            )
+            .distinct(),
+        )
+    )
+
+
+async def pseudonymize_account(session: AsyncSession, user: User, *, keep: set[int]) -> None:
+    """Vide le compte de toute donnée personnelle **sans** supprimer la ligne.
+
+    C'est le compromis de l'amendement A13 entre l'article 17 et l'obligation comptable : les
+    données personnelles disparaissent — l'adresse e-mail est la seule que porte `user` — et le
+    document comptable survit avec l'organisation qui l'a émis.
+
+    Le compte quitte toutes ses organisations **sauf** celles de `keep`, qui portent un document
+    émis : y laisser son appartenance leur évite de devenir des organisations sans aucun membre,
+    c'est-à-dire des résidus qu'aucune route ne peut plus atteindre.
+
+    Les sessions sont fermées et le mot de passe rendu illisible : rouvrir `is_active` depuis le
+    back-office ne doit pas suffire à ressusciter un compte fermé.
+    """
+    await session.execute(
+        delete(Membership).where(
+            col(Membership.user_id) == user.id,
+            col(Membership.organization_id).not_in(sorted(keep)),
+        )
+    )
+    await session.execute(delete(UserToken).where(col(UserToken.user_id) == user.id))
+
+    user.email = PSEUDONYMIZED_EMAIL.format(user_id=user.id or 0)
+    user.hashed_password = UNUSABLE_PASSWORD_HASH
+    user.is_active = False
+    user.is_superuser = False
+    user.email_verified_at = None
+    revoke_all_sessions(user)
+    user.updated_at = utcnow()
+
+
 async def delete_account(session: AsyncSession, user: User) -> None:
     """Efface le compte et ce qui ne survit pas à son départ.
 
     Les organisations dont il était le seul membre sont supprimées **explicitement** : la cascade
     de `membership` les laisserait sinon en place, sans aucun membre, donc invisibles de l'API et
     impossibles à effacer autrement qu'en base. Une organisation sans personne n'est pas une
-    entreprise, c'est un résidu — et un résidu qui porte encore des devis et l'identité d'un
-    client (RGPD art. 17).
+    entreprise, c'est un résidu.
 
-    Le compte lui-même part en dernier : ses projets et ses appartenances tombent par la cascade
-    déjà posée en base, qui reste la seule version de la règle.
+    **Sauf** si elle porte un document émis (amendement A13). `quote.organization_id` est en
+    `ON DELETE CASCADE` : supprimer l'organisation emportait les devis émis et les factures, que
+    la loi impose de conserver dix ans. Ce n'est pas nous qui aurions été redressés, c'est
+    l'artisan. Dans ce cas l'organisation reste, et c'est le **compte** qui est pseudonymisé au
+    lieu d'être supprimé — la donnée personnelle disparaît, la pièce comptable reste.
+
+    Les chantiers, eux, ne partent plus avec le compte : `project.owner_id` est passé en
+    `SET NULL` (A13). Il n'était qu'une trace de création (A1), et une trace ne détruit rien.
     """
     solo: list[int] = []
     for membership in await _scalars(
@@ -391,8 +484,14 @@ async def delete_account(session: AsyncSession, user: User) -> None:
         if not others:
             solo.append(membership.organization_id)
 
-    await session.delete(user)
+    kept = await organizations_with_issued_documents(session, solo)
+    removable = [organization_id for organization_id in solo if organization_id not in kept]
+
+    if kept:
+        await pseudonymize_account(session, user, keep=kept)
+    else:
+        await session.delete(user)
     await session.flush()
 
-    if solo:
-        await session.execute(delete(Organization).where(col(Organization.id).in_(solo)))
+    if removable:
+        await session.execute(delete(Organization).where(col(Organization.id).in_(removable)))

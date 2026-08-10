@@ -607,24 +607,40 @@ async def test_object_permissions_walk_up_from_element_to_owner(
         assert excinfo.value.status_code == 404
 
 
-async def test_deleting_a_user_removes_their_projects(
+async def test_deleting_a_user_leaves_their_projects_to_the_organization(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """RGPD : le droit à l'effacement suppose une suppression en cascade."""
+    """`owner_id` est une trace de création : il ne fait pas tomber le chantier avec le compte.
+
+    Amendement A13. Sous l'ancien `ON DELETE CASCADE`, cette assertion était l'inverse — et c'est
+    elle qui décrivait le défaut : dès qu'une entreprise comptait un second propriétaire, fermer
+    son compte détruisait tous les chantiers qu'on y avait ouverts. Ce que le droit à l'effacement
+    supprime, c'est l'organisation devenue vide (`services/account.py`), et la cascade qui compte
+    est celle d'`organization_id`.
+
+    La suppression est faite **en base**, sans passer par la route : c'est bien la clé étrangère
+    qu'on interroge ici, pas le service.
+    """
     owner_id = await _register(client, "efface@exemple.fr")
     user = (await session.execute(select(User).where(User.id == owner_id))).scalar_one()
-    session.add(
-        Project(
-            name="À supprimer",
-            owner_id=owner_id,
-            organization_id=(await personal_organization(session, user)).id or 0,
-        )
+    project = Project(
+        name="À supprimer",
+        owner_id=owner_id,
+        organization_id=(await personal_organization(session, user)).id or 0,
     )
+    session.add(project)
     await session.commit()
+    project_id = project.id or 0
+
     await session.delete(user)
     await session.commit()
+    # `expire_on_commit=False` : sans cette expiration, la relecture rendrait l'objet resté en
+    # mémoire et non la ligne, donc l'ancien `owner_id` — le test passerait sur un `SET NULL`
+    # absent de la base.
+    session.expire_all()
 
-    remaining = (
-        await session.execute(select(Project).where(Project.owner_id == owner_id))
-    ).scalars().all()
-    assert remaining == []
+    survivant = (
+        await session.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    assert survivant is not None, "le chantier a été détruit par la fermeture de son créateur"
+    assert survivant.owner_id is None

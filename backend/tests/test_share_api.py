@@ -11,7 +11,8 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
 
-from app.api.share import LEGACY_EXPIRY_KEY, public_rate_limiter
+from app.api.share import LEGACY_EXPIRY_KEY
+from app.core.rate_limit import COSTLY_QUOTAS, rate_limiter
 from app.models.base import utcnow
 from app.models.plan import SharedView
 
@@ -33,7 +34,8 @@ async def _shared_view(session: AsyncSession, token: str) -> SharedView:
 
 @pytest.fixture(autouse=True)
 def _reset_public_limiter() -> None:
-    public_rate_limiter.clear()
+    """Le compteur de débit est partagé par toute l'application, donc par tous les tests."""
+    rate_limiter.clear()
 
 
 async def _shared_project(client: AsyncClient) -> tuple[int, str]:
@@ -253,11 +255,16 @@ async def test_deleting_the_project_removes_its_shares(
 async def test_the_public_endpoint_is_rate_limited(
     auth_client: AsyncClient, client: AsyncClient
 ) -> None:
-    """Sans limite, l'endpoint public est un amplificateur : un calcul de scène par appel."""
+    """Sans limite, l'endpoint public est un amplificateur : un calcul de scène par appel.
+
+    Le plafond vient du compteur **partagé** et non plus d'un seau propre au processus. Le moteur
+    lui-même est vérifié dans `tests/test_debit.py` : figer ici un compteur local reviendrait à
+    protéger le défaut au lieu de le signaler.
+    """
     _project_id, token = await _shared_project(auth_client)
 
     statuses = []
-    for _ in range(public_rate_limiter.max_attempts + 3):
+    for _ in range(COSTLY_QUOTAS["public_view"].max_events + 3):
         statuses.append((await client.get(f"/api/public/views/{token}")).status_code)
 
     assert 429 in statuses, "aucune limitation de débit sur l'endpoint public"

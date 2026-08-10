@@ -94,6 +94,53 @@ const routes: RouteRecordRaw[] = [
     props: true,
     meta: { requiresAuth: true, titre: 'Plan 2D' },
   },
+  // Le parcours commercial, dans l'ordre où il se vit : mesurer, chiffrer, émettre, facturer.
+  // Le métré est volontairement une route à lui — c'est la seule étape gratuite, et c'est elle
+  // qu'on montre avant de demander de payer (`docs/strategie-produit.md` §4).
+  {
+    path: '/projets/:projectId/metre',
+    name: 'metre',
+    component: () => import('@/views/TakeoffView.vue'),
+    props: true,
+    meta: { requiresAuth: true, titre: 'Métré' },
+  },
+  {
+    path: '/projets/:projectId/devis',
+    name: 'devis-chantier',
+    component: () => import('@/views/QuoteView.vue'),
+    props: true,
+    meta: { requiresAuth: true, titre: 'Devis du chantier' },
+  },
+  {
+    path: '/devis',
+    name: 'devis',
+    component: () => import('@/views/QuoteView.vue'),
+    meta: { requiresAuth: true, titre: 'Mes devis' },
+  },
+  {
+    // Un devis a son adresse propre : c'est un document qu'on cite, qu'on met en favori et qu'on
+    // rouvre des mois plus tard. Le rattacher au chantier interdirait d'y revenir une fois le
+    // chantier archivé.
+    path: '/devis/:quoteId',
+    name: 'devis-document',
+    component: () => import('@/views/QuoteView.vue'),
+    props: true,
+    meta: { requiresAuth: true, titre: 'Document commercial' },
+  },
+  {
+    path: '/bareme',
+    name: 'bareme',
+    component: () => import('@/views/PriceBookView.vue'),
+    meta: { requiresAuth: true, titre: 'Mon barème' },
+  },
+  {
+    // Identité légale **et** équipe : ce sont les deux faces d'une même entité, et le lien
+    // d'invitation atterrit ici avec son jeton en paramètre de requête.
+    path: '/entreprise',
+    name: 'entreprise',
+    component: () => import('@/views/TeamView.vue'),
+    meta: { requiresAuth: true, titre: 'Mon entreprise' },
+  },
   {
     // Volontairement hors `requiresAuth` : c'est le principe du lien de partage (spec §3.5).
     path: '/partage/:token',

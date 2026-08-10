@@ -31,9 +31,9 @@ from app.core.logging import (
 )
 from app.core.proxy import ProxyHeadersMiddleware
 from app.core.rate_limit import (
+    COSTLY_QUOTAS,
     Decision,
     Quota,
-    RateLimited,
     RateLimiter,
     SlidingWindowRateLimiter,
     build_login_rate_limiter,
@@ -659,24 +659,59 @@ async def test_an_unreachable_redis_falls_back_more_strictly(
     assert "repli" in journal.text
 
 
-async def test_the_reusable_dependency_answers_429_with_a_retry_after() -> None:
-    """`RateLimited(scope, max, window)` est la dépendance que l'API branchera sur ses routes
-    coûteuses : elle doit refuser proprement, pas planter."""
-    from fastapi import Depends, FastAPI
+async def test_the_costly_route_of_the_real_api_answers_429_with_a_retry_after(
+    auth_client: AsyncClient,
+) -> None:
+    """Le garde-fou est interrogé **sur l'application réelle**, jamais sur une app de test.
 
-    guard = RateLimited("essai", 2, 60.0)
-    api = FastAPI()
+    La version précédente montait une `FastAPI()` jetable dans le corps du test et y posait la
+    dépendance elle-même : elle prouvait que `RateLimited` sait répondre 429, et rien sur l'état de
+    l'API — elle est restée verte pendant tout le temps où `Depends(RateLimited(...))` n'était
+    branché sur aucune route du dépôt. On interroge donc ici une route de calcul telle que le
+    service la publie.
 
-    @api.get("/couteux", dependencies=[Depends(guard)])
-    async def couteux() -> dict[str, str]:
-        return {"ok": "oui"}
+    Le métré et non l'aménagement, alors que l'aménagement est bien plus cher : c'est la route que
+    `docs/strategie-produit.md` §4 garde délibérément ouverte à tous les paliers. Un mur de paiement
+    répondrait 402 avant le calcul, et le test passerait alors sans jamais rien avoir fait calculer
+    au service — la façon la plus discrète de ne plus rien prouver.
+    """
+    project = (await auth_client.post("/api/projects", json={"name": "Débit"})).json()
+    created = await auth_client.post(
+        f"/api/projects/{project['id']}/rooms",
+        json={"name": "Salon", "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]]},
+    )
+    assert created.status_code == 201, created.text
 
-    transport = ASGITransport(app=api)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        statuses = [(await ac.get("/couteux")) for _ in range(3)]
+    quota = COSTLY_QUOTAS["takeoff"]
+    responses = [
+        await auth_client.get(f"/api/projects/{project['id']}/takeoff")
+        for _ in range(quota.max_events + 1)
+    ]
 
-    assert [response.status_code for response in statuses] == [200, 200, 429]
-    assert int(statuses[-1].headers["Retry-After"]) >= 1
+    codes = [response.status_code for response in responses]
+    assert codes[:-1] == [200] * quota.max_events, codes
+    assert codes[-1] == 429, "une route de calcul de l'API n'a aucun plafond de débit"
+    assert int(responses[-1].headers["Retry-After"]) >= 1
+
+
+async def test_the_rate_limit_is_decided_before_the_identity_is_resolved(
+    client: AsyncClient,
+) -> None:
+    """Un flot non authentifié est refusé par le débit, pas seulement par l'authentification.
+
+    La dépendance est déclarée au niveau de la route : FastAPI la résout donc avant `CurrentUser`.
+    C'est ce qui rend le refus bon marché — sans cela, chaque requête d'un flot payerait la
+    résolution du jeton et l'aller-retour en base avant d'être jetée.
+    """
+    quota = COSTLY_QUOTAS["scene"]
+
+    codes = [
+        (await client.get("/api/projects/1/scene")).status_code
+        for _ in range(quota.max_events + 1)
+    ]
+
+    assert set(codes[:-1]) == {401}, "la route devrait rester derrière l'authentification"
+    assert codes[-1] == 429, "le plafond n'est pas évalué avant la résolution de l'identité"
 
 
 def test_a_decision_carries_its_retry_delay() -> None:

@@ -101,6 +101,14 @@ Un devis de bâtiment n'est pas un tableau de prix. Il doit porter, sous peine d
 > produit doit rendre ces champs **paramétrables** plutôt que codés en dur — c'est la seule
 > manière de suivre une réglementation qui bouge.
 
+Cette dernière phrase est appliquée depuis l'amendement A14 : délai de paiement, durée de validité,
+pénalités de retard, indemnité de recouvrement, conditions de règlement et médiateur sont des
+colonnes `default_*` d'`organization`. Elles étaient réglables **par devis** et jamais par
+entreprise, si bien qu'un artisan qui accorde 45 jours à son donneur d'ordre devait les ressaisir à
+chaque document — et écrivait donc, la plupart du temps, une condition qui n'était pas la sienne.
+L'ordre appliqué est : saisie du document, puis défaut de l'entreprise, puis constante
+réglementaire ; une colonne vide fait descendre d'un cran, une colonne à zéro est une valeur.
+
 C'est cette couche de conformité qui *est* la valeur de Tolteck et d'Obat. Sans elle, l'artisan
 ressort notre chiffrage et le ressaisit ailleurs pour l'envoyer : on ne remplace rien, et le prix
 de 29 à 79 € n'est pas défendable. Avec elle, on remplace son outil de devis **et** on lui donne
@@ -218,7 +226,11 @@ Trois usages, par valeur décroissante :
 2. **Calepinage et chutes.** Nombre d'unités entières, nombre de coupes et taux de chute par motif
    de pose — un chevron consomme de l'ordre de 15 % contre 8 % en pose droite. **C'est le chiffre
    qui rend le devis crédible auprès d'un homme de métier**, et aucun outil grand public ne le
-   donne.
+   donne. Précisément parce que c'est ce chiffre-là, il est **réglable par face** depuis
+   l'amendement A14 (`Covering.waste_ratio_bp`) : la provision du motif reste le repli, mais un
+   carreleur qui pose du grand format sait que 8 % est faux pour lui, et il alimente la surface à
+   commander — donc la quantité facturée. Un chiffre de métier imposé par le logiciel, c'est le
+   logiciel qu'on abandonne.
 
 3. **Aménagement automatique sous contraintes.** Poser le mobilier d'une pièce en respectant les
    dégagements, les circulations, les débattements de porte et les adjacences (un plan de travail
@@ -241,10 +253,25 @@ Prix en euros **hors taxes par mois**, tarif annuel entre parenthèses (deux moi
 
 | Palier | Prix | Pour qui | Ce qui est inclus | Ce qui est bloqué |
 |---|---|---|---|---|
-| **Découverte** | **0 €** | Essayer, et faire circuler des liens | 1 chantier actif, 2 pièces, 3D complète, catalogue entier, export PDF **filigrané**, lien de partage 30 jours avec notre mention | Devis chiffré (métré visible sur la première face, total masqué), export sans filigrane, élévations cotées |
-| **Artisan** | **29 €** (24 €) | Le solo, cœur de cible | Chantiers illimités, **devis + facture Factur-X**, élévations cotées, calepinage et chutes, exports sans filigrane, liens 90 jours, contrôle de conformité, 1 siège | Multi-utilisateurs, marque blanche, API |
-| **Entreprise** | **79 €** (65 €) + 19 €/siège | 2 à 15 personnes | Tout Artisan, plus rôles et invitations, barème de prix partagé, **marque blanche du lien client**, signature « bon pour accord », variantes chiffrées, aménagement automatique, API | — |
-| **Réseau** | **sur devis, à partir de 390 €** | Franchises, réseaux de cuisinistes, négoces | Sous-domaine et identité visuelle, catalogue et barème imposés au réseau, SSO, API, statistiques par agence | — |
+| **Découverte** | **0 €** | Essayer, et faire circuler des liens | 1 chantier actif, 2 pièces par chantier, 3D complète, catalogue entier, métré complet, export PDF **filigrané** (page de garde et plan coté), lien de partage 30 jours avec notre mention | Devis chiffré, export sans filigrane, élévations cotées, calepinage, contrôle de conformité, multi-utilisateurs |
+| **Artisan** | **29 €** (24 €) | Le solo, cœur de cible | Chantiers et pièces illimités, **devis + facture Factur-X**, élévations cotées, calepinage et chutes, exports sans filigrane, liens 90 jours, contrôle de conformité, 1 siège | Multi-utilisateurs, aménagement automatique |
+| **Entreprise** | **79 €** (65 €) + 19 €/siège | 2 à 15 personnes | Tout Artisan, plus rôles et invitations, barème de prix partagé, aménagement automatique, 15 sièges | — |
+| **Réseau** | **sur devis, à partir de 390 €** | Franchises, réseaux de cuisinistes, négoces | Tout Entreprise, sièges illimités, accompagnement | — |
+
+**Cette grille ne contient que ce qui est construit et appliqué**, et c'est une règle, pas un
+constat (`spec-complete.md` §10, amendement A14). Elle a longtemps annoncé six fonctionnalités qui
+n'existaient nulle part — marque blanche du lien client, signature « bon pour accord », variantes
+chiffrées, SSO, API, statistiques par agence — et sept lignes sur huit n'étaient refusées par aucun
+code. Les six sont retirées ; les autres sont désormais tenues par une garde nommée dans
+`app/services/seed_plans.py::ENFORCEMENT_POINTS`, et un test refuse d'ajouter une ligne sans elle.
+
+Trois d'entre elles restent à construire et gardent leur intérêt commercial, dans cet ordre :
+**variantes chiffrées** (§3.5, le levier de panier moyen — duplication de projet et champ
+auto-référent), **signature « bon pour accord »** (§3.4, la boucle d'acquisition) et **marque
+blanche du lien client**. Le jour où l'une est écrite, elle revient dans la grille *avec* sa garde,
+jamais avant. Le palier Réseau n'a aujourd'hui d'autre différence qu'Entreprise que ses sièges
+illimités : le sous-domaine, le catalogue imposé, le SSO et les statistiques par agence sont à
+construire, et c'est ce que « sur devis » veut dire ici.
 
 **Positionnement du prix.** 29 € se lit face à Tolteck (19-25 €) et Obat (à partir de 25 €) : on
 est au même niveau *et* on apporte la 3D et les élévations, que ni l'un ni l'autre n'ont. On ne

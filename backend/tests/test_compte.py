@@ -23,12 +23,14 @@ from sqlmodel import col, select
 
 from app.main import app as fastapi_app
 from app.models.base import ElementKind, utcnow
-from app.models.plan import Element, Face, Room
+from app.models.organization import Membership, OrganizationRole
+from app.models.plan import Element, Face, Project, Room
 from app.models.user import User, UserToken
 from app.services import demo as demo_service
 from app.services.faces import element_fits_in_room, element_fits_on_face
 from app.services.seed import seed_catalog
-from tests.conftest import USER_PASSWORD
+from app.services.seed_plans import PLAN_BUSINESS
+from tests.conftest import USER_PASSWORD, subscribe
 
 NOUVEAU_MOT_DE_PASSE = "un-nouveau-mot-de-passe-2026"
 
@@ -275,43 +277,64 @@ async def test_closing_an_account_needs_the_password(auth_client: AsyncClient) -
 async def test_closing_an_account_removes_it_and_its_projects(
     auth_client: AsyncClient, session: AsyncSession
 ) -> None:
+    """Ce qui emporte le chantier est la suppression de l'organisation, jamais celle du créateur.
+
+    La nuance est tout l'amendement A13 : `project.owner_id` est en `SET NULL` et ne détruit plus
+    rien, le compte étant ici le seul membre de son organisation, c'est elle qui part — et la
+    cascade d'`organization_id` avec elle.
+    """
     created = await auth_client.post("/api/projects", json={"name": "Chantier à effacer"})
     assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
 
     closed = await auth_client.request(
         "DELETE", "/api/auth/me", json={"current_password": USER_PASSWORD}
     )
     assert closed.status_code == 204, closed.text
 
+    session.expire_all()
     reste = (
         await session.execute(select(User).where(col(User.email) == "titulaire@exemple.fr"))
     ).scalar_one_or_none()
     assert reste is None
+    survivant = (
+        await session.execute(select(Project).where(col(Project.id) == project_id))
+    ).scalar_one_or_none()
+    assert survivant is None
     assert (await auth_client.get("/api/auth/me")).status_code == 401
 
 
 async def test_the_last_owner_of_an_inhabited_organization_cannot_leave(
-    auth_client: AsyncClient, other_client: AsyncClient
+    auth_client: AsyncClient, other_client: AsyncClient, session: AsyncSession
 ) -> None:
-    """Le refus ne protège pas l'entreprise contre son propriétaire : il protège ses collègues.
+    """Le refus est de **gouvernance** depuis l'amendement A13, et il ne prétend plus autre chose.
 
-    `project.owner_id` porte un `ON DELETE CASCADE`. Partir emporterait tous les chantiers créés
-    par ce compte, y compris ceux que le collègue édite tous les jours — une destruction de
-    données d'un tiers, faite en silence, en réponse à un 204.
+    Il protégeait censément les chantiers des collègues, ce qu'il ne faisait pas : la destruction
+    venait du `ON DELETE CASCADE` de `project.owner_id`, qui frappait aussi un simple `editor` —
+    cas que ce garde-fou ne regarde même pas, puisqu'il filtre sur le rôle `owner`. La cascade est
+    devenue `SET NULL`. Ce qui reste ici est le seul vrai motif : une entreprise sans propriétaire
+    accepté n'a plus personne pour inviter, payer ni la fermer.
     """
     await auth_client.post("/api/projects", json={"name": "Chantier partagé"})
     organization_id = (await auth_client.get("/api/organizations")).json()[0]["id"]
+    # Une entreprise « habitée » a plusieurs membres, donc paie ses sièges (A14).
+    await subscribe(session, int(organization_id), PLAN_BUSINESS)
     collegue = (await other_client.get("/api/auth/me")).json()
 
-    invitation = await auth_client.post(
-        f"/api/organizations/{organization_id}/invitations",
-        json={"email": collegue["email"], "role": "editor"},
+    # L'appartenance est posée directement, comme le fait `conftest.personal_organization` : ce
+    # qui est mis à l'épreuve ici est le garde-fou de la **fermeture**, et passer par le parcours
+    # d'invitation ferait rougir ce test au premier changement de mur de paiement des sièges.
+    maintenant = utcnow()
+    session.add(
+        Membership(
+            user_id=collegue["id"],
+            organization_id=organization_id,
+            role=OrganizationRole.EDITOR,
+            invited_at=maintenant,
+            accepted_at=maintenant,
+        )
     )
-    assert invitation.status_code == 201, invitation.text
-    accepted = await other_client.post(
-        "/api/invitations/accept", json={"token": invitation.json()["token"]}
-    )
-    assert accepted.status_code == 200, accepted.text
+    await session.commit()
 
     refused = await auth_client.request(
         "DELETE", "/api/auth/me", json={"current_password": USER_PASSWORD}

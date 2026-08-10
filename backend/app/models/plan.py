@@ -76,7 +76,13 @@ class Project(TimestampedModel, table=True):
     # Trace de création, et **rien d'autre**. Comparer `owner_id` à l'utilisateur courant pour
     # autoriser un accès a été retiré partout : un projet appartient à l'organisation, pas à la
     # personne qui a cliqué la première (`docs/strategie-produit.md` §6, point 1).
-    owner_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
+    #
+    # `SET NULL` et non `CASCADE` (spec §10, amendement A13) : une trace de création ne peut pas
+    # emporter le chantier avec elle. Sous `CASCADE`, fermer son compte détruisait tous les
+    # chantiers **créés** par ce compte, y compris ceux que ses collègues éditaient tous les
+    # jours — une destruction de données d'un tiers, en silence, en réponse à un 204. La colonne
+    # est donc nullable : « créé par un compte depuis fermé » est un état normal.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", ondelete="SET NULL")
     # Déclassement en lecture seule (`docs/strategie-produit.md` §4). Un chantier excédentaire au
     # regard du palier reçoit cette date : il reste **lisible, exportable et partageable**, il
     # n'est plus modifiable. Il n'est jamais supprimé — c'est la seule issue qui ne détruise pas la

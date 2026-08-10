@@ -46,6 +46,16 @@ BASIS_POINTS = 10_000
 # *avertir*, jamais pour bloquer.
 FRENCH_RENOVATION_VAT_RATES_BP = (550, 1000, 2000)
 
+# --- Défauts commerciaux ------------------------------------------------------------------------
+#
+# Ces quatre valeurs sont le **dernier** repli, pas le réglage. Depuis l'amendement A14, chacune a
+# sa colonne homonyme sur `organization` (`default_*`) : c'est là que l'artisan qui accorde 45 jours
+# à son donneur d'ordre l'écrit une fois pour toutes, au lieu de le ressaisir sur chaque devis. Une
+# colonne à `NULL` — et rien d'autre — fait redescendre sur la constante ci-dessous.
+#
+# L'ordre est donc : valeur saisie sur le devis > défaut de l'organisation > constante. Il est
+# appliqué en un seul endroit, `app/api/quotes.py::_commercial_defaults`.
+
 # Indemnité forfaitaire pour frais de recouvrement entre professionnels : 40 €, fixés par
 # l'article D. 441-5 du code de commerce. C'est la seule de nos mentions légales dont le montant
 # est un chiffre et non un usage — elle reste malgré tout une colonne, parce qu'un décret la
@@ -60,6 +70,11 @@ DEFAULT_LATE_PENALTY_RATE_BP = 1_050
 # Un devis d'artisan vaut classiquement trois mois. La durée est une mention obligatoire : elle
 # doit donc exister même quand personne ne l'a saisie.
 DEFAULT_VALIDITY_DAYS = 90
+
+# Délai de paiement d'une facture entre professionnels, à défaut d'accord contraire : 30 jours à
+# compter de l'exécution (article L. 441-10 du code de commerce). Il vivait dans
+# `app/api/quotes.py`, hors de portée du seul endroit qui sait le régler ; il rejoint les autres.
+DEFAULT_PAYMENT_DAYS = 30
 
 # Longueur maximale d'un numéro de document : « DEV-2026-000001 » et une marge pour les séries
 # personnalisées à venir.

@@ -25,6 +25,29 @@ map "$from_trusted_proxy:$http_x_forwarded_proto" $forwarded_proto {
     "1:http"  http;
 }
 
+# --- Limitation de débit de bordure -----------------------------------------------------------
+#
+# Défense en profondeur, et rien d'autre : le plafond qui fait foi est celui de l'application
+# (`backend/app/core/rate_limit.py`), calibré route par route sur le coût processeur mesuré. Ces
+# zones-ci sont volontairement plus larges — elles ne doivent jamais refuser une requête que
+# l'application aurait acceptée. Leur rôle est de couper un flot **avant** qu'il n'atteigne
+# uvicorn : une requête refusée ici ne consomme ni worker, ni connexion à la base, ni
+# aller-retour Redis.
+#
+# `$binary_remote_addr` et non `$remote_addr` : quatre octets par entrée au lieu d'une chaîne,
+# donc une zone qui tient bien plus d'adresses à taille égale. `real_ip` ayant déjà réécrit
+# l'adresse au moment où la zone est consultée, c'est bien le visiteur qui est compté et non le
+# terminateur TLS.
+limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;
+# Les vues publiques n'exigent aucun compte et déclenchent un calcul de scène complet : c'est la
+# seule surface qu'on peut marteler sans s'être jamais inscrit.
+limit_req_zone $binary_remote_addr zone=public_api:5m rate=2r/s;
+
+# Même code que l'application, pour qu'un client ne distingue pas les deux étages — et surtout
+# pour qu'il retente selon la même règle. Le 503 par défaut se lit comme une panne du service.
+limit_req_status 429;
+limit_req_log_level warn;
+
 server {
     listen 8080;
     server_name _;
@@ -62,11 +85,19 @@ server {
     # fois — capture d'écran, historique de navigation, SMS transféré — ne doit pas rendre la
     # géométrie complète du logement d'un client indexable de façon permanente.
     location /api/public/ {
+        # `nodelay` sert la rafale tout de suite au lieu de l'étaler : un visiteur qui ouvre le
+        # lien partagé charge la page puis la scène, et lisser ces quelques requêtes se verrait
+        # comme une lenteur. Au-delà de la rafale, la coupure est franche.
+        limit_req zone=public_api burst=10 nodelay;
         include /etc/nginx/snippets/proxy-backend.conf;
         add_header X-Robots-Tag "noindex, nofollow" always;
     }
 
     location /api/ {
+        # Rafale confortable : l'éditeur enregistre en lot puis relit la scène, et un artisan
+        # derrière un partage de connexion ne doit jamais rencontrer ce plafond. Les routes
+        # coûteuses sont plafonnées bien plus tôt par l'application elle-même.
+        limit_req zone=api burst=40 nodelay;
         include /etc/nginx/snippets/proxy-backend.conf;
     }
 

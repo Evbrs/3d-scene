@@ -22,13 +22,20 @@ serait forte : un capital de 1 000,10 € stocké en flottant ne se rejoue pas �
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 # Pas de `from __future__ import annotations` : même raison que dans `app/models/plan.py`, les
 # annotations d'un modèle SQLModel sont résolues à l'exécution.
-from sqlalchemy import CheckConstraint, DateTime, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, Column, DateTime, UniqueConstraint, text
+from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import Field
 
-from app.models.base import TimestampedModel, value_enum
+from app.models.base import TimestampedModel, json_type, value_enum
+
+# Un taux en points de base : 10 000 = 100 %. Même unité que `app/models/billing.py`, redéclarée
+# ici plutôt qu'importée — `billing` référence `organization` par sa table, et faire remonter la
+# dépendance dans l'autre sens créerait un cycle d'import entre deux modules de modèles.
+BASIS_POINTS = 10_000
 
 
 class OrganizationRole(StrEnum):
@@ -76,6 +83,23 @@ class Organization(TimestampedModel, table=True):
             "share_capital_cents IS NULL OR share_capital_cents >= 0",
             name="ck_organization_share_capital_not_negative",
         ),
+        CheckConstraint(
+            "default_payment_days IS NULL OR default_payment_days >= 0",
+            name="ck_organization_default_payment_days_not_negative",
+        ),
+        CheckConstraint(
+            "default_validity_days IS NULL OR default_validity_days >= 0",
+            name="ck_organization_default_validity_days_not_negative",
+        ),
+        CheckConstraint(
+            "default_late_penalty_rate_bp IS NULL OR (default_late_penalty_rate_bp >= 0 "
+            f"AND default_late_penalty_rate_bp <= {BASIS_POINTS})",
+            name="ck_organization_default_late_penalty_bounded",
+        ),
+        CheckConstraint(
+            "default_recovery_indemnity_cents IS NULL OR default_recovery_indemnity_cents >= 0",
+            name="ck_organization_default_recovery_indemnity_not_negative",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -110,6 +134,48 @@ class Organization(TimestampedModel, table=True):
     billing_email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=30)
     logo_url: str | None = Field(default=None, max_length=500)
+
+    # --- Défauts commerciaux (`docs/strategie-produit.md` §2, spec §10 amendement A14) ----------
+    # Ces quatre valeurs partaient jusqu'ici de constantes Python : 30 jours de délai de paiement,
+    # 90 jours de validité, 40 € d'indemnité de recouvrement, trois fois le taux légal de
+    # pénalités. Ce sont des mentions **obligatoires** d'un devis de bâtiment, et §2 est explicite :
+    # « le produit doit rendre ces champs paramétrables plutôt que codés en dur — c'est la seule
+    # manière de suivre une réglementation qui bouge ». Un artisan qui accorde 45 jours à son
+    # donneur d'ordre n'avait aucun moyen de le dire ailleurs que devis par devis.
+    #
+    # Toutes nullables : `NULL` veut dire « prends le défaut du produit », et pas « zéro ». Les
+    # confondre écrirait « paiement à 0 jour » sur une facture. Le repli est dans
+    # `app/models/billing.py`, à côté de la source réglementaire de chaque valeur.
+    #
+    # Elles ne remplacent pas les colonnes du même nom sur `quote` : un document émis garde les
+    # conditions qu'il portait le jour de son émission (A2). Ce sont les valeurs **proposées** au
+    # moment où le devis est créé, jamais relues ensuite.
+    default_payment_days: int | None = Field(default=None)
+    default_validity_days: int | None = Field(default=None)
+    default_late_penalty_rate_bp: int | None = Field(default=None)
+    default_recovery_indemnity_cents: int | None = Field(default=None)
+    default_payment_terms: str | None = Field(default=None, max_length=500)
+    # Médiateur de la consommation : mention obligatoire en B2C, propre à l'entreprise (elle
+    # adhère à un médiateur nommé), et jamais devinable par le produit.
+    default_mediator_name: str | None = Field(default=None, max_length=200)
+    default_mediator_url: str | None = Field(default=None, max_length=500)
+
+    # --- Seuils du contrôle de conformité (spec §10, amendements A12 et A14) --------------------
+    # A12 s'autorise à refuser tout seuil venu du corps d'une requête en promettant qu'« un réglage
+    # par organisation est une ligne SQL ». Cette colonne est cette ligne SQL : sans elle la porte
+    # de sortie était fictive, puisqu'il n'existait aucun endroit où l'écrire.
+    #
+    # Un dictionnaire ouvert et non des colonnes : les seuils sont une classe d'exigences qui bouge
+    # (l'accessibilité française a changé trois fois de rédaction depuis 2005), et une migration
+    # par seuil ajouté annulerait tout l'intérêt. Seules les clés que le rapport d'inspection
+    # **republie** sont prises en compte (`app/intelligence/ergonomy.py`) : on ne peut régler que ce
+    # qu'on peut relire, sinon un réglage sans effet passerait pour appliqué.
+    inspection_thresholds: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(
+            MutableDict.as_mutable(json_type()), nullable=False, server_default=text("'{}'")
+        ),
+    )
 
 
 class Membership(TimestampedModel, table=True):

@@ -17,12 +17,13 @@ import csv
 import io
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps import CurrentUser, SessionDep
 from app.api.permissions import get_owned_project
 from app.api.scene import scene_for_project
+from app.core.rate_limit import costly
 from app.geometry.quantities import build_takeoff
 from app.schemas.quote import TakeoffRead
 
@@ -76,7 +77,11 @@ async def compute_takeoff(
     return await run_in_threadpool(build_takeoff, scene)
 
 
-@router.get("/projects/{project_id}/takeoff", response_model=TakeoffRead)
+@router.get(
+    "/projects/{project_id}/takeoff",
+    response_model=TakeoffRead,
+    dependencies=[Depends(costly("takeoff"))],
+)
 async def read_takeoff(
     project_id: int, session: SessionDep, current_user: CurrentUser
 ) -> dict[str, Any]:
@@ -187,6 +192,9 @@ def takeoff_to_csv(takeoff: dict[str, Any]) -> str:
     "/projects/{project_id}/takeoff.csv",
     response_class=Response,
     responses={200: {"content": {"text/csv": {}}, "description": "Métré au format tableur"}},
+    # Même seau que la version JSON : c'est le même calcul, et deux compteurs distincts
+    # doubleraient le budget en alternant les deux représentations.
+    dependencies=[Depends(costly("takeoff"))],
 )
 async def download_takeoff_csv(
     project_id: int, session: SessionDep, current_user: CurrentUser
