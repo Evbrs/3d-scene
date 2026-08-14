@@ -11,7 +11,7 @@
 # explicitement leur cible, parce que la cible implicite d'un Dockerfile multi-étage est le
 # DERNIER étage, c'est-à-dire ici `dev`.
 
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
