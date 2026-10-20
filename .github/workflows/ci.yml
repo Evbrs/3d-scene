@@ -37,7 +37,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -82,7 +82,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v5
         with:
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -138,7 +138,7 @@ jobs:
     steps:
       # L'historique complet : gitleaks cherche aussi ce qui a été commité puis retiré, et un
       # secret retiré au commit suivant reste un secret compromis.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -180,7 +180,7 @@ jobs:
       SECRET_KEY: cle-de-ci-suffisamment-longue-pour-passer-le-controle
       COMPOSE: -f docker-compose.yml -f docker-compose.prod.yml
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: La surcouche de production est valide
         run: docker compose $COMPOSE config -q
@@ -294,7 +294,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Valider le fichier compose
         run: docker compose config -q
